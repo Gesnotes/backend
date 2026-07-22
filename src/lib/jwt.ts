@@ -9,17 +9,28 @@ export function signAccessToken(payload: AuthPayload): string {
   });
 }
 
-/** Renvoie le payload, ou null si le token est invalide/expiré. */
-export function verifyAccessToken(token: string): AuthPayload | null {
+/**
+ * Renvoie le payload et sa date d'émission, ou null si le token est
+ * invalide/expiré. `issuedAt` sert à couper les tokens antérieurs à
+ * `User.sessionsRevokedAt`.
+ */
+export function verifyAccessToken(token: string): (AuthPayload & { issuedAt: Date }) | null {
   try {
     const decoded = jwt.verify(token, env.JWT_SECRET);
     if (typeof decoded === 'string') return null;
 
-    const { userId, schoolId, role } = decoded as Record<string, unknown>;
-    if (typeof userId !== 'number' || typeof schoolId !== 'number' || typeof role !== 'string') {
+    const { userId, schoolId, role, iat } = decoded as Record<string, unknown>;
+    if (
+      typeof userId !== 'number' ||
+      typeof schoolId !== 'number' ||
+      typeof role !== 'string' ||
+      typeof iat !== 'number'
+    ) {
       return null;
     }
-    return { userId, schoolId, role } as AuthPayload;
+    return { userId, schoolId, role, issuedAt: new Date(iat * 1000) } as AuthPayload & {
+      issuedAt: Date;
+    };
   } catch {
     return null;
   }

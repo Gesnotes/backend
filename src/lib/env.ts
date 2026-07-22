@@ -16,7 +16,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
 
   JWT_SECRET: z.string().min(32, 'JWT_SECRET doit faire au moins 32 caractères'),
-  ACCESS_TOKEN_TTL: z.string().default('15m'),
+  // Durée longue assumée : la révocation ne repose pas sur l'expiration mais
+  // sur User.sessionsRevokedAt, vérifié à chaque requête authentifiée.
+  ACCESS_TOKEN_TTL: z.string().default('30d'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(60),
 

@@ -35,7 +35,7 @@ authRoutes.post('/refresh', sessionLimiter, validate({ body: refreshSchema }), a
 
 authRoutes.post('/logout', sessionLimiter, validate({ body: refreshSchema }), async (req, res) => {
   const { refreshToken } = req.body as z.infer<typeof refreshSchema>;
-  await authService.logout(refreshToken);
+  await authService.logout(refreshToken, req.auth?.userId);
   res.status(204).send();
 });
 

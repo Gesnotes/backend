@@ -124,12 +124,25 @@ export async function refresh(rawToken: string): Promise<LoginResult> {
   };
 }
 
-/** Invalide le refresh token côté serveur. Idempotent. */
-export async function logout(rawToken: string): Promise<void> {
+/**
+ * Déconnexion. Idempotent.
+ *
+ * Révoque le refresh token, et si la requête est authentifiée, coupe aussi
+ * les access tokens déjà émis : sans `sessionsRevokedAt`, un token de 30 jours
+ * resterait valable 30 jours après le logout.
+ */
+export async function logout(rawToken: string, userId?: number): Promise<void> {
   await prisma.refreshToken.updateMany({
     where: { tokenHash: hashToken(rawToken), revokedAt: null },
     data: { revokedAt: new Date() },
   });
+
+  if (userId !== undefined) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { sessionsRevokedAt: new Date() },
+    });
+  }
 }
 
 /**
@@ -143,6 +156,23 @@ export async function revokeAllRefreshTokens(userId: number): Promise<void> {
     where: { userId, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+}
+
+/**
+ * Coupe toutes les sessions d'un utilisateur : refresh tokens ET access
+ * tokens déjà émis. C'est la seule façon de déconnecter réellement quelqu'un
+ * quand les access tokens sont longue durée.
+ *
+ * À appeler à l'archivage d'un compte et à tout changement de rôle.
+ */
+export async function revokeAllSessions(userId: number): Promise<void> {
+  await prisma.$transaction([
+    prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+    prisma.user.update({ where: { id: userId }, data: { sessionsRevokedAt: new Date() } }),
+  ]);
 }
 
 /**
@@ -195,7 +225,11 @@ export async function resetPassword(rawToken: string, newPassword: string): Prom
   // Changer le mot de passe déconnecte partout : les refresh tokens existants
   // ne doivent pas survivre à une réinitialisation.
   await prisma.$transaction([
-    prisma.user.update({ where: { id: stored.userId }, data: { passwordHash } }),
+    prisma.user.update({
+      where: { id: stored.userId },
+      // sessionsRevokedAt coupe aussi les access tokens déjà émis.
+      data: { passwordHash, sessionsRevokedAt: new Date() },
+    }),
     prisma.passwordResetToken.update({ where: { id: stored.id }, data: { usedAt: new Date() } }),
     prisma.refreshToken.updateMany({
       where: { userId: stored.userId, revokedAt: null },

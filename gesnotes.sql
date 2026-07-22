@@ -1,8 +1,3 @@
--- ⚠️ Fichier généré depuis prisma/schema.prisma — ne pas éditer à la main.
--- La source de vérité est prisma/schema.prisma + prisma/migrations.
--- Régénérer avec :
---   npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script -o gesnotes.sql
-
 -- CreateSchema
 CREATE SCHEMA IF NOT EXISTS "public";
 
@@ -30,6 +25,7 @@ CREATE TABLE "users" (
     "first_name" VARCHAR(100),
     "last_name" VARCHAR(100),
     "archived_at" TIMESTAMP(6),
+    "sessions_revoked_at" TIMESTAMP(6),
     "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
