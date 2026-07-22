@@ -58,7 +58,8 @@ describe('gardes des routes (plan lot 2)', () => {
   });
 
   it('403 avec le mauvais rôle', async () => {
-    const res = await as('ecole-a', parentToken).get('/admin/ping');
+    // Route d'administration reelle : /teachers est reserve au role admin.
+    const res = await as('ecole-a', parentToken).get('/teachers');
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
   });
@@ -70,9 +71,9 @@ describe('gardes des routes (plan lot 2)', () => {
   });
 
   it('200 avec le bon rôle sur le bon sous-domaine', async () => {
-    const res = await as('ecole-a', adminToken).get('/admin/ping');
+    const res = await as('ecole-a', adminToken).get('/teachers');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(Array.isArray(res.body)).toBe(true);
   });
 
   it('404 sur un sous-domaine inconnu', async () => {

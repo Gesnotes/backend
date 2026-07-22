@@ -4,6 +4,7 @@ import { z } from 'zod';
 import * as authService from '../services/auth.service';
 import { badRequest } from '../errors/AppError';
 import { credentialsLimiter, sessionLimiter } from '../middlewares/rateLimit';
+import { publicRoute } from '../middlewares/publicRoute';
 import { validate } from '../middlewares/validate';
 
 export const authRoutes = Router();
@@ -22,18 +23,23 @@ const resetSchema = z.object({
   password: z.string().min(8, 'Le mot de passe doit faire au moins 8 caractères'),
 });
 
-authRoutes.post('/login', credentialsLimiter, validate({ body: loginSchema }), async (req, res) => {
+authRoutes.post(
+  '/login',
+  publicRoute,
+  credentialsLimiter, validate({ body: loginSchema }), async (req, res) => {
   if (!req.schoolId) throw badRequest('École non résolue');
   const { identifier, password } = req.body as z.infer<typeof loginSchema>;
   res.json(await authService.login(req.schoolId, identifier, password));
 });
 
-authRoutes.post('/refresh', sessionLimiter, validate({ body: refreshSchema }), async (req, res) => {
+authRoutes.post('/refresh', publicRoute,
+  sessionLimiter, validate({ body: refreshSchema }), async (req, res) => {
   const { refreshToken } = req.body as z.infer<typeof refreshSchema>;
   res.json(await authService.refresh(refreshToken));
 });
 
-authRoutes.post('/logout', sessionLimiter, validate({ body: refreshSchema }), async (req, res) => {
+authRoutes.post('/logout', publicRoute,
+  sessionLimiter, validate({ body: refreshSchema }), async (req, res) => {
   const { refreshToken } = req.body as z.infer<typeof refreshSchema>;
   await authService.logout(refreshToken, req.auth?.userId);
   res.status(204).send();
@@ -41,6 +47,7 @@ authRoutes.post('/logout', sessionLimiter, validate({ body: refreshSchema }), as
 
 authRoutes.post(
   '/forgot-password',
+  publicRoute,
   credentialsLimiter,
   validate({ body: forgotSchema }),
   async (req, res) => {
@@ -55,6 +62,7 @@ authRoutes.post(
 
 authRoutes.post(
   '/reset-password',
+  publicRoute,
   credentialsLimiter,
   validate({ body: resetSchema }),
   async (req, res) => {

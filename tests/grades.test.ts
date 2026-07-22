@@ -58,10 +58,10 @@ beforeEach(async () => {
 
   // Prof A enseigne les maths en 6e A ; prof B le français en 5e A.
   await prisma.teacherAssignment.create({
-    data: { teacherUserId: profA.id, classId: classe6.id, subjectId: maths.id },
+    data: { schoolId: school.id, teacherUserId: profA.id, classId: classe6.id, subjectId: maths.id },
   });
   await prisma.teacherAssignment.create({
-    data: { teacherUserId: profB.id, classId: classe5.id, subjectId: francais.id },
+    data: { schoolId: school.id, teacherUserId: profB.id, classId: classe5.id, subjectId: francais.id },
   });
 
   ana = await prisma.student.create({
@@ -278,6 +278,40 @@ describe('GET /teachers/me/classes', () => {
     const res = await api(tokenProfB).get('/teachers/me/classes');
     expect(res.body).toHaveLength(1);
     expect(res.body[0].subjectName).toBe('Français');
+  });
+
+  it('attribue chaque élève à SA classe quand le prof enseigne dans plusieurs', async () => {
+    // Cas normal d'un professeur de mathématiques. La progression est calculée
+    // en mémoire à partir d'une seule lecture : si l'attribution élève→classe
+    // se trompe, les deux lignes affichent le même chiffre sans que rien
+    // n'échoue.
+    await prisma.teacherAssignment.create({
+      data: {
+        schoolId: school.id,
+        teacherUserId: profA.id,
+        classId: classe5.id,
+        subjectId: maths.id,
+      },
+    });
+
+    const enSixieme = await prisma.student.create({
+      data: { schoolId: school.id, classId: classe6.id, firstName: 'Ben', lastName: 'Beta' },
+    });
+    const enCinquieme = await prisma.student.create({
+      data: { schoolId: school.id, classId: classe5.id, firstName: 'Cid', lastName: 'Gamma' },
+    });
+
+    // 6e A : Ana notée, Ben non. 5e A : Cid noté.
+    await api(tokenProfA).post('/grades').send(payload({ studentId: ana.id }));
+    await api(tokenProfA).post('/grades').send(payload({ studentId: enCinquieme.id }));
+    void enSixieme;
+
+    const res = await api(tokenProfA).get('/teachers/me/classes');
+    const sixieme = res.body.find((l: { className: string }) => l.className === '6e A');
+    const cinquieme = res.body.find((l: { className: string }) => l.className === '5e A');
+
+    expect(sixieme).toMatchObject({ effectif: 2, evalues: 1 });
+    expect(cinquieme).toMatchObject({ effectif: 1, evalues: 1 });
   });
 
   it('compte les élèves évalués, pas les notes saisies', async () => {

@@ -212,7 +212,7 @@ describe('découplage de la saisie', () => {
     const type = await prisma.gradeType.findFirstOrThrow({ where: { schoolId: school.id } });
     const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: prof.id, classId: classe.id, subjectId: maths.id },
+      data: { schoolId: school.id, teacherUserId: prof.id, classId: classe.id, subjectId: maths.id },
     });
 
     const res = await api(tokenProf).post('/grades').send({

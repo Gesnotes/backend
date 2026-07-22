@@ -1,3 +1,8 @@
+-- ⚠️ Fichier généré depuis prisma/schema.prisma — ne pas éditer à la main.
+-- La source de vérité est prisma/schema.prisma + prisma/migrations.
+-- Régénérer avec :
+--   npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script -o gesnotes.sql
+
 -- CreateSchema
 CREATE SCHEMA IF NOT EXISTS "public";
 
@@ -133,6 +138,7 @@ CREATE TABLE "student_parents" (
 -- CreateTable
 CREATE TABLE "teacher_assignments" (
     "id" SERIAL NOT NULL,
+    "school_id" INTEGER NOT NULL,
     "teacher_user_id" INTEGER NOT NULL,
     "class_id" INTEGER NOT NULL,
     "subject_id" INTEGER NOT NULL,
@@ -174,6 +180,9 @@ CREATE UNIQUE INDEX "schools_subdomain_key" ON "schools"("subdomain");
 CREATE INDEX "users_school_id_archived_at_idx" ON "users"("school_id", "archived_at");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "users_id_school_id_key" ON "users"("id", "school_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "users_school_id_email_key" ON "users"("school_id", "email");
 
 -- CreateIndex
@@ -195,7 +204,13 @@ CREATE INDEX "password_reset_tokens_user_id_used_at_idx" ON "password_reset_toke
 CREATE INDEX "classes_school_id_archived_at_idx" ON "classes"("school_id", "archived_at");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "classes_id_school_id_key" ON "classes"("id", "school_id");
+
+-- CreateIndex
 CREATE INDEX "subjects_school_id_archived_at_idx" ON "subjects"("school_id", "archived_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "subjects_id_school_id_key" ON "subjects"("id", "school_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "grade_types_school_id_code_key" ON "grade_types"("school_id", "code");
@@ -208,6 +223,9 @@ CREATE INDEX "students_school_id_archived_at_idx" ON "students"("school_id", "ar
 
 -- CreateIndex
 CREATE UNIQUE INDEX "students_id_school_id_key" ON "students"("id", "school_id");
+
+-- CreateIndex
+CREATE INDEX "teacher_assignments_school_id_idx" ON "teacher_assignments"("school_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "teacher_assignments_teacher_user_id_class_id_subject_id_key" ON "teacher_assignments"("teacher_user_id", "class_id", "subject_id");
@@ -264,13 +282,13 @@ ALTER TABLE "student_parents" ADD CONSTRAINT "student_parents_student_id_fkey" F
 ALTER TABLE "student_parents" ADD CONSTRAINT "student_parents_parent_user_id_fkey" FOREIGN KEY ("parent_user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_teacher_user_id_fkey" FOREIGN KEY ("teacher_user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_teacher_user_id_school_id_fkey" FOREIGN KEY ("teacher_user_id", "school_id") REFERENCES "users"("id", "school_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_class_id_fkey" FOREIGN KEY ("class_id") REFERENCES "classes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_class_id_school_id_fkey" FOREIGN KEY ("class_id", "school_id") REFERENCES "classes"("id", "school_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_subject_id_fkey" FOREIGN KEY ("subject_id") REFERENCES "subjects"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_subject_id_school_id_fkey" FOREIGN KEY ("subject_id", "school_id") REFERENCES "subjects"("id", "school_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "devices" ADD CONSTRAINT "devices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
+import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { contactFields, identityFields } from './userFields';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
@@ -17,21 +18,23 @@ export const STUDENTS_PAGE_SIZE = 100;
  * reste du code le borne partout ailleurs à ses affectations, il n'y a aucune
  * raison que l'annuaire des élèves fasse exception.
  */
-async function scopeFor(auth: AuthPayload, classId?: number) {
+async function scopeFor(auth: AuthPayload, classId?: number): Promise<Prisma.StudentWhereInput> {
   if (auth.role === 'admin') {
     return classId ? { classId } : {};
   }
 
   const assignments = await prisma.teacherAssignment.findMany({
-    where: { teacherUserId: auth.userId },
+    where: { schoolId: auth.schoolId, teacherUserId: auth.userId },
     select: { classId: true },
   });
   const classIds = [...new Set(assignments.map((a) => a.classId))];
 
   // Une classe demandée hors périmètre ne renvoie rien plutôt qu'une erreur :
-  // l'enseignant n'a pas à découvrir quelles classes existent.
+  // l'enseignant n'a pas à découvrir quelles classes existent. `in: []` dit
+  // « aucune » sans recourir à un identifiant sentinelle, qui ne tiendrait
+  // qu'à une propriété de la séquence PostgreSQL.
   if (classId !== undefined) {
-    return { classId: classIds.includes(classId) ? classId : -1 };
+    return { classId: { in: classIds.includes(classId) ? [classId] : [] } };
   }
   return { classId: { in: classIds } };
 }
@@ -99,7 +102,10 @@ async function loadStudent(
   schoolId: number,
   id: number,
   parentSelect: typeof contactFields | typeof identityFields,
-  scope: Record<string, unknown>,
+  // Typé, et non `Record<string, unknown>` : une faute de frappe dans le
+  // filtre de périmètre compilerait, Prisma ignorerait la clé inconnue, et le
+  // cloisonnement des enseignants disparaîtrait sans bruit.
+  scope: Prisma.StudentWhereInput,
 ) {
   const student = await prisma.student.findFirst({
     where: { id, schoolId, ...scope },

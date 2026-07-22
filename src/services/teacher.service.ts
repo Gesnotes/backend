@@ -107,6 +107,7 @@ export async function createTeacher(
     if (data.assignments?.length) {
       await tx.teacherAssignment.createMany({
         data: data.assignments.map((a) => ({
+          schoolId,
           teacherUserId: created.id,
           classId: a.classId,
           subjectId: a.subjectId,
@@ -172,6 +173,7 @@ export async function updateTeacher(
       if (data.assignments.length) {
         await tx.teacherAssignment.createMany({
           data: data.assignments.map((a) => ({
+            schoolId,
             teacherUserId: id,
             classId: a.classId,
             subjectId: a.subjectId,
@@ -196,13 +198,23 @@ export async function updateTeacher(
 export async function archiveTeacher(schoolId: number, id: number) {
   await getTeacher(schoolId, id);
 
-  const teacher = await prisma.user.update({
-    where: { id },
-    data: { archivedAt: new Date() },
-    select: publicFields,
-  });
+  const maintenant = new Date();
 
-  await revokeAllSessions(id);
+  // Archivage et coupure des sessions dans la même transaction : ce sont deux
+  // écritures d'une seule décision. Séparées, une panne entre les deux
+  // laisserait un compte archivé dont les refresh tokens survivent — et une
+  // restauration ultérieure réactiverait des sessions jamais invalidées.
+  const [teacher] = await prisma.$transaction([
+    prisma.user.update({
+      where: { id },
+      data: { archivedAt: maintenant, sessionsRevokedAt: maintenant },
+      select: publicFields,
+    }),
+    prisma.refreshToken.updateMany({
+      where: { userId: id, revokedAt: null },
+      data: { revokedAt: maintenant },
+    }),
+  ]);
 
   return teacher;
 }

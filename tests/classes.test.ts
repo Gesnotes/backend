@@ -193,7 +193,7 @@ describe('GET /classes/:id — classement et statistiques', () => {
   it('laisse un enseignant consulter le détail de SA classe', async () => {
     const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: prof.id, classId: klass.id, subjectId: maths.id },
+      data: { schoolId: schoolA.id, teacherUserId: prof.id, classId: klass.id, subjectId: maths.id },
     });
 
     const res = await api(teacherToken).get(`/classes/${klass.id}?term_id=${term.id}`);

@@ -62,6 +62,7 @@ model User {
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
   // entre écoles ne doit pas fuiter d'un tenant à l'autre.
+  @@unique([id, schoolId])
   @@unique([schoolId, email])
   @@unique([schoolId, phone])
   @@index([schoolId, archivedAt])
@@ -125,6 +126,8 @@ model Class {
   assignments  TeacherAssignment[]
   coefficients SubjectCoefficient[]
 
+  // Cible des clés étrangères composites de TeacherAssignment.
+  @@unique([id, schoolId])
   @@index([schoolId, archivedAt])
   @@map("classes")
 }
@@ -142,6 +145,8 @@ model Subject {
   grades       Grade[]
   coefficients SubjectCoefficient[]
 
+  // Cible des clés étrangères composites de TeacherAssignment.
+  @@unique([id, schoolId])
   @@index([schoolId, archivedAt])
   @@map("subjects")
 }
@@ -213,17 +218,26 @@ model StudentParent {
 }
 
 // Affectation prof ↔ classe ↔ matière
+//
+// `schoolId` est dénormalisé et partagé par les trois clés étrangères
+// composites : la base refuse désormais une affectation qui mélangerait un
+// enseignant, une classe et une matière de deux établissements. Sans cela,
+// les trois FK étaient indépendantes et seul un contrôle applicatif
+// empêchait la ligne croisée — alors que `listMyClasses` en dérive les
+// classes qu'un professeur a le droit de voir.
 model TeacherAssignment {
   id            Int @id @default(autoincrement())
+  schoolId      Int @map("school_id")
   teacherUserId Int @map("teacher_user_id")
   classId       Int @map("class_id")
   subjectId     Int @map("subject_id")
 
-  teacher User    @relation(fields: [teacherUserId], references: [id], onDelete: Cascade)
-  class   Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
-  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher User    @relation(fields: [teacherUserId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  class   Class   @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId, schoolId], references: [id, schoolId], onDelete: Cascade)
 
   @@unique([teacherUserId, classId, subjectId])
+  @@index([schoolId])
   @@map("teacher_assignments")
 }
 

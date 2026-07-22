@@ -45,8 +45,15 @@ export async function assertCanGrade(auth: AuthPayload, classId: number, subject
 
 /** Mes classes et matières, avec l'avancement de la saisie. */
 export async function listMyClasses(auth: AuthPayload, termId?: number) {
+  // `schoolId` explicite sur chaque requête : l'isolation ne doit pas reposer
+  // sur la propriété transitive « les affectations d'un utilisateur sont dans
+  // son école », même si la base la garantit désormais.
   const assignments = await prisma.teacherAssignment.findMany({
-    where: { teacherUserId: auth.userId, class: { archivedAt: null } },
+    where: {
+      schoolId: auth.schoolId,
+      teacherUserId: auth.userId,
+      class: { archivedAt: null },
+    },
     include: {
       class: { select: { id: true, name: true, level: true } },
       subject: { select: { id: true, name: true } },
@@ -57,41 +64,35 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
   const classIds = [...new Set(assignments.map((a) => a.classId))];
   const subjectIds = [...new Set(assignments.map((a) => a.subjectId))];
 
-  // Deux requêtes, quel que soit le nombre d'affectations. En boucle, un
-  // professeur enseignant dans douze classes paierait vingt-quatre
-  // allers-retours à chaque ouverture de son écran d'accueil.
+  // Trois requêtes au total (celle-ci comprise), quel que soit le nombre
+  // d'affectations. En boucle, un professeur enseignant dans douze classes
+  // paierait vingt-quatre allers-retours à chaque ouverture de son accueil.
   const [effectifs, notes] = await Promise.all([
     prisma.student.groupBy({
       by: ['classId'],
-      where: { classId: { in: classIds }, archivedAt: null },
+      where: { schoolId: auth.schoolId, classId: { in: classIds }, archivedAt: null },
       _count: { _all: true },
     }),
-    prisma.grade.groupBy({
-      by: ['subjectId', 'studentId'],
+    // `distinct` porte la règle métier : un élève évalué compte une fois par
+    // matière, quel que soit son nombre de notes. La classe vient de la même
+    // lecture, ce qui évite une requête supplémentaire sur les élèves.
+    prisma.grade.findMany({
       where: {
+        schoolId: auth.schoolId,
         subjectId: { in: subjectIds },
         student: { classId: { in: classIds }, archivedAt: null },
         ...(termId ? { termId } : {}),
       },
-      _min: { schoolId: true },
+      distinct: ['subjectId', 'studentId'],
+      select: { subjectId: true, student: { select: { classId: true } } },
     }),
   ]);
 
   const effectifParClasse = new Map(effectifs.map((e) => [e.classId, e._count._all]));
 
-  // Un élève évalué compte une fois par matière, quel que soit son nombre de
-  // notes : c'est la progression utile au professeur.
-  const elevesParClasse = await prisma.student.findMany({
-    where: { classId: { in: classIds }, archivedAt: null },
-    select: { id: true, classId: true },
-  });
-  const classeDeLEleve = new Map(elevesParClasse.map((e) => [e.id, e.classId]));
-
   const evalues = new Map<string, number>();
-  for (const ligne of notes) {
-    const classId = classeDeLEleve.get(ligne.studentId);
-    if (classId === undefined) continue;
-    const cle = `${classId}:${ligne.subjectId}`;
+  for (const note of notes) {
+    const cle = `${note.student.classId}:${note.subjectId}`;
     evalues.set(cle, (evalues.get(cle) ?? 0) + 1);
   }
 
