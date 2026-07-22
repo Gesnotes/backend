@@ -45,6 +45,10 @@ model User {
   firstName    String?   @map("first_name") @db.VarChar(100)
   lastName     String?   @map("last_name") @db.VarChar(100)
   archivedAt   DateTime? @map("archived_at") @db.Timestamp(6)
+  /// Coupe les access tokens émis avant cette date. Indispensable avec des
+  /// tokens longue durée : un JWT est stateless, seule cette borne permet de
+  /// déconnecter réellement (logout, archivage, changement de mot de passe).
+  sessionsRevokedAt DateTime? @map("sessions_revoked_at") @db.Timestamp(6)
   createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
   school         School               @relation(fields: [schoolId], references: [id])

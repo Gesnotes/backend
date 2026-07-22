@@ -39,8 +39,27 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
       throw forbidden('Sous-domaine incohérent avec le compte');
     }
 
-    req.auth = payload;
-    req.schoolId = payload.schoolId;
+    /**
+     * Contrôle serveur du token, indispensable avec une durée de vie longue :
+     * un JWT ne peut pas être repris une fois émis. Sans cette relecture,
+     * logout, archivage d'un compte et changement de rôle resteraient sans
+     * effet jusqu'à l'expiration (30 jours par défaut).
+     */
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { id: true, schoolId: true, role: true, archivedAt: true, sessionsRevokedAt: true },
+    });
+
+    if (!user || user.archivedAt) throw unauthorized('Session expirée, reconnectez-vous');
+    if (user.schoolId !== school.id) throw forbidden('Sous-domaine incohérent avec le compte');
+    if (user.sessionsRevokedAt && payload.issuedAt < user.sessionsRevokedAt) {
+      throw unauthorized('Session expirée, reconnectez-vous');
+    }
+
+    // Le rôle vient de la base, pas du token : une rétrogradation prend effet
+    // immédiatement au lieu d'attendre l'expiration.
+    req.auth = { userId: user.id, schoolId: user.schoolId, role: user.role };
+    req.schoolId = user.schoolId;
     return next();
   } catch (error) {
     return next(error);
