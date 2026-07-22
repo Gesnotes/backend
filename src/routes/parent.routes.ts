@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as notificationService from '../services/notification.service';
 import * as parentService from '../services/parent.service';
 import { authOf } from '../lib/requestContext';
+import { notFound } from '../errors/AppError';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
 import { validate } from '../middlewares/validate';
@@ -28,6 +30,28 @@ const optionalTermQuery = z.object({
 parentMeRoutes.get('/children', validate({ query: optionalTermQuery }), async (req, res) => {
   const { term_id } = req.query as unknown as z.infer<typeof optionalTermQuery>;
   res.json(await parentService.listMyChildren(authOf(req), term_id));
+});
+
+const deviceBody = z.object({ fcmToken: z.string().trim().min(10).max(255) });
+const deviceParams = z.object({ token: z.string().trim().min(10).max(255) });
+
+/** Enregistre un appareil pour recevoir les notifications push. */
+parentMeRoutes.post('/devices', validate({ body: deviceBody }), async (req, res) => {
+  const { fcmToken } = req.body as z.infer<typeof deviceBody>;
+  const device = await notificationService.registerDevice(authOf(req).userId, fcmToken);
+  res.status(201).json({ id: device.id, createdAt: device.createdAt });
+});
+
+parentMeRoutes.get('/devices', async (req, res) => {
+  res.json(await notificationService.listDevices(authOf(req).userId));
+});
+
+/** Retire un appareil (déconnexion, changement de téléphone). */
+parentMeRoutes.delete('/devices/:token', validate({ params: deviceParams }), async (req, res) => {
+  const { token } = req.params as unknown as z.infer<typeof deviceParams>;
+  const removed = await notificationService.removeDevice(authOf(req).userId, token);
+  if (!removed) throw notFound('Appareil introuvable');
+  res.status(204).send();
 });
 
 childrenRoutes.get(

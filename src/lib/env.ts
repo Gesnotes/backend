@@ -33,6 +33,19 @@ const envSchema = z.object({
   APP_BASE_URL: z.string().default('http://localhost:3000'),
 
   /**
+   * Notifications push. PUSH=console n'envoie rien et trace le message.
+   *
+   * PUSH=fcm exige les identifiants du COMPTE DE SERVICE Firebase (Console →
+   * Paramètres → Comptes de service → Générer une clé privée), pas la config
+   * web du frontend : `apiKey` et clé VAPID vivent dans le navigateur et ne
+   * permettent pas d'envoyer.
+   */
+  PUSH: z.enum(['console', 'fcm']).default('console'),
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().optional(),
+  FIREBASE_PRIVATE_KEY: z.string().optional(),
+
+  /**
    * Nombre de reverse proxies devant l'application (0 = aucun).
    *
    * Doit rester à 0 tant que l'app est exposée directement : sinon Express

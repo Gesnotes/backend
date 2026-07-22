@@ -19,8 +19,12 @@ import {
   parentMeRoutes,
 } from './routes/parent.routes';
 import { parentSearchRoutes, studentRoutes } from './routes/student.routes';
+import { registerNotificationHandlers } from './services/notification.service';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
+
+// Abonne les notifications aux événements de saisie (lot 9 → lot 11).
+registerNotificationHandlers();
 
 export function createApp() {
   const app = express();
