@@ -8,6 +8,7 @@ import { env } from './lib/env';
 import { logger } from './lib/logger';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
+import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
@@ -54,6 +55,9 @@ export function createApp() {
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);
   app.use('/parents', parentSearchRoutes);
+  app.use('/grades', gradeRoutes);
+  // Monté avant /teachers : /teachers/me ne doit pas être capté par /teachers/:id
+  app.use('/teachers/me', teacherMeRoutes);
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
