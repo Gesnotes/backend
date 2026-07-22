@@ -21,6 +21,9 @@ const envSchema = z.object({
   ACCESS_TOKEN_TTL: z.string().default('30d'),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(60),
+  // Invitation d'un compte créé par l'admin : plus longue qu'une
+  // réinitialisation, l'enseignant n'attend pas l'email devant son écran.
+  INVITATION_TTL_HOURS: z.coerce.number().int().positive().default(72),
 
   // Emails : MAILER=console n'envoie rien et n'entame aucun quota (défaut en dev)
   MAILER: z.enum(['console', 'resend']).default('console'),
@@ -28,6 +31,19 @@ const envSchema = z.object({
   MAIL_FROM: z.string().default('onboarding@resend.dev'),
 
   APP_BASE_URL: z.string().default('http://localhost:3000'),
+
+  /**
+   * Notifications push. PUSH=console n'envoie rien et trace le message.
+   *
+   * PUSH=fcm exige les identifiants du COMPTE DE SERVICE Firebase (Console →
+   * Paramètres → Comptes de service → Générer une clé privée), pas la config
+   * web du frontend : `apiKey` et clé VAPID vivent dans le navigateur et ne
+   * permettent pas d'envoyer.
+   */
+  PUSH: z.enum(['console', 'fcm']).default('console'),
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().optional(),
+  FIREBASE_PRIVATE_KEY: z.string().optional(),
 
   /**
    * Nombre de reverse proxies devant l'application (0 = aucun).
