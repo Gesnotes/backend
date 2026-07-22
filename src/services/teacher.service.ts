@@ -3,10 +3,11 @@ import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
 import { conflict, notFound } from '../errors/AppError';
-import { env } from '../lib/env';
-import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { revokeAllSessions } from './auth.service';
+import { sendInvitation } from './invitation.service';
+
+export { sendInvitation };
 
 export interface AssignmentInput {
   classId: number;
@@ -117,7 +118,7 @@ export async function createTeacher(
     return created;
   });
 
-  await sendInvitation(teacher.id, teacher.email);
+  await sendInvitation(teacher.id, teacher.email, 'teacher');
 
   return getTeacherWithAssignments(schoolId, teacher.id);
 }
@@ -232,29 +233,6 @@ export async function deleteTeacherPermanently(schoolId: number, id: number) {
   }
 
   await prisma.user.delete({ where: { id } });
-}
-
-/** Renvoie un lien d'invitation (ou de réinitialisation) à l'enseignant. */
-export async function sendInvitation(userId: number, email: string) {
-  const rawToken = crypto.randomBytes(32).toString('hex');
-
-  await prisma.passwordResetToken.create({
-    data: {
-      userId,
-      tokenHash: crypto.createHash('sha256').update(rawToken).digest('hex'),
-      expiresAt: new Date(Date.now() + env.INVITATION_TTL_HOURS * 60 * 60_000),
-    },
-  });
-
-  const link = `${env.APP_BASE_URL}/reset-password?token=${rawToken}`;
-  await mailer.send(
-    email,
-    'Votre compte enseignant Gesnotes',
-    `<p>Bonjour,</p>
-     <p>Un compte enseignant a été créé pour vous sur Gesnotes.</p>
-     <p><a href="${link}">Définir mon mot de passe</a></p>
-     <p>Ce lien expire dans ${env.INVITATION_TTL_HOURS} heures.</p>`,
-  );
 }
 
 async function getTeacherWithAssignments(schoolId: number, id: number) {

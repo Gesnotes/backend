@@ -100,6 +100,6 @@ teacherRoutes.post('/:id/restore', validate({ params: idParam }), async (req, re
 teacherRoutes.post('/:id/invitation', validate({ params: idParam }), async (req, res) => {
   const { id } = req.params as unknown as z.infer<typeof idParam>;
   const teacher = await teacherService.getTeacher(schoolIdOf(req), id);
-  await teacherService.sendInvitation(teacher.id, teacher.email);
+  await teacherService.sendInvitation(teacher.id, teacher.email, 'teacher');
   res.json({ message: 'Invitation envoyée.' });
 });

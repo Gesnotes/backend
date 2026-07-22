@@ -12,6 +12,7 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
 import { schoolContext } from './middlewares/schoolContext';
+import { parentSearchRoutes, studentRoutes } from './routes/student.routes';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
 
@@ -51,6 +52,8 @@ export function createApp() {
   app.use('/auth', authRoutes);
   app.use('/classes', classRoutes);
   app.use('/subjects', subjectRoutes);
+  app.use('/students', studentRoutes);
+  app.use('/parents', parentSearchRoutes);
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
