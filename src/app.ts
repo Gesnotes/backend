@@ -7,6 +7,7 @@ import prisma from './lib/prisma';
 import { env } from './lib/env';
 import { logger } from './lib/logger';
 import { authRoutes } from './routes/auth.routes';
+import { classRoutes } from './routes/class.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
@@ -48,6 +49,7 @@ export function createApp() {
   // session (/refresh, /logout) ne doivent pas consommer le budget
   // anti-bruteforce du login.
   app.use('/auth', authRoutes);
+  app.use('/classes', classRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/teachers', teacherRoutes);
 
