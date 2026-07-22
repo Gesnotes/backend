@@ -12,6 +12,7 @@ import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
 import { schoolContext } from './middlewares/schoolContext';
 import { subjectRoutes } from './routes/subject.routes';
+import { teacherRoutes } from './routes/teacher.routes';
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,7 @@ export function createApp() {
   // anti-bruteforce du login.
   app.use('/auth', authRoutes);
   app.use('/subjects', subjectRoutes);
+  app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   app.get('/me', requireAuth, (req, res) => {
