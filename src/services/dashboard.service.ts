@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma';
-import { computeClassBulletin } from './grading/grading.service';
+import { computeClassBulletins } from './grading/grading.service';
 import { serializeAverage } from './grading/compute';
 import { Prisma } from '../generated/prisma/client';
 
@@ -30,21 +30,26 @@ export async function getDashboard(schoolId: number, termId?: number) {
   const effectifs = { eleves, classes, enseignants, matieres, parents };
   const activite = { notesDerniers7Jours: notesRecentes, notesTotal: totalNotes };
 
-  if (termId === undefined) {
-    return {
-      effectifs,
-      activite,
-      periode: null,
-      moyenneEcole: null,
-      classes: [],
-      saisie: null,
-    };
-  }
+  /**
+   * Forme de réponse unique quelle que soit la requête : toutes les clés sont
+   * toujours présentes, à `null` ou vides. Faire disparaître `extremes` selon
+   * les paramètres obligerait le front-end à tester son existence, et le ferait
+   * planter le jour où il oublie.
+   */
+  const vide = {
+    effectifs,
+    activite,
+    periode: null,
+    moyenneEcole: null,
+    classes: [],
+    saisie: null,
+    extremes: { meilleureClasse: null, plusFaibleClasse: null },
+  };
+
+  if (termId === undefined) return vide;
 
   const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
-  if (!term) {
-    return { effectifs, activite, periode: null, moyenneEcole: null, classes: [], saisie: null };
-  }
+  if (!term) return vide;
 
   const classList = await prisma.class.findMany({
     where: { schoolId, archivedAt: null },
@@ -52,8 +57,12 @@ export async function getDashboard(schoolId: number, termId?: number) {
     select: { id: true },
   });
 
-  const bulletins = await Promise.all(
-    classList.map((klass) => computeClassBulletin(schoolId, klass.id, termId)),
+  // Un seul lot de requêtes pour toutes les classes : en boucle, un
+  // établissement de 30 classes paierait 90 requêtes à chaque chargement.
+  const bulletins = await computeClassBulletins(
+    schoolId,
+    classList.map((klass) => klass.id),
+    termId,
   );
 
   const parClasse = bulletins.map((bulletin) => ({
@@ -85,8 +94,11 @@ export async function getDashboard(schoolId: number, termId?: number) {
   const totalEleves = parClasse.reduce((sum, c) => sum + c.effectif, 0);
   const totalEvalues = parClasse.reduce((sum, c) => sum + c.evalues, 0);
 
-  const classesNotees = parClasse.filter((c) => c.average !== null);
-  const triees = [...classesNotees].sort((a, b) => (b.average ?? 0) - (a.average ?? 0));
+  // Le filtre garantit des moyennes non nulles : pas de valeur par défaut dans
+  // le comparateur, qui laisserait croire qu'une classe non notée vaut 0.
+  const triees = parClasse
+    .filter((c): c is typeof c & { average: number } => c.average !== null)
+    .sort((a, b) => b.average - a.average);
 
   return {
     effectifs,

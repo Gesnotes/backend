@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import type { AuthPayload } from '../../types/express';
+import { assertCanViewClass } from '../class.service';
 import { assertIsParentOf } from '../parent.service';
 import { computeClassBulletin, computeStudentResult } from '../grading/grading.service';
 import {
@@ -23,13 +24,19 @@ export interface BulletinFile {
  * `format=eleves` produit une page par élève, le document remis aux familles.
  */
 export async function exportClassBulletin(
-  schoolId: number,
+  auth: AuthPayload,
   classId: number,
   termId: number,
   format: BulletinFormat,
 ): Promise<BulletinFile> {
-  const bulletin = await computeClassBulletin(schoolId, classId, termId);
-  const school = await prisma.school.findUniqueOrThrow({ where: { id: schoolId } });
+  // Même porte d'entrée que la version JSON : un enseignant n'exporte que les
+  // classes où il enseigne, un parent n'y accède pas du tout.
+  await assertCanViewClass(auth, classId);
+
+  const [bulletin, school] = await Promise.all([
+    computeClassBulletin(auth.schoolId, classId, termId),
+    prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+  ]);
 
   const context: BulletinContext = {
     schoolName: school.name,
@@ -62,32 +69,30 @@ export async function exportStudentBulletin(
   studentId: number,
   termId: number,
 ): Promise<BulletinFile> {
-  await assertIsParentOf(auth, studentId);
+  const { classId } = await assertIsParentOf(auth, studentId);
 
-  const [student, term, school] = await Promise.all([
-    prisma.student.findFirstOrThrow({
-      where: { id: studentId, schoolId: auth.schoolId },
-      include: { class: { select: { name: true, level: true } } },
-    }),
-    prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } }),
+  // Le bulletin de classe porte déjà tout : le résultat de l'élève, la moyenne
+  // de classe (le repère qu'attend un parent, sans exposer aucun résultat
+  // individuel), le libellé de la période et le nom de la classe. Le calculer
+  // deux fois par deux chemins différents les exposerait à diverger.
+  const [bulletin, school] = await Promise.all([
+    computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
   ]);
 
-  if (!term) throw notFound('Période introuvable');
-
-  const result = await computeStudentResult(auth.schoolId, studentId, termId);
-
-  // La moyenne de classe reste affichée : c'est le repère qu'attend un parent,
-  // et elle n'expose aucun résultat individuel d'un autre élève.
-  const classBulletin = await computeClassBulletin(auth.schoolId, student.classId, termId);
+  // Un élève archivé est exclu du bulletin de classe : on retombe alors sur le
+  // calcul individuel, qui reste valable pour lui.
+  const result =
+    bulletin.students.find((student) => student.studentId === studentId) ??
+    (await computeStudentResult(auth.schoolId, studentId, termId));
 
   const buffer = await generateStudentBulletinPdf(
     {
       schoolName: school.name,
-      className: student.class.name,
-      level: student.class.level,
-      termLabel: term.label,
-      classAverage: classBulletin.classAverage,
+      className: bulletin.className,
+      level: bulletin.level,
+      termLabel: bulletin.termLabel,
+      classAverage: bulletin.classAverage,
     },
     [result],
   );
@@ -95,7 +100,7 @@ export async function exportStudentBulletin(
   return {
     buffer,
     filename:
-      slugify(`bulletin-${student.lastName}-${student.firstName}-${term.label}`) + '.pdf',
+      slugify(`bulletin-${result.lastName}-${result.firstName}-${bulletin.termLabel}`) + '.pdf',
   };
 }
 
@@ -103,7 +108,10 @@ export async function exportStudentBulletin(
 function slugify(value: string): string {
   return value
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    // Plage des diacritiques combinants, échappée : écrite en clair, elle
+    // serait invisible dans le source et un simple changement d'encodage la
+    // corromprait sans qu'aucun test ne le voie.
+    .replace(/[\u0300-\u036f]/gu, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');

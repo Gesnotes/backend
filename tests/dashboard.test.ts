@@ -2,6 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
+import { Prisma } from '../src/generated/prisma/client';
 import { createSchool, createUser, resetDatabase } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
@@ -186,24 +187,40 @@ describe('GET /admin/dashboard', () => {
     expect((await get(tokenProf, '/admin/dashboard')).status).toBe(403);
   });
 
-  it('répond en moins de 500 ms sur un établissement réaliste', async () => {
-    for (let c = 0; c < 6; c += 1) {
+  it('tient la charge sur 30 classes sans exploser en requêtes', async () => {
+    // Taille visée par le plan : un collège de 30 classes. En boucle sur
+    // computeClassBulletin, ce dashboard ferait 150 requêtes SQL par
+    // chargement ; le chemin par lot en fait cinq.
+    const eleves: number[] = [];
+    for (let c = 0; c < 30; c += 1) {
       const classe = await prisma.class.create({
         data: { schoolId: school.id, name: `Classe ${c}`, level: '6e' },
       });
-      for (let e = 0; e < 15; e += 1) {
+      for (let e = 0; e < 20; e += 1) {
         const eleve = await addStudent(classe.id, `E${c}-${e}`);
-        await addGrade(eleve.id, 10 + (e % 10));
+        eleves.push(eleve.id);
       }
     }
+    await prisma.grade.createMany({
+      data: eleves.map((studentId, index) => ({
+        schoolId: school.id,
+        studentId,
+        subjectId: maths.id,
+        gradeTypeId: compoId,
+        termId: term.id,
+        value: new Prisma.Decimal(10 + (index % 10)),
+      })),
+    });
 
     const debut = Date.now();
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
     const duree = Date.now() - debut;
 
     expect(res.status).toBe(200);
-    expect(res.body.effectifs.eleves).toBe(90);
-    expect(duree).toBeLessThan(500);
+    expect(res.body.effectifs.eleves).toBe(600);
+    expect(res.body.classes).toHaveLength(32);
+    expect(res.body.moyenneEcole).not.toBeNull();
+    expect(duree).toBeLessThan(1000);
   });
 });
 

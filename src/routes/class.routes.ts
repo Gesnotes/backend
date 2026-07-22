@@ -5,12 +5,18 @@ import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as classService from '../services/class.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
-import { schoolIdOf } from '../lib/requestContext';
+import { authOf, schoolIdOf } from '../lib/requestContext';
 import { validate } from '../middlewares/validate';
 
 export const classRoutes = Router();
 
-classRoutes.use(requireAuth);
+/**
+ * Aucune route de ce routeur n'est destinée aux parents : toutes exposent des
+ * données agrégées sur l'ensemble d'une classe. Un parent consulte son enfant
+ * via /children/:id. Le contrôle par classe (l'enseignant n'accède qu'aux
+ * siennes) est fait dans le service, cf. `assertCanViewClass`.
+ */
+classRoutes.use(requireAuth, requireRole('admin', 'teacher'));
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
@@ -53,7 +59,7 @@ classRoutes.get(
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
-    res.json(await classService.getClassDetail(schoolIdOf(req), id, term_id));
+    res.json(await classService.getClassDetail(authOf(req), id, term_id));
   },
 );
 
@@ -64,7 +70,7 @@ classRoutes.get(
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
-    res.json(await classService.getClassDetail(schoolIdOf(req), id, term_id));
+    res.json(await classService.getClassDetail(authOf(req), id, term_id));
   },
 );
 
@@ -74,9 +80,6 @@ classRoutes.get(
  */
 classRoutes.get(
   '/:id/bulletin/export',
-  // Le tableau de classe expose les résultats de tous les élèves : réservé à
-  // l'équipe. Un parent passe par /children/:id/bulletin/export.
-  requireRole('admin', 'teacher'),
   validate({
     params: idParam,
     query: detailQuery.extend({
@@ -90,7 +93,7 @@ classRoutes.get(
       format: 'eleves' | 'classe';
     };
 
-    const file = await bulletinService.exportClassBulletin(schoolIdOf(req), id, term_id, format);
+    const file = await bulletinService.exportClassBulletin(authOf(req), id, term_id, format);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);

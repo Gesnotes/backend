@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import prisma from '../src/lib/prisma';
 import { createSchool, createUser, resetDatabase } from './helpers';
 import { createApp } from '../src/app';
+import { pdfTextOf } from './pdf-text';
 import { signAccessToken } from '../src/lib/jwt';
 
 const app = createApp();
@@ -90,6 +91,20 @@ const get = (token: string, path: string) =>
   request(app).get(path).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`);
 
 const isPdf = (body: Buffer) => body.subarray(0, 5).toString() === '%PDF-';
+
+/** Récupère le corps binaire d'un export, en tant qu'admin. */
+async function pdfBody(path: string): Promise<Buffer> {
+  const res = await get(tokenAdmin, path)
+    .buffer()
+    .parse((r, cb) => {
+      const chunks: Buffer[] = [];
+      r.on('data', (c: Buffer) => chunks.push(c));
+      r.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+
+  expect(res.status).toBe(200);
+  return res.body as Buffer;
+}
 
 describe('export du bulletin de classe', () => {
   it('produit un PDF valide, une page par élève', async () => {
@@ -186,18 +201,77 @@ describe('export du bulletin individuel', () => {
 });
 
 describe('cohérence avec le calcul', () => {
-  it('les moyennes du bulletin sont celles de GET /classes/:id', async () => {
+  it('les moyennes imprimées sont celles de GET /classes/:id', async () => {
     const json = await get(tokenAdmin, `/classes/${classe.id}?term_id=${term.id}`);
 
     // (12 + 3×16) / 4 = 15 pour Ana ; (10 + 3×10) / 4 = 10 pour Ben.
-    const ana2 = json.body.students.find((s: { firstName: string }) => s.firstName === 'Ana');
-    expect(ana2.average).toBe(15);
+    const anaJson = json.body.students.find((s: { firstName: string }) => s.firstName === 'Ana');
+    expect(anaJson.average).toBe(15);
     expect(json.body.stats.average).toBe(12.5);
 
-    // Le PDF est généré à partir de la même source : s'il diverge, c'est que
-    // deux chemins de calcul coexistent.
-    const pdf = await get(tokenAdmin, `/classes/${classe.id}/bulletin/export?term_id=${term.id}`);
-    expect(pdf.status).toBe(200);
+    // Le PDF doit porter les MÊMES chiffres : sans cette vérification, un
+    // second chemin de calcul pourrait diverger sans que rien ne le signale.
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+
+    expect(texte).toContain('ALPHAAna');
+    expect(texte).toContain('15,00');
+    expect(texte).toContain('BETABen');
+    expect(texte).toContain('10,00');
+    expect(texte).toContain('Moyennedelaclasse:12,50');
+  });
+
+  it('imprime le détail par catégorie et le coefficient — la promesse d\'auditabilité', async () => {
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+
+    // Un parent doit pouvoir refaire le calcul : (12 + 3×16) / 4 = 15.
+    expect(texte).toContain('Interrogation×1:12,00');
+    expect(texte).toContain('Composition×3:16,00');
+    expect(texte).toContain('Mathématiques');
+    expect(texte).toContain('Collège Sainte-Marie'.replace(/\s+/g, ''));
+  });
+
+  it('imprime « — » et jamais « 0 » pour un élève sans note', async () => {
+    const vide = await prisma.class.create({
+      data: { schoolId: school.id, name: '3e A', level: '3e' },
+    });
+    await prisma.student.create({
+      data: { schoolId: school.id, classId: vide.id, firstName: 'Zoe', lastName: 'Zeta' },
+    });
+
+    const texte = pdfTextOf(await pdfBody(`/classes/${vide.id}/bulletin/export?term_id=${term.id}`));
+
+    expect(texte).toContain('ZETAZoe');
+    expect(texte).toContain('—');
+    expect(texte).not.toContain('0,00');
+    expect(texte).toContain("nevautpaszéro");
+  });
+
+  it('ne fait pas déborder le détail sur la ligne suivante', async () => {
+    // Trois catégories dépassent la largeur de colonne et passent sur deux
+    // lignes : la hauteur de ligne doit être mesurée, pas figée.
+    const francais = await prisma.subject.create({
+      data: { schoolId: school.id, name: 'Français', coefficient: 2 },
+    });
+    const compo = await prisma.gradeType.findFirstOrThrow({
+      where: { schoolId: school.id, code: 'composition' },
+    });
+    await prisma.grade.create({
+      data: {
+        schoolId: school.id,
+        studentId: ana.id,
+        subjectId: francais.id,
+        gradeTypeId: compo.id,
+        termId: term.id,
+        value: 11,
+      },
+    });
+
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+
+    // Les deux matières restent lisibles et distinctes.
+    expect(texte).toContain('Mathématiques');
+    expect(texte).toContain('Français');
+    expect(texte).toContain('11,00');
   });
 
   it('génère un PDF même pour une classe sans aucune note', async () => {

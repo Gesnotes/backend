@@ -190,9 +190,36 @@ describe('GET /classes/:id — classement et statistiques', () => {
     expect((await api(adminToken).get(`/classes/${klass.id}`)).status).toBe(400);
   });
 
-  it('laisse un enseignant consulter le détail', async () => {
+  it('laisse un enseignant consulter le détail de SA classe', async () => {
+    const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+    await prisma.teacherAssignment.create({
+      data: { teacherUserId: prof.id, classId: klass.id, subjectId: maths.id },
+    });
+
     const res = await api(teacherToken).get(`/classes/${klass.id}?term_id=${term.id}`);
     expect(res.status).toBe(200);
+  });
+
+  it("refuse à un enseignant la classe d'un collègue", async () => {
+    // Aucune affectation sur cette classe : le classement nominatif de tous
+    // ses élèves ne le regarde pas.
+    const res = await api(teacherToken).get(`/classes/${klass.id}?term_id=${term.id}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('REFUSE à un parent le classement nominatif de la classe', async () => {
+    const parent = await createUser({ schoolId: schoolA.id, email: 'parent@a.test', role: 'parent' });
+    const parentToken = signAccessToken({
+      userId: parent.id,
+      schoolId: schoolA.id,
+      role: 'parent',
+    });
+
+    // La donnée la plus sensible du produit : noms, moyennes et rangs de tous
+    // les élèves. Un parent consulte son enfant via /children/:id.
+    expect((await api(parentToken).get(`/classes/${klass.id}?term_id=${term.id}`)).status).toBe(403);
+    expect((await api(parentToken).get(`/classes/${klass.id}/bulletin?term_id=${term.id}`)).status).toBe(403);
+    expect((await api(parentToken).get('/classes')).status).toBe(403);
   });
 
   it('expose le bulletin au même format', async () => {

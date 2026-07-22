@@ -1,6 +1,35 @@
 import prisma from '../lib/prisma';
-import { conflict, notFound } from '../errors/AppError';
+import type { AuthPayload } from '../types/express';
+import { conflict, forbidden, notFound } from '../errors/AppError';
 import { computeClassBulletin } from './grading/grading.service';
+
+/**
+ * Droit de consulter les résultats d'une classe.
+ *
+ * Une classe expose le classement nominatif de tous ses élèves : c'est la
+ * donnée la plus sensible du produit. Le contrôle vit dans le service et non
+ * dans les routes, pour qu'aucun point d'entrée ajouté plus tard ne puisse
+ * l'oublier — le JSON et l'export PDF passent par la même porte.
+ *
+ * Un parent n'a jamais accès à cette vue : il consulte son enfant seul via
+ * `/children/:id`.
+ */
+export async function assertCanViewClass(auth: AuthPayload, classId: number) {
+  const klass = await prisma.class.findFirst({ where: { id: classId, schoolId: auth.schoolId } });
+  if (!klass) throw notFound('Classe introuvable');
+
+  if (auth.role === 'admin') return klass;
+
+  if (auth.role === 'teacher') {
+    const assignment = await prisma.teacherAssignment.findFirst({
+      where: { teacherUserId: auth.userId, classId },
+    });
+    if (!assignment) throw forbidden("Vous n'enseignez pas dans cette classe");
+    return klass;
+  }
+
+  throw forbidden('Réservé à l\'équipe pédagogique');
+}
 
 export async function listClasses(schoolId: number, termId?: number, includeArchived = false) {
   const classes = await prisma.class.findMany({
@@ -38,8 +67,10 @@ export async function getClass(schoolId: number, id: number) {
  * extrêmes. Les élèves sans note gardent `average: null` et sont rejetés en
  * fin de classement — un élève non évalué n'est pas dernier de la classe.
  */
-export async function getClassDetail(schoolId: number, id: number, termId: number) {
-  const bulletin = await computeClassBulletin(schoolId, id, termId);
+export async function getClassDetail(auth: AuthPayload, id: number, termId: number) {
+  await assertCanViewClass(auth, id);
+
+  const bulletin = await computeClassBulletin(auth.schoolId, id, termId);
 
   const ranked = [...bulletin.students].sort((a, b) => {
     if (a.average === null && b.average === null) {

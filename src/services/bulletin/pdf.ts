@@ -20,6 +20,8 @@ export interface BulletinContext {
 }
 
 const MARGIN = 36;
+/** Largeur de la colonne « Détail des notes », partagée mesure et rendu. */
+const DETAIL_WIDTH = 260;
 const COLORS = {
   text: '#111827',
   muted: '#6b7280',
@@ -88,7 +90,7 @@ export function generateStudentBulletinPdf(
     doc.rect(left, y - 3, width, 18).fill(COLORS.band);
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
     doc.text('Matière', columns.subject + 4, y, { width: 140 });
-    doc.text('Détail des notes', columns.categories, y, { width: 260 });
+    doc.text('Détail des notes', columns.categories, y, { width: DETAIL_WIDTH });
     doc.text('Coef.', columns.coefficient, y, { width: 60, align: 'right' });
     doc.text('Moyenne', columns.average, y, { width: 66, align: 'right' });
     y += 20;
@@ -105,8 +107,19 @@ export function generateStudentBulletinPdf(
         .map((c) => `${c.label} ×${c.weight} : ${format(c.average)}`)
         .join('   ');
 
-      doc.fillColor(COLORS.text).text(subject.subjectName, columns.subject + 4, y, { width: 140 });
-      doc.fillColor(COLORS.muted).fontSize(8).text(detail || '—', columns.categories, y, { width: 260 });
+      // Hauteur mesurée, pas fixée : le détail des catégories dépasse souvent
+      // la largeur de sa colonne et passe sur deux lignes. Avec un pas figé,
+      // il chevaucherait la matière suivante — sur la partie du bulletin qui
+      // permet justement au parent de refaire le calcul.
+      doc.fontSize(8);
+      const detailHeight = doc.heightOfString(detail || '—', { width: DETAIL_WIDTH });
+      const rowHeight = Math.max(18, detailHeight + 8);
+
+      doc.fontSize(9).fillColor(COLORS.text);
+      doc.text(subject.subjectName, columns.subject + 4, y, { width: 140 });
+      doc.fillColor(COLORS.muted).fontSize(8).text(detail || '—', columns.categories, y, {
+        width: DETAIL_WIDTH,
+      });
       doc.fontSize(9).fillColor(COLORS.text);
       doc.text(String(subject.coefficient), columns.coefficient, y, { width: 60, align: 'right' });
       doc.font('Helvetica-Bold').text(format(subject.average), columns.average, y, {
@@ -115,7 +128,7 @@ export function generateStudentBulletinPdf(
       });
       doc.font('Helvetica');
 
-      y += 18;
+      y += rowHeight;
       doc.moveTo(left, y - 4).lineTo(left + width, y - 4).strokeColor(COLORS.line).lineWidth(0.5).stroke();
     }
 
@@ -170,29 +183,39 @@ export function generateClassBulletinPdf(
   const availableWidth = width - nameWidth - 60;
   const columnWidth = subjects.length > 0 ? availableWidth / subjects.length : availableWidth;
 
-  let y = doc.y + 4;
-  doc.rect(left, y - 3, width, 18).fill(COLORS.band);
-  doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.text);
-  doc.text('Élève', left + 4, y, { width: nameWidth });
-  subjects.forEach((subject, index) => {
-    doc.text(subject.name, left + nameWidth + index * columnWidth, y, {
-      width: columnWidth,
-      align: 'center',
-      ellipsis: true,
+  /**
+   * En-tête de colonnes, redessiné à chaque page.
+   *
+   * Sans cela, une classe de plus de ~35 élèves produit des pages de chiffres
+   * sans titre : impossible de savoir à quelle matière correspond chaque
+   * colonne sur le document imprimé.
+   */
+  const drawColumnHeader = (top: number): number => {
+    doc.rect(left, top - 3, width, 18).fill(COLORS.band);
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.text);
+    doc.text('Élève', left + 4, top, { width: nameWidth });
+    subjects.forEach((subject, index) => {
+      doc.text(subject.name, left + nameWidth + index * columnWidth, top, {
+        width: columnWidth,
+        align: 'center',
+        ellipsis: true,
+      });
     });
-  });
-  doc.text('Moy.', left + nameWidth + subjects.length * columnWidth, y, {
-    width: 56,
-    align: 'right',
-  });
-  y += 20;
+    doc.text('Moy.', left + nameWidth + subjects.length * columnWidth, top, {
+      width: 56,
+      align: 'right',
+    });
+    doc.font('Helvetica').fontSize(8);
+    return top + 20;
+  };
 
-  doc.font('Helvetica').fontSize(8);
+  let y = drawColumnHeader(doc.y + 4);
 
   for (const student of students) {
     if (y > doc.page.height - MARGIN - 40) {
       doc.addPage({ size: 'A4', layout: 'landscape', margin: MARGIN });
-      y = MARGIN;
+      header(doc, context, 'Tableau des moyennes');
+      y = drawColumnHeader(doc.y + 4);
     }
 
     doc.fillColor(COLORS.text);

@@ -32,38 +32,84 @@ export interface StudentResult {
 /**
  * Bulletin d'une classe pour une période.
  *
- * Trois requêtes au total, quel que soit l'effectif : charger les notes élève
- * par élève et matière par matière produirait ~1 000 requêtes pour une classe
- * de 40 élèves et 12 matières. Le calcul se fait ensuite en mémoire, avec les
- * fonctions pures de `compute.ts`.
+ * Nombre de requêtes constant, quel que soit l'effectif : charger les notes
+ * élève par élève et matière par matière produirait ~1 000 requêtes pour une
+ * classe de 40 élèves et 12 matières. Le calcul se fait ensuite en mémoire,
+ * avec les fonctions pures de `compute.ts`.
  */
 export async function computeClassBulletin(schoolId: number, classId: number, termId: number) {
-  const klass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
-  if (!klass) throw notFound('Classe introuvable');
+  const [bulletin] = await computeClassBulletins(schoolId, [classId], termId);
+  if (!bulletin) throw notFound('Classe introuvable');
+  return bulletin;
+}
 
+/**
+ * Bulletins de plusieurs classes en **cinq requêtes**, que l'on en demande une
+ * ou trente : période, classes, élèves, notes, coefficients.
+ *
+ * Appeler cette fonction en boucle sur 30 classes en ferait 150 : c'est le
+ * tableau de bord de l'administration qui les paierait, à chaque chargement de
+ * sa page d'accueil.
+ */
+export async function computeClassBulletins(
+  schoolId: number,
+  classIds: number[],
+  termId: number,
+) {
   const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
   if (!term) throw notFound('Période introuvable');
 
-  const [students, grades, coefficients] = await Promise.all([
+  const [classes, allStudents, allGrades, allCoefficients] = await Promise.all([
+    prisma.class.findMany({ where: { id: { in: classIds }, schoolId } }),
     prisma.student.findMany({
-      where: { classId, schoolId, archivedAt: null },
+      where: { classId: { in: classIds }, schoolId, archivedAt: null },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, classId: true, firstName: true, lastName: true },
     }),
     prisma.grade.findMany({
-      where: { schoolId, termId, student: { classId, archivedAt: null } },
+      where: { schoolId, termId, student: { classId: { in: classIds }, archivedAt: null } },
       select: {
         studentId: true,
         subjectId: true,
         gradeTypeId: true,
         value: true,
         maxValue: true,
+        student: { select: { classId: true } },
         gradeType: { select: { id: true, label: true, weight: true, position: true } },
         subject: { select: { id: true, name: true, coefficient: true } },
       },
     }),
-    prisma.subjectCoefficient.findMany({ where: { classId } }),
+    prisma.subjectCoefficient.findMany({ where: { classId: { in: classIds } } }),
   ]);
+
+  return classes.map((klass) =>
+    buildBulletin(
+      klass,
+      term,
+      allStudents.filter((s) => s.classId === klass.id),
+      allGrades.filter((g) => g.student.classId === klass.id),
+      allCoefficients.filter((c) => c.classId === klass.id),
+    ),
+  );
+}
+
+function buildBulletin(
+  klass: { id: number; name: string; level: string },
+  term: { id: number; label: string },
+  students: { id: number; firstName: string; lastName: string }[],
+  grades: {
+    studentId: number;
+    subjectId: number;
+    gradeTypeId: number;
+    value: D;
+    maxValue: D;
+    gradeType: { id: number; label: string; weight: D; position: number };
+    subject: { id: number; name: string; coefficient: D | null };
+  }[],
+  coefficients: { subjectId: number; coefficient: D }[],
+) {
+  const classId = klass.id;
+  const termId = term.id;
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
 
