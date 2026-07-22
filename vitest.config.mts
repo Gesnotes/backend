@@ -1,3 +1,4 @@
+
 import { defineConfig } from 'vitest/config';
 
 const TEST_DATABASE_URL =
@@ -23,6 +24,13 @@ export default defineConfig({
     },
     // Les fichiers partagent la même base : exécution en série.
     fileParallelism: false,
+    /**
+     * Le pool `forks` (défaut) fait planter des workers par intermittence sur
+     * cette suite — « Worker exited unexpectedly », sans échec de test, une
+     * fois sur deux ou trois. Reproduit sur la suite complète comme sur un
+     * fichier isolé, jamais avec `threads`.
+     */
+    pool: 'threads',
     hookTimeout: 60_000,
     testTimeout: 30_000,
   },

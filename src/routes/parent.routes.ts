@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as notificationService from '../services/notification.service';
 import * as parentService from '../services/parent.service';
 import { authOf } from '../lib/requestContext';
@@ -61,6 +62,29 @@ childrenRoutes.get(
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as z.infer<typeof termQuery>;
     res.json(await parentService.getChildDetail(authOf(req), id, term_id));
+  },
+);
+
+/**
+ * Bulletin PDF d'un seul enfant.
+ *
+ * Hors spec initiale : un parent qui conteste une moyenne demande cette pièce,
+ * et lui faire télécharger le tableau de la classe exposerait les résultats
+ * des autres enfants.
+ */
+childrenRoutes.get(
+  '/:id/bulletin/export',
+  validate({ params: idParam, query: termQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as z.infer<typeof termQuery>;
+
+    const file = await bulletinService.exportStudentBulletin(authOf(req), id, term_id);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Length', String(file.buffer.length));
+    res.send(file.buffer);
   },
 );
 

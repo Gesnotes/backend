@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as classService from '../services/class.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
@@ -64,6 +65,37 @@ classRoutes.get(
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
     res.json(await classService.getClassDetail(schoolIdOf(req), id, term_id));
+  },
+);
+
+/**
+ * Export PDF. `format=eleves` (défaut) : une page par élève, le document
+ * remis aux familles. `format=classe` : le tableau de synthèse.
+ */
+classRoutes.get(
+  '/:id/bulletin/export',
+  // Le tableau de classe expose les résultats de tous les élèves : réservé à
+  // l'équipe. Un parent passe par /children/:id/bulletin/export.
+  requireRole('admin', 'teacher'),
+  validate({
+    params: idParam,
+    query: detailQuery.extend({
+      format: z.enum(['eleves', 'classe']).default('eleves'),
+    }),
+  }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id, format } = req.query as unknown as {
+      term_id: number;
+      format: 'eleves' | 'classe';
+    };
+
+    const file = await bulletinService.exportClassBulletin(schoolIdOf(req), id, term_id, format);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Length', String(file.buffer.length));
+    res.send(file.buffer);
   },
 );
 
