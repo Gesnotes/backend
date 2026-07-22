@@ -1,0 +1,305 @@
+import { Prisma } from '../../generated/prisma/client';
+
+import prisma from '../../lib/prisma';
+import { notFound } from '../../errors/AppError';
+import {
+  type GradeInput,
+  generalAverage,
+  serializeAverage,
+  subjectAverage,
+} from './compute';
+
+const Decimal = Prisma.Decimal;
+type D = Prisma.Decimal;
+
+export interface SubjectResult {
+  subjectId: number;
+  subjectName: string;
+  coefficient: number;
+  average: number | null;
+  /** Détail par catégorie : c'est la pièce que les parents contestent. */
+  categories: { gradeTypeId: number; label: string; weight: number; average: number | null }[];
+}
+
+export interface StudentResult {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  average: number | null;
+  subjects: SubjectResult[];
+}
+
+/**
+ * Bulletin d'une classe pour une période.
+ *
+ * Trois requêtes au total, quel que soit l'effectif : charger les notes élève
+ * par élève et matière par matière produirait ~1 000 requêtes pour une classe
+ * de 40 élèves et 12 matières. Le calcul se fait ensuite en mémoire, avec les
+ * fonctions pures de `compute.ts`.
+ */
+export async function computeClassBulletin(schoolId: number, classId: number, termId: number) {
+  const klass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
+  if (!klass) throw notFound('Classe introuvable');
+
+  const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
+  if (!term) throw notFound('Période introuvable');
+
+  const [students, grades, coefficients] = await Promise.all([
+    prisma.student.findMany({
+      where: { classId, schoolId, archivedAt: null },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      select: { id: true, firstName: true, lastName: true },
+    }),
+    prisma.grade.findMany({
+      where: { schoolId, termId, student: { classId, archivedAt: null } },
+      select: {
+        studentId: true,
+        subjectId: true,
+        gradeTypeId: true,
+        value: true,
+        maxValue: true,
+        gradeType: { select: { id: true, label: true, weight: true, position: true } },
+        subject: { select: { id: true, name: true, coefficient: true } },
+      },
+    }),
+    prisma.subjectCoefficient.findMany({ where: { classId } }),
+  ]);
+
+  const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
+
+  // Matières effectivement notées dans cette classe sur la période.
+  const subjectMeta = new Map<number, { name: string; coefficient: D; position: number }>();
+  for (const grade of grades) {
+    if (!subjectMeta.has(grade.subjectId)) {
+      subjectMeta.set(grade.subjectId, {
+        name: grade.subject.name,
+        coefficient:
+          coefficientBySubject.get(grade.subjectId) ??
+          grade.subject.coefficient ??
+          new Decimal(1),
+        position: 0,
+      });
+    }
+  }
+
+  const gradesByStudent = new Map<number, typeof grades>();
+  for (const grade of grades) {
+    const list = gradesByStudent.get(grade.studentId) ?? [];
+    list.push(grade);
+    gradesByStudent.set(grade.studentId, list);
+  }
+
+  const results: StudentResult[] = students.map((student) => {
+    const studentGrades = gradesByStudent.get(student.id) ?? [];
+
+    const bySubject = new Map<number, typeof grades>();
+    for (const grade of studentGrades) {
+      const list = bySubject.get(grade.subjectId) ?? [];
+      list.push(grade);
+      bySubject.set(grade.subjectId, list);
+    }
+
+    const subjects: SubjectResult[] = [];
+    const forGeneral: { average: D; coefficient: D }[] = [];
+
+    for (const [subjectId, meta] of subjectMeta) {
+      const subjectGrades = bySubject.get(subjectId) ?? [];
+      const average = subjectAverage(subjectGrades.map(toGradeInput));
+
+      if (average !== null) forGeneral.push({ average, coefficient: meta.coefficient });
+
+      subjects.push({
+        subjectId,
+        subjectName: meta.name,
+        coefficient: Number(meta.coefficient),
+        average: serializeAverage(average),
+        categories: categoriesOf(subjectGrades),
+      });
+    }
+
+    subjects.sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'fr'));
+
+    return {
+      studentId: student.id,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      average: serializeAverage(generalAverage(forGeneral)),
+      subjects,
+    };
+  });
+
+  return {
+    classId,
+    className: klass.name,
+    level: klass.level,
+    termId,
+    termLabel: term.label,
+    students: results,
+    classAverage: serializeAverage(
+      averageOfNullable(results.map((r) => r.average)),
+    ),
+  };
+}
+
+/** Résultats d'un élève sur une période (espace parent, détail classe). */
+export async function computeStudentResult(
+  schoolId: number,
+  studentId: number,
+  termId: number,
+): Promise<StudentResult> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, firstName: true, lastName: true, classId: true, archivedAt: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const [grades, coefficients] = await Promise.all([
+    prisma.grade.findMany({
+      where: { schoolId, studentId, termId },
+      select: {
+        studentId: true,
+        subjectId: true,
+        gradeTypeId: true,
+        value: true,
+        maxValue: true,
+        gradeType: { select: { id: true, label: true, weight: true, position: true } },
+        subject: { select: { id: true, name: true, coefficient: true } },
+      },
+    }),
+    prisma.subjectCoefficient.findMany({ where: { classId: student.classId } }),
+  ]);
+
+  const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
+
+  const bySubject = new Map<number, typeof grades>();
+  for (const grade of grades) {
+    const list = bySubject.get(grade.subjectId) ?? [];
+    list.push(grade);
+    bySubject.set(grade.subjectId, list);
+  }
+
+  const subjects: SubjectResult[] = [];
+  const forGeneral: { average: D; coefficient: D }[] = [];
+
+  for (const [subjectId, subjectGrades] of bySubject) {
+    const first = subjectGrades[0];
+    if (!first) continue;
+
+    const coefficient =
+      coefficientBySubject.get(subjectId) ?? first.subject.coefficient ?? new Decimal(1);
+    const average = subjectAverage(subjectGrades.map(toGradeInput));
+
+    if (average !== null) forGeneral.push({ average, coefficient });
+
+    subjects.push({
+      subjectId,
+      subjectName: first.subject.name,
+      coefficient: Number(coefficient),
+      average: serializeAverage(average),
+      categories: categoriesOf(subjectGrades),
+    });
+  }
+
+  subjects.sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'fr'));
+
+  return {
+    studentId: student.id,
+    firstName: student.firstName,
+    lastName: student.lastName,
+    average: serializeAverage(generalAverage(forGeneral)),
+    subjects,
+  };
+}
+
+/**
+ * Signale un doublon probable : même élève, matière, type et période, saisis
+ * le même jour. Non bloquant — plusieurs interrogations le même jour sont
+ * légitimes — mais une composition saisie deux fois décale la moyenne sans
+ * que personne ne le voie.
+ */
+export async function checkDuplicateWarning(input: {
+  schoolId: number;
+  studentId: number;
+  subjectId: number;
+  gradeTypeId: number;
+  termId: number;
+  excludeGradeId?: number;
+}): Promise<boolean> {
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date();
+  dayEnd.setHours(23, 59, 59, 999);
+
+  const { excludeGradeId, ...where } = input;
+
+  const count = await prisma.grade.count({
+    where: {
+      ...where,
+      createdAt: { gte: dayStart, lte: dayEnd },
+      ...(excludeGradeId ? { id: { not: excludeGradeId } } : {}),
+    },
+  });
+
+  return count > 0;
+}
+
+function toGradeInput(grade: {
+  gradeTypeId: number;
+  value: D;
+  maxValue: D;
+  gradeType: { weight: D };
+}): GradeInput {
+  return {
+    gradeTypeId: grade.gradeTypeId,
+    weight: grade.gradeType.weight,
+    value: grade.value,
+    maxValue: grade.maxValue,
+  };
+}
+
+function categoriesOf(
+  grades: {
+    gradeTypeId: number;
+    value: D;
+    maxValue: D;
+    gradeType: { id: number; label: string; weight: D; position: number };
+  }[],
+) {
+  const byType = new Map<number, { label: string; weight: D; position: number; values: D[] }>();
+
+  for (const grade of grades) {
+    const entry = byType.get(grade.gradeTypeId) ?? {
+      label: grade.gradeType.label,
+      weight: grade.gradeType.weight,
+      position: grade.gradeType.position,
+      values: [],
+    };
+    entry.values.push(grade.value.div(grade.maxValue).mul(20));
+    byType.set(grade.gradeTypeId, entry);
+  }
+
+  return [...byType.entries()]
+    .sort((a, b) => a[1].position - b[1].position)
+    .map(([gradeTypeId, entry]) => ({
+      gradeTypeId,
+      label: entry.label,
+      weight: Number(entry.weight),
+      average: serializeAverage(
+        entry.values.reduce((sum, v) => sum.add(v), new Decimal(0)).div(entry.values.length),
+      ),
+    }));
+}
+
+/**
+ * Moyenne de classe : moyenne des moyennes générales des élèves qui ont au
+ * moins une note. Un élève sans note n'est ni exclu de la classe ni compté 0,
+ * il est simplement absent du calcul.
+ */
+function averageOfNullable(values: (number | null)[]): D | null {
+  const present = values.filter((v): v is number => v !== null);
+  if (present.length === 0) return null;
+
+  return present
+    .reduce((sum, v) => sum.add(new Decimal(v)), new Decimal(0))
+    .div(present.length);
+}
