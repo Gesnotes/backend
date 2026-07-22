@@ -13,6 +13,11 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
 import { schoolContext } from './middlewares/schoolContext';
+import {
+  childrenRoutes,
+  gradeDetailRoutes,
+  parentMeRoutes,
+} from './routes/parent.routes';
 import { parentSearchRoutes, studentRoutes } from './routes/student.routes';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
@@ -54,7 +59,12 @@ export function createApp() {
   app.use('/classes', classRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);
+  app.use('/parents/me', parentMeRoutes);
   app.use('/parents', parentSearchRoutes);
+  app.use('/children', childrenRoutes);
+  // Lecture avant écriture : GET /grades/:id est ouvert au parent, alors que
+  // le reste de /grades est réservé aux enseignants.
+  app.use('/grades', gradeDetailRoutes);
   app.use('/grades', gradeRoutes);
   // Monté avant /teachers : /teachers/me ne doit pas être capté par /teachers/:id
   app.use('/teachers/me', teacherMeRoutes);
