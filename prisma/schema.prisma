@@ -24,11 +24,13 @@ model School {
   subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  users    User[]
-  terms    Term[]
-  classes  Class[]
-  subjects Subject[]
-  students Student[]
+  users      User[]
+  terms      Term[]
+  classes    Class[]
+  subjects   Subject[]
+  students   Student[]
+  grades     Grade[]
+  gradeTypes GradeType[]
 
   @@map("schools")
 }
@@ -36,32 +38,69 @@ model School {
 // Utilisateurs (admin, prof, parent — un seul point d'auth)
 model User {
   id           Int       @id @default(autoincrement())
-  schoolId     Int?      @map("school_id")
+  schoolId     Int       @map("school_id")
   email        String    @unique @db.VarChar(150)
+  phone        String?   @db.VarChar(30)
   passwordHash String    @map("password_hash") @db.VarChar(255)
   role         Role
   firstName    String?   @map("first_name") @db.VarChar(100)
   lastName     String?   @map("last_name") @db.VarChar(100)
+  archivedAt   DateTime? @map("archived_at") @db.Timestamp(6)
   createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  school      School?             @relation(fields: [schoolId], references: [id])
-  children    StudentParent[]
-  assignments TeacherAssignment[]
-  grades      Grade[]
-  devices     Device[]
+  school         School               @relation(fields: [schoolId], references: [id])
+  children       StudentParent[]
+  assignments    TeacherAssignment[]
+  grades         Grade[]
+  devices        Device[]
+  refreshTokens  RefreshToken[]
+  resetTokens    PasswordResetToken[]
 
+  // Unicité du téléphone par école, pas globalement
+  @@unique([schoolId, phone])
+  @@index([schoolId, archivedAt])
   @@map("users")
+}
+
+// Refresh tokens — permet l'invalidation côté serveur (POST /auth/logout)
+model RefreshToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamp(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamp(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@map("refresh_tokens")
+}
+
+// Tokens de réinitialisation de mot de passe (usage unique, expirants)
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamp(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamp(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("password_reset_tokens")
 }
 
 // Année scolaire / période (trimestre, semestre)
 model Term {
   id        Int       @id @default(autoincrement())
-  schoolId  Int?      @map("school_id")
+  schoolId  Int       @map("school_id")
   label     String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
   startDate DateTime? @map("start_date") @db.Date
   endDate   DateTime? @map("end_date") @db.Date
 
-  school School? @relation(fields: [schoolId], references: [id])
+  school School  @relation(fields: [schoolId], references: [id])
   grades Grade[]
 
   @@map("terms")
@@ -69,45 +108,86 @@ model Term {
 
 // Classes
 model Class {
-  id       Int    @id @default(autoincrement())
-  schoolId Int?   @map("school_id")
-  name     String @db.VarChar(50) // "6e A"
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  name       String    @db.VarChar(50) // "6e A"
+  level      String    @db.VarChar(20) // "6e" — gabarit de coefficients, jamais utilisé dans le calcul
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school      School?             @relation(fields: [schoolId], references: [id])
-  students    Student[]
-  assignments TeacherAssignment[]
+  school       School               @relation(fields: [schoolId], references: [id])
+  students     Student[]
+  assignments  TeacherAssignment[]
+  coefficients SubjectCoefficient[]
 
+  @@index([schoolId, archivedAt])
   @@map("classes")
 }
 
 // Matières
 model Subject {
-  id          Int      @id @default(autoincrement())
-  schoolId    Int?     @map("school_id")
-  name        String   @db.VarChar(100)
-  coefficient Decimal? @default(1) @db.Decimal(4, 2)
+  id          Int       @id @default(autoincrement())
+  schoolId    Int       @map("school_id")
+  name        String    @db.VarChar(100)
+  coefficient Decimal?  @default(1) @db.Decimal(4, 2) // défaut école, surchargé par SubjectCoefficient
+  archivedAt  DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school      School?             @relation(fields: [schoolId], references: [id])
-  assignments TeacherAssignment[]
-  grades      Grade[]
+  school       School               @relation(fields: [schoolId], references: [id])
+  assignments  TeacherAssignment[]
+  grades       Grade[]
+  coefficients SubjectCoefficient[]
 
+  @@index([schoolId, archivedAt])
   @@map("subjects")
+}
+
+// Coefficient d'une matière pour une classe donnée.
+// La clé composite interdit structurellement le doublon.
+model SubjectCoefficient {
+  subjectId   Int     @map("subject_id")
+  classId     Int     @map("class_id")
+  coefficient Decimal @db.Decimal(4, 2)
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  class   Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@id([subjectId, classId])
+  @@map("subject_coefficients")
+}
+
+// Types de note et leur poids — configurable par école, jamais codé en dur.
+// interrogation = 1, devoir = 2, composition = 3 (seed par défaut).
+model GradeType {
+  id       Int     @id @default(autoincrement())
+  schoolId Int     @map("school_id")
+  code     String  @db.VarChar(30) // "interrogation" | "devoir" | "composition"
+  label    String  @db.VarChar(50)
+  weight   Decimal @db.Decimal(4, 2)
+  position Int     @default(0)
+
+  school School  @relation(fields: [schoolId], references: [id])
+  grades Grade[]
+
+  @@unique([schoolId, code])
+  @@map("grade_types")
 }
 
 // Élèves
 model Student {
-  id        Int       @id @default(autoincrement())
-  schoolId  Int?      @map("school_id")
-  classId   Int?      @map("class_id")
-  firstName String    @map("first_name") @db.VarChar(100)
-  lastName  String    @map("last_name") @db.VarChar(100)
-  birthDate DateTime? @map("birth_date") @db.Date
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  classId    Int       @map("class_id")
+  firstName  String    @map("first_name") @db.VarChar(100)
+  lastName   String    @map("last_name") @db.VarChar(100)
+  birthDate  DateTime? @map("birth_date") @db.Date
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school  School?         @relation(fields: [schoolId], references: [id])
-  class   Class?          @relation(fields: [classId], references: [id])
+  school  School          @relation(fields: [schoolId], references: [id])
+  class   Class           @relation(fields: [classId], references: [id])
   parents StudentParent[]
   grades  Grade[]
 
+  @@index([classId, archivedAt])
+  @@index([schoolId, archivedAt])
   @@map("students")
 }
 
@@ -116,8 +196,8 @@ model StudentParent {
   studentId    Int @map("student_id")
   parentUserId Int @map("parent_user_id")
 
-  student Student @relation(fields: [studentId], references: [id])
-  parent  User    @relation(fields: [parentUserId], references: [id])
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  parent  User    @relation(fields: [parentUserId], references: [id], onDelete: Cascade)
 
   @@id([studentId, parentUserId])
   @@map("student_parents")
@@ -125,48 +205,56 @@ model StudentParent {
 
 // Affectation prof ↔ classe ↔ matière
 model TeacherAssignment {
-  id            Int  @id @default(autoincrement())
-  teacherUserId Int? @map("teacher_user_id")
-  classId       Int? @map("class_id")
-  subjectId     Int? @map("subject_id")
+  id            Int @id @default(autoincrement())
+  teacherUserId Int @map("teacher_user_id")
+  classId       Int @map("class_id")
+  subjectId     Int @map("subject_id")
 
-  teacher User?    @relation(fields: [teacherUserId], references: [id])
-  class   Class?   @relation(fields: [classId], references: [id])
-  subject Subject? @relation(fields: [subjectId], references: [id])
+  teacher User    @relation(fields: [teacherUserId], references: [id], onDelete: Cascade)
+  class   Class   @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
 
+  @@unique([teacherUserId, classId, subjectId])
   @@map("teacher_assignments")
 }
 
 // Appareils des utilisateurs (tokens push FCM) — un parent peut en avoir plusieurs
 model Device {
   id        Int       @id @default(autoincrement())
-  userId    Int?      @map("user_id")
+  userId    Int       @map("user_id")
   fcmToken  String    @unique @map("fcm_token") @db.VarChar(255)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  user User? @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("devices")
 }
 
-// Notes
+// Notes.
+// Le poids d'une note vient UNIQUEMENT de GradeType.weight : il n'y a
+// volontairement pas de colonne `coefficient` ici (source de vérité unique).
 model Grade {
   id            Int       @id @default(autoincrement())
-  studentId     Int?      @map("student_id")
-  subjectId     Int?      @map("subject_id")
+  schoolId      Int       @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  studentId     Int       @map("student_id")
+  subjectId     Int       @map("subject_id")
+  gradeTypeId   Int       @map("grade_type_id")
+  termId        Int       @map("term_id")
   teacherUserId Int?      @map("teacher_user_id")
-  termId        Int?      @map("term_id")
   value         Decimal   @db.Decimal(5, 2)
-  maxValue      Decimal?  @default(20) @map("max_value") @db.Decimal(5, 2)
-  gradeType     String?   @map("grade_type") @db.VarChar(30) // "devoir", "composition"
-  coefficient   Decimal?  @default(1) @db.Decimal(4, 2)
+  maxValue      Decimal   @default(20) @map("max_value") @db.Decimal(5, 2)
   comment       String?   @db.Text // commentaire du prof, visible par le parent
   createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  student Student? @relation(fields: [studentId], references: [id])
-  subject Subject? @relation(fields: [subjectId], references: [id])
-  teacher User?    @relation(fields: [teacherUserId], references: [id])
-  term    Term?    @relation(fields: [termId], references: [id])
+  school    School    @relation(fields: [schoolId], references: [id])
+  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject   Subject   @relation(fields: [subjectId], references: [id])
+  gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
+  term      Term      @relation(fields: [termId], references: [id])
+  teacher   User?     @relation(fields: [teacherUserId], references: [id])
 
+  @@index([studentId, termId]) // porte tout le calcul des moyennes
+  @@index([schoolId, createdAt]) // porte le dashboard admin
+  @@index([subjectId, termId])
   @@map("grades")
 }

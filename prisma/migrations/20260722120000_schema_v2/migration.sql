@@ -1,39 +1,87 @@
--- ⚠️ Fichier généré depuis prisma/schema.prisma — ne pas éditer à la main.
--- La source de vérité est prisma/schema.prisma + prisma/migrations.
--- Régénérer avec :
---   npx prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script -o gesnotes.sql
+-- DropForeignKey
+ALTER TABLE "classes" DROP CONSTRAINT "classes_school_id_fkey";
 
--- CreateSchema
-CREATE SCHEMA IF NOT EXISTS "public";
+-- DropForeignKey
+ALTER TABLE "devices" DROP CONSTRAINT "devices_user_id_fkey";
 
--- CreateEnum
-CREATE TYPE "role" AS ENUM ('admin', 'teacher', 'parent');
+-- DropForeignKey
+ALTER TABLE "grades" DROP CONSTRAINT "grades_student_id_fkey";
 
--- CreateTable
-CREATE TABLE "schools" (
-    "id" SERIAL NOT NULL,
-    "name" VARCHAR(150) NOT NULL,
-    "subdomain" VARCHAR(63) NOT NULL,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+-- DropForeignKey
+ALTER TABLE "grades" DROP CONSTRAINT "grades_subject_id_fkey";
 
-    CONSTRAINT "schools_pkey" PRIMARY KEY ("id")
-);
+-- DropForeignKey
+ALTER TABLE "grades" DROP CONSTRAINT "grades_term_id_fkey";
 
--- CreateTable
-CREATE TABLE "users" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "email" VARCHAR(150) NOT NULL,
-    "phone" VARCHAR(30),
-    "password_hash" VARCHAR(255) NOT NULL,
-    "role" "role" NOT NULL,
-    "first_name" VARCHAR(100),
-    "last_name" VARCHAR(100),
-    "archived_at" TIMESTAMP(6),
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
+-- DropForeignKey
+ALTER TABLE "student_parents" DROP CONSTRAINT "student_parents_parent_user_id_fkey";
 
-    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
-);
+-- DropForeignKey
+ALTER TABLE "student_parents" DROP CONSTRAINT "student_parents_student_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "students" DROP CONSTRAINT "students_class_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "students" DROP CONSTRAINT "students_school_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "subjects" DROP CONSTRAINT "subjects_school_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "teacher_assignments" DROP CONSTRAINT "teacher_assignments_class_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "teacher_assignments" DROP CONSTRAINT "teacher_assignments_subject_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "teacher_assignments" DROP CONSTRAINT "teacher_assignments_teacher_user_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "terms" DROP CONSTRAINT "terms_school_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "users" DROP CONSTRAINT "users_school_id_fkey";
+
+-- AlterTable
+ALTER TABLE "classes" ADD COLUMN     "archived_at" TIMESTAMP(6),
+ADD COLUMN     "level" VARCHAR(20) NOT NULL,
+ALTER COLUMN "school_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "devices" ALTER COLUMN "user_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "grades" DROP COLUMN "coefficient",
+DROP COLUMN "grade_type",
+ADD COLUMN     "grade_type_id" INTEGER NOT NULL,
+ADD COLUMN     "school_id" INTEGER NOT NULL,
+ALTER COLUMN "student_id" SET NOT NULL,
+ALTER COLUMN "subject_id" SET NOT NULL,
+ALTER COLUMN "term_id" SET NOT NULL,
+ALTER COLUMN "max_value" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "students" ADD COLUMN     "archived_at" TIMESTAMP(6),
+ALTER COLUMN "school_id" SET NOT NULL,
+ALTER COLUMN "class_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "subjects" ADD COLUMN     "archived_at" TIMESTAMP(6),
+ALTER COLUMN "school_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "teacher_assignments" ALTER COLUMN "teacher_user_id" SET NOT NULL,
+ALTER COLUMN "class_id" SET NOT NULL,
+ALTER COLUMN "subject_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "terms" ALTER COLUMN "school_id" SET NOT NULL;
+
+-- AlterTable
+ALTER TABLE "users" ADD COLUMN     "archived_at" TIMESTAMP(6),
+ADD COLUMN     "phone" VARCHAR(30),
+ALTER COLUMN "school_id" SET NOT NULL;
 
 -- CreateTable
 CREATE TABLE "refresh_tokens" (
@@ -60,39 +108,6 @@ CREATE TABLE "password_reset_tokens" (
 );
 
 -- CreateTable
-CREATE TABLE "terms" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "label" VARCHAR(50) NOT NULL,
-    "start_date" DATE,
-    "end_date" DATE,
-
-    CONSTRAINT "terms_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "classes" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "name" VARCHAR(50) NOT NULL,
-    "level" VARCHAR(20) NOT NULL,
-    "archived_at" TIMESTAMP(6),
-
-    CONSTRAINT "classes_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "subjects" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "name" VARCHAR(100) NOT NULL,
-    "coefficient" DECIMAL(4,2) DEFAULT 1,
-    "archived_at" TIMESTAMP(6),
-
-    CONSTRAINT "subjects_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "subject_coefficients" (
     "subject_id" INTEGER NOT NULL,
     "class_id" INTEGER NOT NULL,
@@ -113,76 +128,6 @@ CREATE TABLE "grade_types" (
     CONSTRAINT "grade_types_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
-CREATE TABLE "students" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "class_id" INTEGER NOT NULL,
-    "first_name" VARCHAR(100) NOT NULL,
-    "last_name" VARCHAR(100) NOT NULL,
-    "birth_date" DATE,
-    "archived_at" TIMESTAMP(6),
-
-    CONSTRAINT "students_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "student_parents" (
-    "student_id" INTEGER NOT NULL,
-    "parent_user_id" INTEGER NOT NULL,
-
-    CONSTRAINT "student_parents_pkey" PRIMARY KEY ("student_id","parent_user_id")
-);
-
--- CreateTable
-CREATE TABLE "teacher_assignments" (
-    "id" SERIAL NOT NULL,
-    "teacher_user_id" INTEGER NOT NULL,
-    "class_id" INTEGER NOT NULL,
-    "subject_id" INTEGER NOT NULL,
-
-    CONSTRAINT "teacher_assignments_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "devices" (
-    "id" SERIAL NOT NULL,
-    "user_id" INTEGER NOT NULL,
-    "fcm_token" VARCHAR(255) NOT NULL,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "devices_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "grades" (
-    "id" SERIAL NOT NULL,
-    "school_id" INTEGER NOT NULL,
-    "student_id" INTEGER NOT NULL,
-    "subject_id" INTEGER NOT NULL,
-    "grade_type_id" INTEGER NOT NULL,
-    "term_id" INTEGER NOT NULL,
-    "teacher_user_id" INTEGER,
-    "value" DECIMAL(5,2) NOT NULL,
-    "max_value" DECIMAL(5,2) NOT NULL DEFAULT 20,
-    "comment" TEXT,
-    "created_at" TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "grades_pkey" PRIMARY KEY ("id")
-);
-
--- CreateIndex
-CREATE UNIQUE INDEX "schools_subdomain_key" ON "schools"("subdomain");
-
--- CreateIndex
-CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
-
--- CreateIndex
-CREATE INDEX "users_school_id_archived_at_idx" ON "users"("school_id", "archived_at");
-
--- CreateIndex
-CREATE UNIQUE INDEX "users_school_id_phone_key" ON "users"("school_id", "phone");
-
 -- CreateIndex
 CREATE UNIQUE INDEX "refresh_tokens_token_hash_key" ON "refresh_tokens"("token_hash");
 
@@ -196,25 +141,10 @@ CREATE UNIQUE INDEX "password_reset_tokens_token_hash_key" ON "password_reset_to
 CREATE INDEX "password_reset_tokens_user_id_used_at_idx" ON "password_reset_tokens"("user_id", "used_at");
 
 -- CreateIndex
-CREATE INDEX "classes_school_id_archived_at_idx" ON "classes"("school_id", "archived_at");
-
--- CreateIndex
-CREATE INDEX "subjects_school_id_archived_at_idx" ON "subjects"("school_id", "archived_at");
-
--- CreateIndex
 CREATE UNIQUE INDEX "grade_types_school_id_code_key" ON "grade_types"("school_id", "code");
 
 -- CreateIndex
-CREATE INDEX "students_class_id_archived_at_idx" ON "students"("class_id", "archived_at");
-
--- CreateIndex
-CREATE INDEX "students_school_id_archived_at_idx" ON "students"("school_id", "archived_at");
-
--- CreateIndex
-CREATE UNIQUE INDEX "teacher_assignments_teacher_user_id_class_id_subject_id_key" ON "teacher_assignments"("teacher_user_id", "class_id", "subject_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "devices_fcm_token_key" ON "devices"("fcm_token");
+CREATE INDEX "classes_school_id_archived_at_idx" ON "classes"("school_id", "archived_at");
 
 -- CreateIndex
 CREATE INDEX "grades_student_id_term_id_idx" ON "grades"("student_id", "term_id");
@@ -224,6 +154,24 @@ CREATE INDEX "grades_school_id_created_at_idx" ON "grades"("school_id", "created
 
 -- CreateIndex
 CREATE INDEX "grades_subject_id_term_id_idx" ON "grades"("subject_id", "term_id");
+
+-- CreateIndex
+CREATE INDEX "students_class_id_archived_at_idx" ON "students"("class_id", "archived_at");
+
+-- CreateIndex
+CREATE INDEX "students_school_id_archived_at_idx" ON "students"("school_id", "archived_at");
+
+-- CreateIndex
+CREATE INDEX "subjects_school_id_archived_at_idx" ON "subjects"("school_id", "archived_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "teacher_assignments_teacher_user_id_class_id_subject_id_key" ON "teacher_assignments"("teacher_user_id", "class_id", "subject_id");
+
+-- CreateIndex
+CREATE INDEX "users_school_id_archived_at_idx" ON "users"("school_id", "archived_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_school_id_phone_key" ON "users"("school_id", "phone");
 
 -- AddForeignKey
 ALTER TABLE "users" ADD CONSTRAINT "users_school_id_fkey" FOREIGN KEY ("school_id") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -290,6 +238,3 @@ ALTER TABLE "grades" ADD CONSTRAINT "grades_grade_type_id_fkey" FOREIGN KEY ("gr
 
 -- AddForeignKey
 ALTER TABLE "grades" ADD CONSTRAINT "grades_term_id_fkey" FOREIGN KEY ("term_id") REFERENCES "terms"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "grades" ADD CONSTRAINT "grades_teacher_user_id_fkey" FOREIGN KEY ("teacher_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
