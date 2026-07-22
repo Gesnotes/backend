@@ -7,7 +7,7 @@ import * as parentService from '../services/parent.service';
 import { authOf } from '../lib/requestContext';
 import { notFound } from '../errors/AppError';
 import { requireAuth } from '../middlewares/requireAuth';
-import { requireRole } from '../middlewares/requireRole';
+import { ALL_ROLES, requireRole } from '../middlewares/requireRole';
 import { validate } from '../middlewares/validate';
 
 /** /parents/me — espace du parent connecté. */
@@ -18,8 +18,11 @@ export const childrenRoutes = Router();
 export const gradeDetailRoutes = Router();
 
 parentMeRoutes.use(requireAuth, requireRole('parent'));
-childrenRoutes.use(requireAuth);
-gradeDetailRoutes.use(requireAuth);
+// Le cloisonnement fin (parent de l'élève, professeur de sa classe) est fait
+// par `assertIsParentOf` dans le service ; le rôle reste déclaré ici pour que
+// chaque route porte explicitement qui a le droit de lire.
+childrenRoutes.use(requireAuth, requireRole(...ALL_ROLES));
+gradeDetailRoutes.use(requireAuth, requireRole(...ALL_ROLES));
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const termQuery = z.object({ term_id: z.coerce.number().int().positive() });

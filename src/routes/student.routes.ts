@@ -4,7 +4,7 @@ import { z } from 'zod';
 import * as studentService from '../services/student.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
-import { schoolIdOf } from '../lib/requestContext';
+import { authOf, schoolIdOf } from '../lib/requestContext';
 import { validate } from '../middlewares/validate';
 
 export const studentRoutes = Router();
@@ -27,6 +27,7 @@ const boolFlag = z
 const listQuery = z.object({
   class_id: z.coerce.number().int().positive().optional(),
   include_archived: boolFlag,
+  page: z.coerce.number().int().positive().default(1),
 });
 
 const createBody = z.object({
@@ -65,20 +66,36 @@ const attachParentBody = z.union([
   }),
 ]);
 
-studentRoutes.get('/', validate({ query: listQuery }), async (req, res) => {
-  const { class_id, include_archived } = req.query as unknown as z.infer<typeof listQuery>;
-  res.json(
-    await studentService.listStudents(schoolIdOf(req), {
-      classId: class_id,
-      includeArchived: include_archived,
-    }),
-  );
-});
+/**
+ * Lecture réservée à l'équipe. Le service borne en plus l'enseignant à ses
+ * classes et lui masque les coordonnées des familles. Un parent consulte ses
+ * enfants via /parents/me/children.
+ */
+studentRoutes.get(
+  '/',
+  requireRole('admin', 'teacher'),
+  validate({ query: listQuery }),
+  async (req, res) => {
+    const { class_id, include_archived, page } = req.query as unknown as z.infer<typeof listQuery>;
+    res.json(
+      await studentService.listStudents(authOf(req), {
+        classId: class_id,
+        includeArchived: include_archived,
+        page,
+      }),
+    );
+  },
+);
 
-studentRoutes.get('/:id', validate({ params: idParam }), async (req, res) => {
-  const { id } = req.params as unknown as z.infer<typeof idParam>;
-  res.json(await studentService.getStudent(schoolIdOf(req), id));
-});
+studentRoutes.get(
+  '/:id',
+  requireRole('admin', 'teacher'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    res.json(await studentService.getStudent(authOf(req), id));
+  },
+);
 
 studentRoutes.post('/', requireRole('admin'), validate({ body: createBody }), async (req, res) => {
   const data = req.body as z.infer<typeof createBody>;

@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { conflict, forbidden, notFound } from '../errors/AppError';
-import { computeClassBulletin } from './grading/grading.service';
+import { computeClassBulletin, computeClassBulletins } from './grading/grading.service';
 
 /**
  * Droit de consulter les résultats d'une classe.
@@ -48,12 +48,20 @@ export async function listClasses(schoolId: number, termId?: number, includeArch
     }));
   }
 
-  return Promise.all(
-    classes.map(async ({ _count, ...klass }) => {
-      const bulletin = await computeClassBulletin(schoolId, klass.id, termId);
-      return { ...klass, effectif: _count.students, average: bulletin.classAverage };
-    }),
+  // Un seul lot pour toutes les classes : en boucle, cet écran de liste
+  // paierait cinq requêtes par classe.
+  const bulletins = await computeClassBulletins(
+    schoolId,
+    classes.map((klass) => klass.id),
+    termId,
   );
+  const moyenneParClasse = new Map(bulletins.map((b) => [b.classId, b.classAverage]));
+
+  return classes.map(({ _count, ...klass }) => ({
+    ...klass,
+    effectif: _count.students,
+    average: moyenneParClasse.get(klass.id) ?? null,
+  }));
 }
 
 export async function getClass(schoolId: number, id: number) {

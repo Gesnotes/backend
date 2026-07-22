@@ -16,6 +16,17 @@ export async function getDashboard(schoolId: number, termId?: number) {
   const depuis = new Date();
   depuis.setDate(depuis.getDate() - JOURS_ACTIVITE);
 
+  /**
+   * La période est validée AVANT les agrégats : filtrer `notesTotal` sur une
+   * période d'une autre école afficherait « 0 note saisie » à un établissement
+   * qui en compte des milliers, sans qu'aucune erreur ne remonte.
+   */
+  const term =
+    termId === undefined
+      ? null
+      : await prisma.term.findFirst({ where: { id: termId, schoolId } });
+  const periodeValide = term ? term.id : undefined;
+
   const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes] =
     await Promise.all([
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
@@ -24,7 +35,9 @@ export async function getDashboard(schoolId: number, termId?: number) {
       prisma.subject.count({ where: { schoolId, archivedAt: null } }),
       prisma.user.count({ where: { schoolId, role: 'parent', archivedAt: null } }),
       prisma.grade.count({ where: { schoolId, createdAt: { gte: depuis } } }),
-      prisma.grade.count({ where: { schoolId, ...(termId ? { termId } : {}) } }),
+      prisma.grade.count({
+        where: { schoolId, ...(periodeValide ? { termId: periodeValide } : {}) },
+      }),
     ]);
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
@@ -46,10 +59,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
     extremes: { meilleureClasse: null, plusFaibleClasse: null },
   };
 
-  if (termId === undefined) return vide;
-
-  const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
-  if (!term) return vide;
+  if (termId === undefined || !term) return vide;
 
   const classList = await prisma.class.findMany({
     where: { schoolId, archivedAt: null },

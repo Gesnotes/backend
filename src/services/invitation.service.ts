@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
 import { env } from '../lib/env';
+import { hashToken } from '../lib/tokens';
 import { mailer } from '../lib/mailer';
 
 type InvitedRole = 'teacher' | 'parent';
@@ -32,7 +33,7 @@ export async function sendInvitation(userId: number, email: string, role: Invite
   await prisma.passwordResetToken.create({
     data: {
       userId,
-      tokenHash: crypto.createHash('sha256').update(rawToken).digest('hex'),
+      tokenHash: hashToken(rawToken),
       expiresAt: new Date(Date.now() + env.INVITATION_TTL_HOURS * 60 * 60_000),
     },
   });

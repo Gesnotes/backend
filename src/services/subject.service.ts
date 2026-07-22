@@ -2,6 +2,7 @@ import { Prisma } from '../generated/prisma/client';
 
 import prisma from '../lib/prisma';
 import { conflict, notFound } from '../errors/AppError';
+import { identityFields } from './userFields';
 
 /**
  * Toutes les fonctions prennent `schoolId` en premier argument et le placent
@@ -18,7 +19,10 @@ export async function listSubjects(schoolId: number, includeArchived = false) {
       assignments: {
         where: { teacher: { archivedAt: null } },
         include: {
-          teacher: { select: { id: true, firstName: true, lastName: true, email: true } },
+          // Identité seule : cette liste sert à savoir qui enseigne quoi, pas
+          // à diffuser l'annuaire des adresses de l'équipe. L'administration
+          // dispose de /teachers pour cela.
+          teacher: { select: identityFields },
           class: { select: { id: true, name: true } },
         },
       },
@@ -40,7 +44,6 @@ export async function listSubjects(schoolId: number, includeArchived = false) {
       id: a.teacher.id,
       firstName: a.teacher.firstName,
       lastName: a.teacher.lastName,
-      email: a.teacher.email,
       classId: a.classId,
       className: a.class.name,
     })),
