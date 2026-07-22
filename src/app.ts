@@ -5,6 +5,8 @@ import pinoHttp from 'pino-http';
 
 import prisma from './lib/prisma';
 import { logger } from './lib/logger';
+import { authLimiter } from './middlewares/rateLimit';
+import { authRoutes } from './routes/auth.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
@@ -36,6 +38,8 @@ export function createApp() {
 
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);
+
+  app.use('/auth', authLimiter, authRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   app.get('/me', requireAuth, (req, res) => {
