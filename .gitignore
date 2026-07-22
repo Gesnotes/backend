@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+
+# Client Prisma généré (recréé par `npm run prisma:generate`)
+src/generated/

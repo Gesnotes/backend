@@ -1,0 +1,170 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  admin
+  teacher
+  parent
+
+  @@map("role")
+}
+
+// Établissements
+model School {
+  id        Int       @id @default(autoincrement())
+  name      String    @db.VarChar(150)
+  subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  users    User[]
+  terms    Term[]
+  classes  Class[]
+  subjects Subject[]
+  students Student[]
+
+  @@map("schools")
+}
+
+// Utilisateurs (admin, prof, parent — un seul point d'auth)
+model User {
+  id           Int       @id @default(autoincrement())
+  schoolId     Int?      @map("school_id")
+  email        String    @unique @db.VarChar(150)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         Role
+  firstName    String?   @map("first_name") @db.VarChar(100)
+  lastName     String?   @map("last_name") @db.VarChar(100)
+  createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  school      School?             @relation(fields: [schoolId], references: [id])
+  children    StudentParent[]
+  assignments TeacherAssignment[]
+  grades      Grade[]
+  devices     Device[]
+
+  @@map("users")
+}
+
+// Année scolaire / période (trimestre, semestre)
+model Term {
+  id        Int       @id @default(autoincrement())
+  schoolId  Int?      @map("school_id")
+  label     String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
+  startDate DateTime? @map("start_date") @db.Date
+  endDate   DateTime? @map("end_date") @db.Date
+
+  school School? @relation(fields: [schoolId], references: [id])
+  grades Grade[]
+
+  @@map("terms")
+}
+
+// Classes
+model Class {
+  id       Int    @id @default(autoincrement())
+  schoolId Int?   @map("school_id")
+  name     String @db.VarChar(50) // "6e A"
+
+  school      School?             @relation(fields: [schoolId], references: [id])
+  students    Student[]
+  assignments TeacherAssignment[]
+
+  @@map("classes")
+}
+
+// Matières
+model Subject {
+  id          Int      @id @default(autoincrement())
+  schoolId    Int?     @map("school_id")
+  name        String   @db.VarChar(100)
+  coefficient Decimal? @default(1) @db.Decimal(4, 2)
+
+  school      School?             @relation(fields: [schoolId], references: [id])
+  assignments TeacherAssignment[]
+  grades      Grade[]
+
+  @@map("subjects")
+}
+
+// Élèves
+model Student {
+  id        Int       @id @default(autoincrement())
+  schoolId  Int?      @map("school_id")
+  classId   Int?      @map("class_id")
+  firstName String    @map("first_name") @db.VarChar(100)
+  lastName  String    @map("last_name") @db.VarChar(100)
+  birthDate DateTime? @map("birth_date") @db.Date
+
+  school  School?         @relation(fields: [schoolId], references: [id])
+  class   Class?          @relation(fields: [classId], references: [id])
+  parents StudentParent[]
+  grades  Grade[]
+
+  @@map("students")
+}
+
+// Lien élève ↔ parent (un enfant peut avoir plusieurs parents/tuteurs)
+model StudentParent {
+  studentId    Int @map("student_id")
+  parentUserId Int @map("parent_user_id")
+
+  student Student @relation(fields: [studentId], references: [id])
+  parent  User    @relation(fields: [parentUserId], references: [id])
+
+  @@id([studentId, parentUserId])
+  @@map("student_parents")
+}
+
+// Affectation prof ↔ classe ↔ matière
+model TeacherAssignment {
+  id            Int  @id @default(autoincrement())
+  teacherUserId Int? @map("teacher_user_id")
+  classId       Int? @map("class_id")
+  subjectId     Int? @map("subject_id")
+
+  teacher User?    @relation(fields: [teacherUserId], references: [id])
+  class   Class?   @relation(fields: [classId], references: [id])
+  subject Subject? @relation(fields: [subjectId], references: [id])
+
+  @@map("teacher_assignments")
+}
+
+// Appareils des utilisateurs (tokens push FCM) — un parent peut en avoir plusieurs
+model Device {
+  id        Int       @id @default(autoincrement())
+  userId    Int?      @map("user_id")
+  fcmToken  String    @unique @map("fcm_token") @db.VarChar(255)
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("devices")
+}
+
+// Notes
+model Grade {
+  id            Int       @id @default(autoincrement())
+  studentId     Int?      @map("student_id")
+  subjectId     Int?      @map("subject_id")
+  teacherUserId Int?      @map("teacher_user_id")
+  termId        Int?      @map("term_id")
+  value         Decimal   @db.Decimal(5, 2)
+  maxValue      Decimal?  @default(20) @map("max_value") @db.Decimal(5, 2)
+  gradeType     String?   @map("grade_type") @db.VarChar(30) // "devoir", "composition"
+  coefficient   Decimal?  @default(1) @db.Decimal(4, 2)
+  comment       String?   @db.Text // commentaire du prof, visible par le parent
+  createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  student Student? @relation(fields: [studentId], references: [id])
+  subject Subject? @relation(fields: [subjectId], references: [id])
+  teacher User?    @relation(fields: [teacherUserId], references: [id])
+  term    Term?    @relation(fields: [termId], references: [id])
+
+  @@map("grades")
+}
