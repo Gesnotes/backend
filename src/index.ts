@@ -1,31 +1,35 @@
-require('dotenv').config();
+import 'dotenv/config';
 
-const express = require('express');
-const prisma = require('./src/prisma');
+import express from 'express';
+
+import prisma from './lib/prisma';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT ?? 3000);
 
 // Middleware pour lire le JSON dans les requêtes
 app.use(express.json());
 
 // Route de base
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.send('Bienvenue sur mon serveur Express !');
 });
 
 // Vérifie que la connexion à la base fonctionne
-app.get('/health', async (req, res) => {
+app.get('/health', async (_req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ status: 'ok', database: 'connected' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error instanceof Error ? error.message : 'erreur inconnue',
+    });
   }
 });
 
 // Exemple : liste des établissements
-app.get('/schools', async (req, res) => {
+app.get('/schools', async (_req, res) => {
   const schools = await prisma.school.findMany();
   res.json(schools);
 });

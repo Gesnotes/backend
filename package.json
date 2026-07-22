@@ -2,10 +2,12 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "Backend de Gesnotes, plateforme numérique de suivi des notes scolaires \r connectant enseignants, parents et administration.",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
@@ -30,6 +32,10 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
-    "prisma": "^7.9.0"
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.1",
+    "prisma": "^7.9.0",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
   }
 }
