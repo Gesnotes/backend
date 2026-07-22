@@ -11,6 +11,7 @@ import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { requireRole } from './middlewares/requireRole';
 import { schoolContext } from './middlewares/schoolContext';
+import { subjectRoutes } from './routes/subject.routes';
 
 export function createApp() {
   const app = express();
@@ -46,6 +47,7 @@ export function createApp() {
   // session (/refresh, /logout) ne doivent pas consommer le budget
   // anti-bruteforce du login.
   app.use('/auth', authRoutes);
+  app.use('/subjects', subjectRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   app.get('/me', requireAuth, (req, res) => {
