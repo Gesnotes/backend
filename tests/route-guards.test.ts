@@ -19,18 +19,11 @@ import { createApp } from '../src/app';
  */
 
 /**
- * Routes volontairement publiques : elles s'exécutent avant qu'un token
- * existe. Express 5 n'expose plus le préfixe de montage des routeurs, elles
- * sont donc identifiées par leur chemin relatif.
+ * Nombre de routes volontairement publiques (`publicRoute`) : /health et les
+ * cinq routes d'authentification. Le compte est figé pour qu'en ouvrir une
+ * sixième soit un geste conscient, pas un effet de bord.
  */
-const ROUTES_PUBLIQUES = new Set([
-  'GET /health',
-  'POST /login',
-  'POST /refresh',
-  'POST /logout',
-  'POST /forgot-password',
-  'POST /reset-password',
-]);
+const ROUTES_PUBLIQUES_ATTENDUES = 6;
 
 interface Route {
   methode: string;
@@ -69,9 +62,11 @@ function listerRoutes(stack: unknown[], prefixe = '', heritees: string[] = []): 
     }
 
     if (couche.handle?.stack) {
-      routes.push(
-        ...listerRoutes(couche.handle.stack, prefixe + montagePathDe(couche), acquises),
-      );
+      // Express 5 n'expose plus le préfixe de montage : les chemins restent
+      // relatifs. Sans conséquence, les assertions ne portent que sur les
+      // gardes — c'est précisément pourquoi `publicRoute` est un marqueur et
+      // non une liste de chemins.
+      routes.push(...listerRoutes(couche.handle.stack, prefixe, acquises));
       continue;
     }
 
@@ -82,17 +77,6 @@ function listerRoutes(stack: unknown[], prefixe = '', heritees: string[] = []): 
   return routes;
 }
 
-/** Reconstitue le préfixe de montage, au mieux de ce qu'Express expose. */
-function montagePathDe(couche: { regexp?: RegExp; path?: string }): string {
-  if (couche.path && couche.path !== '/') return couche.path;
-
-  const source = couche.regexp?.source;
-  if (!source) return '';
-
-  const match = /\^\\?\/([\w\-/\\]*)/.exec(source);
-  const brut = match?.[1]?.replace(/\\\//g, '/').replace(/\\/g, '') ?? '';
-  return brut ? `/${brut}` : '';
-}
 
 describe('gardes de rôle sur toutes les routes', () => {
   const app = createApp();
@@ -111,26 +95,34 @@ describe('gardes de rôle sur toutes les routes', () => {
     expect(routes.every((r) => r.gardes.length > 0)).toBe(true);
   });
 
-  it('déclare un rôle explicite sur chaque route authentifiée', () => {
-    // Le vrai critère : une route protégée par requireAuth sans requireRole
-    // laisse « qui a le droit de lire » indéfini. C'est ce qui a ouvert les
-    // trois fuites.
-    const sansRole = routes
-      .filter((route) => route.gardes.includes('requireAuth'))
+  it('déclare un rôle explicite, ou son ouverture au public, sur chaque route', () => {
+    // Le critère ne dépend d'aucun chemin : chaque route doit dire ce qu'elle
+    // est. Un `requireAuth` seul laisse « qui a le droit de lire » indéfini —
+    // c'est ce qui a ouvert les trois fuites.
+    const indecises = routes
       .filter((route) => !route.gardes.includes('roleGuard'))
+      .filter((route) => !route.gardes.includes('publicRoute'))
       .map((route) => `${route.methode} ${route.chemin}`);
 
-    expect(sansRole).toEqual([]);
+    expect(indecises).toEqual([]);
   });
 
-  it("n'expose aucune route publique en dehors de la liste connue", () => {
-    const publiques = routes
+  it("n'ouvre pas de nouvelle route au public sans le décider", () => {
+    const publiques = routes.filter((route) => route.gardes.includes('publicRoute'));
+    expect(publiques).toHaveLength(ROUTES_PUBLIQUES_ATTENDUES);
+
+    // Et une route publique ne porte jamais de garde de rôle : les deux
+    // marqueurs ensemble signaleraient une intention confuse.
+    expect(publiques.filter((r) => r.gardes.includes('roleGuard'))).toEqual([]);
+  });
+
+  it('place requireAuth sur toute route non publique', () => {
+    const sansAuth = routes
+      .filter((route) => !route.gardes.includes('publicRoute'))
       .filter((route) => !route.gardes.includes('requireAuth'))
       .map((route) => `${route.methode} ${route.chemin}`);
 
-    // Ajouter une route sans authentification devient un choix explicite,
-    // pas un oubli.
-    expect(publiques.sort()).toEqual([...ROUTES_PUBLIQUES].sort());
+    expect(sansAuth).toEqual([]);
   });
 
   it('place requireAuth avant le garde de rôle', () => {

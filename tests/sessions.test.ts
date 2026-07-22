@@ -91,12 +91,12 @@ describe('révocation des access tokens longue durée', () => {
 
   it('applique un changement de rôle sans attendre l\'expiration du token', async () => {
     const { body } = await login();
-    expect((await request(app).get('/admin/ping').set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${body.accessToken}`)).status).toBe(403);
+    expect((await request(app).get('/teachers').set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${body.accessToken}`)).status).toBe(403);
 
     await prisma.user.updateMany({ where: { email: 'p@a.test' }, data: { role: 'admin' } });
 
     const promoted = await request(app)
-      .get('/admin/ping')
+      .get('/teachers')
       .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${body.accessToken}`);
     expect(promoted.status).toBe(200);

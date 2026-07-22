@@ -135,7 +135,7 @@ describe('périmètre de lecture', () => {
     });
     const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
+      data: { schoolId: schoolA.id, teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
     });
 
     const sien = await newStudent('Ana', 'Alpha');
@@ -157,7 +157,7 @@ describe('périmètre de lecture', () => {
     });
     const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
+      data: { schoolId: schoolA.id, teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
     });
 
     const created = await newStudent();

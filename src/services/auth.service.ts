@@ -34,11 +34,15 @@ export async function login(
   identifier: string,
   password: string,
 ): Promise<LoginResult> {
+  // Email ou téléphone, décidé sur la forme de l'identifiant plutôt qu'en
+  // interrogeant les deux colonnes : passer une adresse à `normalizePhone`
+  // en retirait les points et comparait une adresse mutilée à une colonne
+  // téléphone, ce qui ne peut jamais être pertinent.
+  const parEmail = identifier.includes('@');
   const user = await prisma.user.findFirst({
-    where: {
-      schoolId,
-      OR: [{ email: normalizeEmail(identifier) }, { phone: normalizePhone(identifier) }],
-    },
+    where: parEmail
+      ? { schoolId, email: normalizeEmail(identifier) }
+      : { schoolId, phone: normalizePhone(identifier) },
   });
 
   // Hachage à vide quand le compte n'existe pas : sans cela, le temps de

@@ -53,10 +53,10 @@ beforeEach(async () => {
   compoId = compo.id;
 
   await prisma.teacherAssignment.create({
-    data: { teacherUserId: prof.id, classId: classe.id, subjectId: maths.id },
+    data: { schoolId: school.id, teacherUserId: prof.id, classId: classe.id, subjectId: maths.id },
   });
   await prisma.teacherAssignment.create({
-    data: { teacherUserId: autreProf.id, classId: autreClasse.id, subjectId: maths.id },
+    data: { schoolId: school.id, teacherUserId: autreProf.id, classId: autreClasse.id, subjectId: maths.id },
   });
 
   ana = await prisma.student.create({

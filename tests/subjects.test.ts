@@ -218,7 +218,7 @@ describe('coefficients par classe (plan §2.4)', () => {
 
     const teacher = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: teacher.id, classId: classA.id, subjectId: body.id },
+      data: { schoolId: schoolA.id, teacherUserId: teacher.id, classId: classA.id, subjectId: body.id },
     });
 
     const list = await api(adminToken).get('/subjects');
@@ -234,7 +234,7 @@ describe('coefficients par classe (plan §2.4)', () => {
     const { body } = await createSubject();
     const teacher = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     await prisma.teacherAssignment.create({
-      data: { teacherUserId: teacher.id, classId: classA.id, subjectId: body.id },
+      data: { schoolId: schoolA.id, teacherUserId: teacher.id, classId: classA.id, subjectId: body.id },
     });
 
     const list = await api(adminToken).get('/subjects');

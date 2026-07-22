@@ -20,6 +20,7 @@ import {
   parentMeRoutes,
 } from './routes/parent.routes';
 import { parentSearchRoutes, studentRoutes } from './routes/student.routes';
+import { publicRoute } from './middlewares/publicRoute';
 import { registerNotificationHandlers } from './services/notification.service';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
@@ -42,7 +43,7 @@ export function createApp() {
 
   // Sondes de santé : avant le contexte école, elles doivent répondre même si
   // aucune école n'est résolue.
-  app.get('/health', async (_req, res) => {
+  app.get('/health', publicRoute, async (_req, res) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
       res.json({ status: 'ok', database: 'connected' });
@@ -79,10 +80,6 @@ export function createApp() {
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   app.get('/me', requireAuth, requireRole(...ALL_ROLES), (req, res) => {
     res.json(req.auth);
-  });
-
-  app.get('/admin/ping', requireAuth, requireRole('admin'), (_req, res) => {
-    res.json({ ok: true });
   });
 
   app.use(notFoundHandler);
