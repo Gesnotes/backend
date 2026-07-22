@@ -10,6 +10,7 @@ import { validate } from '../middlewares/validate';
 export const subjectRoutes = Router();
 
 // Les matières sont administrées par l'admin ; les enseignants les consultent.
+// Un parent n'y a pas accès : la liste porte les affectations de l'équipe.
 subjectRoutes.use(requireAuth);
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
@@ -46,7 +47,7 @@ const deleteQuery = z.object({
     .transform((value) => value === 'true'),
 });
 
-subjectRoutes.get('/', validate({ query: listQuery }), async (req, res) => {
+subjectRoutes.get('/', requireRole('admin', 'teacher'), validate({ query: listQuery }), async (req, res) => {
   const { include_archived } = req.query as unknown as z.infer<typeof listQuery>;
   res.json(await subjectService.listSubjects(schoolIdOf(req), include_archived));
 });

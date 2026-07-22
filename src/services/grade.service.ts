@@ -54,35 +54,57 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
     orderBy: { id: 'asc' },
   });
 
-  return Promise.all(
-    assignments.map(async (assignment) => {
-      const effectif = await prisma.student.count({
-        where: { classId: assignment.classId, archivedAt: null },
-      });
+  const classIds = [...new Set(assignments.map((a) => a.classId))];
+  const subjectIds = [...new Set(assignments.map((a) => a.subjectId))];
 
-      // Élèves ayant au moins une note dans ce contexte : c'est la progression
-      // utile au prof, pas le nombre brut de notes saisies.
-      const notes = await prisma.grade.groupBy({
-        by: ['studentId'],
-        where: {
-          subjectId: assignment.subjectId,
-          student: { classId: assignment.classId, archivedAt: null },
-          ...(termId ? { termId } : {}),
-        },
-      });
-
-      return {
-        assignmentId: assignment.id,
-        classId: assignment.classId,
-        className: assignment.class.name,
-        level: assignment.class.level,
-        subjectId: assignment.subjectId,
-        subjectName: assignment.subject.name,
-        effectif,
-        evalues: notes.length,
-      };
+  // Deux requêtes, quel que soit le nombre d'affectations. En boucle, un
+  // professeur enseignant dans douze classes paierait vingt-quatre
+  // allers-retours à chaque ouverture de son écran d'accueil.
+  const [effectifs, notes] = await Promise.all([
+    prisma.student.groupBy({
+      by: ['classId'],
+      where: { classId: { in: classIds }, archivedAt: null },
+      _count: { _all: true },
     }),
-  );
+    prisma.grade.groupBy({
+      by: ['subjectId', 'studentId'],
+      where: {
+        subjectId: { in: subjectIds },
+        student: { classId: { in: classIds }, archivedAt: null },
+        ...(termId ? { termId } : {}),
+      },
+      _min: { schoolId: true },
+    }),
+  ]);
+
+  const effectifParClasse = new Map(effectifs.map((e) => [e.classId, e._count._all]));
+
+  // Un élève évalué compte une fois par matière, quel que soit son nombre de
+  // notes : c'est la progression utile au professeur.
+  const elevesParClasse = await prisma.student.findMany({
+    where: { classId: { in: classIds }, archivedAt: null },
+    select: { id: true, classId: true },
+  });
+  const classeDeLEleve = new Map(elevesParClasse.map((e) => [e.id, e.classId]));
+
+  const evalues = new Map<string, number>();
+  for (const ligne of notes) {
+    const classId = classeDeLEleve.get(ligne.studentId);
+    if (classId === undefined) continue;
+    const cle = `${classId}:${ligne.subjectId}`;
+    evalues.set(cle, (evalues.get(cle) ?? 0) + 1);
+  }
+
+  return assignments.map((assignment) => ({
+    assignmentId: assignment.id,
+    classId: assignment.classId,
+    className: assignment.class.name,
+    level: assignment.class.level,
+    subjectId: assignment.subjectId,
+    subjectName: assignment.subject.name,
+    effectif: effectifParClasse.get(assignment.classId) ?? 0,
+    evalues: evalues.get(`${assignment.classId}:${assignment.subjectId}`) ?? 0,
+  }));
 }
 
 /** Table de saisie : tous les élèves de la classe et leurs notes du contexte. */

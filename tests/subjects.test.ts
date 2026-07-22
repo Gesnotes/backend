@@ -82,6 +82,17 @@ describe('CRUD /subjects', () => {
     expect((await api(teacherToken).get('/subjects')).status).toBe(200);
   });
 
+  it("REFUSE la liste à un parent — elle porte l'annuaire de l'équipe", async () => {
+    const parent = await createUser({ schoolId: schoolA.id, email: 'p@a.test', role: 'parent' });
+    const parentToken = signAccessToken({
+      userId: parent.id,
+      schoolId: schoolA.id,
+      role: 'parent',
+    });
+
+    expect((await api(parentToken).get('/subjects')).status).toBe(403);
+  });
+
   it('refuse une requête sans token', async () => {
     expect((await request(app).get('/subjects').set('X-School-Subdomain', 'ecole-a')).status).toBe(401);
   });
@@ -214,7 +225,9 @@ describe('coefficients par classe (plan §2.4)', () => {
     expect(list.body[0].coefficientsParClasse).toHaveLength(1);
     expect(list.body[0].coefficientsParClasse[0].coefficient).toBe('4');
     expect(list.body[0].enseignants).toHaveLength(1);
-    expect(list.body[0].enseignants[0].email).toBe('prof@a.test');
+    // L'email a ete retire : cette liste dit qui enseigne quoi, elle ne
+    // diffuse pas l'annuaire de l'equipe.
+    expect(list.body[0].enseignants[0]).not.toHaveProperty('email');
   });
 
   it('ne renvoie jamais de hash de mot de passe', async () => {

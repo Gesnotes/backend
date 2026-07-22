@@ -6,6 +6,7 @@ import { env } from '../lib/env';
 import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
+import { hashToken } from '../lib/tokens';
 import { unauthorized } from '../errors/AppError';
 
 /**
@@ -250,14 +251,4 @@ async function issueRefreshToken(userId: number): Promise<string> {
   });
 
   return rawToken;
-}
-
-/**
- * Les tokens ne sont jamais stockés en clair : une fuite de la base ne doit
- * pas permettre de se connecter. SHA-256 suffit ici (le token est déjà un
- * secret aléatoire de 384 bits, il n'a pas besoin d'être ralenti comme un
- * mot de passe choisi par un humain).
- */
-function hashToken(rawToken: string): string {
-  return crypto.createHash('sha256').update(rawToken).digest('hex');
 }

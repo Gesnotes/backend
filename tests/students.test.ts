@@ -49,7 +49,7 @@ describe('CRUD /students', () => {
     expect(created.status).toBe(201);
     expect(created.body.classe.name).toBe('6e A');
 
-    expect((await api(adminToken).get('/students')).body).toHaveLength(1);
+    expect((await api(adminToken).get('/students')).body.students).toHaveLength(1);
 
     const updated = await api(adminToken).patch(`/students/${created.body.id}`).send({ lastName: 'Beta' });
     expect(updated.body.lastName).toBe('Beta');
@@ -74,7 +74,7 @@ describe('CRUD /students', () => {
       data: { schoolId: schoolA.id, classId: autre.id, firstName: 'Ben', lastName: 'Beta' },
     });
 
-    expect((await api(adminToken).get(`/students?class_id=${klass.id}`)).body).toHaveLength(1);
+    expect((await api(adminToken).get(`/students?class_id=${klass.id}`)).body.students).toHaveLength(1);
   });
 
   it("refuse une classe d'une autre école", async () => {
@@ -109,6 +109,81 @@ describe('CRUD /students', () => {
   });
 });
 
+describe('périmètre de lecture', () => {
+  it('REFUSE à un parent la liste des élèves et des coordonnées des familles', async () => {
+    const parent = await createUser({ schoolId: schoolA.id, email: 'p@a.test', role: 'parent' });
+    const parentToken = signAccessToken({
+      userId: parent.id,
+      schoolId: schoolA.id,
+      role: 'parent',
+    });
+
+    // Sans ce garde, n'importe quel parent récupérait l'annuaire complet des
+    // familles de l'établissement : email et téléphone de chaque parent.
+    expect((await api(parentToken).get('/students')).status).toBe(403);
+
+    const created = await newStudent();
+    expect((await api(parentToken).get(`/students/${created.body.id}`)).status).toBe(403);
+  });
+
+  it("borne l'enseignant aux classes où il enseigne", async () => {
+    const autre = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '5e A', level: '5e' },
+    });
+    const subject = await prisma.subject.create({
+      data: { schoolId: schoolA.id, name: 'Maths' },
+    });
+    const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+    await prisma.teacherAssignment.create({
+      data: { teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
+    });
+
+    const sien = await newStudent('Ana', 'Alpha');
+    const horsPerimetre = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: autre.id, firstName: 'Ben', lastName: 'Beta' },
+    });
+
+    const liste = await api(teacherToken).get('/students');
+    expect(liste.status).toBe(200);
+    expect(liste.body.students.map((s: { id: number }) => s.id)).toEqual([sien.body.id]);
+
+    // Un élève d'une classe qu'il n'enseigne pas est introuvable, pas interdit.
+    expect((await api(teacherToken).get(`/students/${horsPerimetre.id}`)).status).toBe(404);
+  });
+
+  it("masque les coordonnées des parents à l'enseignant", async () => {
+    const subject = await prisma.subject.create({
+      data: { schoolId: schoolA.id, name: 'Maths' },
+    });
+    const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+    await prisma.teacherAssignment.create({
+      data: { teacherUserId: prof.id, classId: klass.id, subjectId: subject.id },
+    });
+
+    const created = await newStudent();
+    const parent = await createUser({
+      schoolId: schoolA.id,
+      email: 'contact@a.test',
+      phone: '97000000',
+      role: 'parent',
+    });
+    await api(adminToken).post(`/students/${created.body.id}/parents`).send({ parentUserId: parent.id });
+
+    const vueProf = await api(teacherToken).get('/students');
+    expect(JSON.stringify(vueProf.body)).not.toContain('contact@a.test');
+    expect(JSON.stringify(vueProf.body)).not.toContain('97000000');
+
+    // L'administration, elle, en a besoin pour joindre les familles.
+    const vueAdmin = await api(adminToken).get('/students');
+    expect(JSON.stringify(vueAdmin.body)).toContain('contact@a.test');
+  });
+
+  it('pagine la liste', async () => {
+    const liste = await api(adminToken).get('/students');
+    expect(liste.body).toMatchObject({ total: 0, page: 1, pageSize: 100 });
+  });
+});
+
 describe('archivage et suppression définitive', () => {
   it('archive par défaut et conserve les notes', async () => {
     const created = await newStudent();
@@ -129,12 +204,12 @@ describe('archivage et suppression définitive', () => {
     });
 
     expect((await api(adminToken).delete(`/students/${created.body.id}`)).status).toBe(204);
-    expect((await api(adminToken).get('/students')).body).toHaveLength(0);
-    expect((await api(adminToken).get('/students?include_archived=true')).body).toHaveLength(1);
+    expect((await api(adminToken).get('/students')).body.students).toHaveLength(0);
+    expect((await api(adminToken).get('/students?include_archived=true')).body.students).toHaveLength(1);
     expect(await prisma.grade.count()).toBe(1);
 
     expect((await api(adminToken).post(`/students/${created.body.id}/restore`)).status).toBe(200);
-    expect((await api(adminToken).get('/students')).body).toHaveLength(1);
+    expect((await api(adminToken).get('/students')).body.students).toHaveLength(1);
   });
 
   it('exige le nom exact pour une suppression définitive', async () => {

@@ -2,49 +2,110 @@ import argon2 from 'argon2';
 import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
+import type { AuthPayload } from '../types/express';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { contactFields, identityFields } from './userFields';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { sendInvitation } from './invitation.service';
 
-/** Jamais `passwordHash` dans une réponse. */
-const parentFields = {
-  id: true,
-  email: true,
-  phone: true,
-  firstName: true,
-  lastName: true,
-} as const;
+export const STUDENTS_PAGE_SIZE = 100;
 
-export async function listStudents(
-  schoolId: number,
-  filters: { classId?: number; includeArchived?: boolean },
-) {
-  const students = await prisma.student.findMany({
-    where: {
-      schoolId,
-      ...(filters.classId ? { classId: filters.classId } : {}),
-      ...(filters.includeArchived ? {} : { archivedAt: null }),
-    },
-    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-    include: {
-      class: { select: { id: true, name: true, level: true } },
-      parents: { include: { parent: { select: parentFields } } },
-    },
+/**
+ * Restreint la lecture au périmètre de l'appelant.
+ *
+ * Un enseignant ne consulte que les élèves des classes où il enseigne : le
+ * reste du code le borne partout ailleurs à ses affectations, il n'y a aucune
+ * raison que l'annuaire des élèves fasse exception.
+ */
+async function scopeFor(auth: AuthPayload, classId?: number) {
+  if (auth.role === 'admin') {
+    return classId ? { classId } : {};
+  }
+
+  const assignments = await prisma.teacherAssignment.findMany({
+    where: { teacherUserId: auth.userId },
+    select: { classId: true },
   });
+  const classIds = [...new Set(assignments.map((a) => a.classId))];
 
-  return students.map(({ parents, class: klass, ...student }) => ({
-    ...student,
-    classe: klass,
-    parents: parents.map((p) => p.parent),
-  }));
+  // Une classe demandée hors périmètre ne renvoie rien plutôt qu'une erreur :
+  // l'enseignant n'a pas à découvrir quelles classes existent.
+  if (classId !== undefined) {
+    return { classId: classIds.includes(classId) ? classId : -1 };
+  }
+  return { classId: { in: classIds } };
 }
 
-export async function getStudent(schoolId: number, id: number) {
+/**
+ * Les coordonnées des familles sont réservées à l'administration. Un
+ * enseignant voit le nom des parents, pas leur email ni leur téléphone.
+ */
+const parentSelectFor = (auth: AuthPayload) =>
+  auth.role === 'admin' ? contactFields : identityFields;
+
+export async function listStudents(
+  auth: AuthPayload,
+  filters: { classId?: number; includeArchived?: boolean; page?: number },
+) {
+  const page = Math.max(1, filters.page ?? 1);
+
+  const where = {
+    schoolId: auth.schoolId,
+    ...(await scopeFor(auth, filters.classId)),
+    ...(filters.includeArchived ? {} : { archivedAt: null }),
+  };
+
+  const [total, students] = await Promise.all([
+    prisma.student.count({ where }),
+    prisma.student.findMany({
+      where,
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      // Sans pagination, un établissement de 900 élèves construit plusieurs
+      // mégaoctets de JSON à chaque ouverture de l'écran.
+      skip: (page - 1) * STUDENTS_PAGE_SIZE,
+      take: STUDENTS_PAGE_SIZE,
+      include: {
+        class: { select: { id: true, name: true, level: true } },
+        parents: { include: { parent: { select: parentSelectFor(auth) } } },
+      },
+    }),
+  ]);
+
+  return {
+    total,
+    page,
+    pageSize: STUDENTS_PAGE_SIZE,
+    students: students.map(({ parents, class: klass, ...student }) => ({
+      ...student,
+      classe: klass,
+      parents: parents.map((p) => p.parent),
+    })),
+  };
+}
+
+export async function getStudent(auth: AuthPayload, id: number) {
+  return loadStudent(auth.schoolId, id, parentSelectFor(auth), await scopeFor(auth));
+}
+
+/**
+ * Lecture non restreinte, pour les opérations d'écriture réservées à
+ * l'administration : la route porte déjà `requireRole('admin')`.
+ */
+function getStudentForAdmin(schoolId: number, id: number) {
+  return loadStudent(schoolId, id, contactFields, {});
+}
+
+async function loadStudent(
+  schoolId: number,
+  id: number,
+  parentSelect: typeof contactFields | typeof identityFields,
+  scope: Record<string, unknown>,
+) {
   const student = await prisma.student.findFirst({
-    where: { id, schoolId },
+    where: { id, schoolId, ...scope },
     include: {
       class: { select: { id: true, name: true, level: true } },
-      parents: { include: { parent: { select: parentFields } } },
+      parents: { include: { parent: { select: parentSelect } } },
     },
   });
   if (!student) throw notFound('Élève introuvable');
@@ -69,7 +130,7 @@ export async function createStudent(
     },
   });
 
-  return getStudent(schoolId, created.id);
+  return getStudentForAdmin(schoolId, created.id);
 }
 
 export async function updateStudent(
@@ -77,7 +138,7 @@ export async function updateStudent(
   id: number,
   data: { firstName?: string; lastName?: string; classId?: number; birthDate?: string | null },
 ) {
-  await getStudent(schoolId, id);
+  await getStudentForAdmin(schoolId, id);
   if (data.classId !== undefined) await assertClassInSchool(schoolId, data.classId);
 
   await prisma.student.update({
@@ -92,7 +153,7 @@ export async function updateStudent(
     },
   });
 
-  return getStudent(schoolId, id);
+  return getStudentForAdmin(schoolId, id);
 }
 
 /**
@@ -100,14 +161,14 @@ export async function updateStudent(
  * ses notes et son historique restent consultables.
  */
 export async function archiveStudent(schoolId: number, id: number) {
-  await getStudent(schoolId, id);
+  await getStudentForAdmin(schoolId, id);
   await prisma.student.update({ where: { id }, data: { archivedAt: new Date() } });
 }
 
 export async function restoreStudent(schoolId: number, id: number) {
-  await getStudent(schoolId, id);
+  await getStudentForAdmin(schoolId, id);
   await prisma.student.update({ where: { id }, data: { archivedAt: null } });
-  return getStudent(schoolId, id);
+  return getStudentForAdmin(schoolId, id);
 }
 
 /**
@@ -123,7 +184,7 @@ export async function deleteStudentPermanently(
   id: number,
   expectedName: string,
 ) {
-  const student = await getStudent(schoolId, id);
+  const student = await getStudentForAdmin(schoolId, id);
 
   const actual = `${student.firstName} ${student.lastName}`.trim().toLowerCase();
   if (expectedName.trim().toLowerCase() !== actual) {
@@ -160,7 +221,7 @@ export async function searchParents(schoolId: number, query: string) {
     },
     orderBy: [{ lastName: 'asc' }, { email: 'asc' }],
     take: 20,
-    select: parentFields,
+    select: contactFields,
   });
 }
 
@@ -178,7 +239,7 @@ export async function attachParent(
     | { parentUserId: number }
     | { email: string; firstName?: string; lastName?: string; phone?: string },
 ) {
-  await getStudent(schoolId, studentId);
+  await getStudentForAdmin(schoolId, studentId);
 
   const parent =
     'parentUserId' in input
@@ -192,22 +253,22 @@ export async function attachParent(
 
   await prisma.studentParent.create({ data: { studentId, parentUserId: parent.id } });
 
-  return getStudent(schoolId, studentId);
+  return getStudentForAdmin(schoolId, studentId);
 }
 
 export async function detachParent(schoolId: number, studentId: number, parentUserId: number) {
-  await getStudent(schoolId, studentId);
+  await getStudentForAdmin(schoolId, studentId);
 
   const { count } = await prisma.studentParent.deleteMany({ where: { studentId, parentUserId } });
   if (count === 0) throw notFound("Ce parent n'est pas associé à cet élève");
 
-  return getStudent(schoolId, studentId);
+  return getStudentForAdmin(schoolId, studentId);
 }
 
 async function findExistingParent(schoolId: number, parentUserId: number) {
   const parent = await prisma.user.findFirst({
     where: { id: parentUserId, schoolId, role: 'parent', archivedAt: null },
-    select: parentFields,
+    select: contactFields,
   });
   if (!parent) throw notFound('Parent introuvable dans cette école');
   return parent;
@@ -222,9 +283,19 @@ async function createParentAccount(
 
   const existing = await prisma.user.findFirst({ where: { schoolId, email } });
   if (existing) {
+    // Cas courant : un enseignant dont l'enfant est scolarisé sur place.
+    // Conseiller « associez le compte existant » sans donner son identifiant
+    // laisserait l'administration bloquée sur une action irréalisable.
+    if (existing.role !== 'parent') {
+      throw conflict(
+        `Cet email est déjà utilisé par un compte ${existing.role} de l'établissement. Utilisez une autre adresse pour le compte parent.`,
+        { compteExistant: { id: existing.id, role: existing.role } },
+      );
+    }
+
     throw conflict(
-      'Un compte utilise déjà cet email dans cette école. Associez le compte existant.',
-      { parentUserId: existing.role === 'parent' ? existing.id : undefined },
+      'Un compte parent utilise déjà cet email dans cette école. Associez-le plutôt que d\'en créer un second.',
+      { compteExistant: { id: existing.id, role: existing.role }, parentUserId: existing.id },
     );
   }
 
@@ -238,7 +309,7 @@ async function createParentAccount(
       lastName: input.lastName ?? null,
       passwordHash: await argon2.hash(crypto.randomBytes(32).toString('hex')),
     },
-    select: parentFields,
+    select: contactFields,
   });
 
   await sendInvitation(parent.id, parent.email, 'parent');

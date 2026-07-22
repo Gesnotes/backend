@@ -12,7 +12,7 @@ import { dashboardRoutes } from './routes/dashboard.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
-import { requireRole } from './middlewares/requireRole';
+import { ALL_ROLES, requireRole } from './middlewares/requireRole';
 import { schoolContext } from './middlewares/schoolContext';
 import {
   childrenRoutes,
@@ -77,7 +77,7 @@ export function createApp() {
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
-  app.get('/me', requireAuth, (req, res) => {
+  app.get('/me', requireAuth, requireRole(...ALL_ROLES), (req, res) => {
     res.json(req.auth);
   });
 
