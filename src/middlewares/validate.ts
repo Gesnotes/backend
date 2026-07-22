@@ -34,8 +34,17 @@ export function validate(schemas: Schemas) {
         );
       }
 
-      // req.query et req.params sont en lecture seule sur Express 5
-      Object.defineProperty(req, key, { value: result.data, writable: true });
+      // req.query et req.params sont en lecture seule sur Express 5.
+      // `configurable` est indispensable : sans lui, empiler deux `validate`
+      // sur la même requête (routeur + route) lèverait « Cannot redefine
+      // property ». `enumerable` garde la propriété visible des logs et de
+      // tout code qui itère sur la requête.
+      Object.defineProperty(req, key, {
+        value: result.data,
+        writable: true,
+        configurable: true,
+        enumerable: true,
+      });
     }
 
     return next();

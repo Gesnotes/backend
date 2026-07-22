@@ -175,10 +175,10 @@ CREATE TABLE "grades" (
 CREATE UNIQUE INDEX "schools_subdomain_key" ON "schools"("subdomain");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+CREATE INDEX "users_school_id_archived_at_idx" ON "users"("school_id", "archived_at");
 
 -- CreateIndex
-CREATE INDEX "users_school_id_archived_at_idx" ON "users"("school_id", "archived_at");
+CREATE UNIQUE INDEX "users_school_id_email_key" ON "users"("school_id", "email");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_school_id_phone_key" ON "users"("school_id", "phone");
@@ -209,6 +209,9 @@ CREATE INDEX "students_class_id_archived_at_idx" ON "students"("class_id", "arch
 
 -- CreateIndex
 CREATE INDEX "students_school_id_archived_at_idx" ON "students"("school_id", "archived_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "students_id_school_id_key" ON "students"("id", "school_id");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "teacher_assignments_teacher_user_id_class_id_subject_id_key" ON "teacher_assignments"("teacher_user_id", "class_id", "subject_id");
@@ -277,10 +280,7 @@ ALTER TABLE "teacher_assignments" ADD CONSTRAINT "teacher_assignments_subject_id
 ALTER TABLE "devices" ADD CONSTRAINT "devices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "grades" ADD CONSTRAINT "grades_school_id_fkey" FOREIGN KEY ("school_id") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "grades" ADD CONSTRAINT "grades_student_id_fkey" FOREIGN KEY ("student_id") REFERENCES "students"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "grades" ADD CONSTRAINT "grades_student_id_school_id_fkey" FOREIGN KEY ("student_id", "school_id") REFERENCES "students"("id", "school_id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "grades" ADD CONSTRAINT "grades_subject_id_fkey" FOREIGN KEY ("subject_id") REFERENCES "subjects"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

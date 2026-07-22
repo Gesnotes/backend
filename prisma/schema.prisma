@@ -29,7 +29,6 @@ model School {
   classes    Class[]
   subjects   Subject[]
   students   Student[]
-  grades     Grade[]
   gradeTypes GradeType[]
 
   @@map("schools")
@@ -39,7 +38,7 @@ model School {
 model User {
   id           Int       @id @default(autoincrement())
   schoolId     Int       @map("school_id")
-  email        String    @unique @db.VarChar(150)
+  email        String    @db.VarChar(150)
   phone        String?   @db.VarChar(30)
   passwordHash String    @map("password_hash") @db.VarChar(255)
   role         Role
@@ -56,7 +55,10 @@ model User {
   refreshTokens  RefreshToken[]
   resetTokens    PasswordResetToken[]
 
-  // Unicité du téléphone par école, pas globalement
+  // Unicité par école, pas globalement : la même personne peut être parent
+  // dans deux établissements clients distincts, et une collision d'email
+  // entre écoles ne doit pas fuiter d'un tenant à l'autre.
+  @@unique([schoolId, email])
   @@unique([schoolId, phone])
   @@index([schoolId, archivedAt])
   @@map("users")
@@ -186,6 +188,9 @@ model Student {
   parents StudentParent[]
   grades  Grade[]
 
+  // Cible de la clé étrangère composite de Grade : garantit en base qu'une
+  // note et son élève appartiennent à la même école.
+  @@unique([id, schoolId])
   @@index([classId, archivedAt])
   @@index([schoolId, archivedAt])
   @@map("students")
@@ -246,8 +251,10 @@ model Grade {
   comment       String?   @db.Text // commentaire du prof, visible par le parent
   createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  school    School    @relation(fields: [schoolId], references: [id])
-  student   Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Clé composite : impossible d'enregistrer une note dont le school_id
+  // dénormalisé diverge de celui de l'élève. Sans cela, la colonne qui porte
+  // tout le filtrage d'isolation ne serait garantie par rien.
+  student   Student   @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
   subject   Subject   @relation(fields: [subjectId], references: [id])
   gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
   term      Term      @relation(fields: [termId], references: [id])

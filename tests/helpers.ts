@@ -1,6 +1,7 @@
 import argon2 from 'argon2';
 
 import prisma from '../src/lib/prisma';
+import { normalizeEmail, normalizePhone } from '../src/lib/normalize';
 import type { Role } from '../src/generated/prisma/enums';
 
 export const TEST_PASSWORD = 'motdepasse123';
@@ -38,8 +39,8 @@ export async function createUser(options: {
   return prisma.user.create({
     data: {
       schoolId: options.schoolId,
-      email: options.email,
-      phone: options.phone ?? null,
+      email: normalizeEmail(options.email),
+      phone: options.phone ? normalizePhone(options.phone) : null,
       role: options.role,
       passwordHash: await argon2.hash(options.password ?? TEST_PASSWORD),
       archivedAt: options.archived ? new Date() : null,

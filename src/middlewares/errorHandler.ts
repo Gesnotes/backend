@@ -16,12 +16,17 @@ export function notFoundHandler(_req: Request, _res: Response, next: NextFunctio
  * Les codes Prisma connus sont traduits en statuts HTTP ; tout le reste est un
  * 500 dont le détail reste dans les logs et ne fuit jamais au client.
  */
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
   const mapped = mapError(err);
 
   if (mapped.status >= 500) {
     logger.error({ err }, 'Erreur non gérée');
   }
+
+  // La réponse a déjà commencé (export PDF en flux, double envoi) : réécrire
+  // les en-têtes lèverait ERR_HTTP_HEADERS_SENT depuis le gestionnaire
+  // d'erreurs lui-même. On délègue à Express, qui coupe la connexion.
+  if (res.headersSent) return next(err);
 
   res.status(mapped.status).json({
     error: {

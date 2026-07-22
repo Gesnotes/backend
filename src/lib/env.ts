@@ -27,6 +27,16 @@ const envSchema = z.object({
 
   APP_BASE_URL: z.string().default('http://localhost:3000'),
 
+  /**
+   * Nombre de reverse proxies devant l'application (0 = aucun).
+   *
+   * Doit rester à 0 tant que l'app est exposée directement : sinon Express
+   * calcule `req.ip` depuis X-Forwarded-For, en-tête que n'importe quel client
+   * peut forger, ce qui donne au bruteforce un compteur de rate-limit neuf à
+   * chaque requête.
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+
   // Repli de sous-domaine hors production : en local, req.hostname vaut
   // "localhost" et ne résout aucune école (cf. plan §6.5).
   DEFAULT_SCHOOL_SUBDOMAIN: z.string().optional(),

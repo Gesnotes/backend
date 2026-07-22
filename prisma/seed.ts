@@ -3,6 +3,7 @@ import 'dotenv/config';
 import argon2 from 'argon2';
 
 import prisma from '../src/lib/prisma';
+import { normalizeEmail } from '../src/lib/normalize';
 
 /**
  * Seed minimal de développement : une école, un compte admin, et les trois
@@ -22,12 +23,13 @@ async function main() {
   });
 
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234';
+  const adminEmail = normalizeEmail('admin@ecole-demo.test');
   const admin = await prisma.user.upsert({
-    where: { email: 'admin@ecole-demo.test' },
+    where: { schoolId_email: { schoolId: school.id, email: adminEmail } },
     update: {},
     create: {
       schoolId: school.id,
-      email: 'admin@ecole-demo.test',
+      email: adminEmail,
       passwordHash: await argon2.hash(adminPassword),
       role: 'admin',
       firstName: 'Admin',

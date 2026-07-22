@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import prisma from '../lib/prisma';
 import { env } from '../lib/env';
 import { mailer } from '../lib/mailer';
+import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
 import { unauthorized } from '../errors/AppError';
 
@@ -35,7 +36,7 @@ export async function login(
   const user = await prisma.user.findFirst({
     where: {
       schoolId,
-      OR: [{ email: identifier.toLowerCase() }, { phone: identifier }],
+      OR: [{ email: normalizeEmail(identifier) }, { phone: normalizePhone(identifier) }],
     },
   });
 
@@ -78,15 +79,31 @@ export async function refresh(rawToken: string): Promise<LoginResult> {
     include: { user: true },
   });
 
-  if (!stored || stored.revokedAt || stored.expiresAt < new Date()) {
+  if (!stored || stored.expiresAt < new Date()) {
     throw unauthorized('Refresh token invalide ou expiré');
   }
+
+  /**
+   * Réutilisation d'un token déjà révoqué : soit le token a fuité et un tiers
+   * le rejoue, soit le client légitime rejoue après vol. Dans les deux cas on
+   * ne peut pas distinguer la victime de l'attaquant, donc on coupe toute la
+   * famille et on force un passage par le login.
+   */
+  if (stored.revokedAt) {
+    await revokeAllRefreshTokens(stored.userId);
+    throw unauthorized('Refresh token invalide ou expiré');
+  }
+
   if (stored.user.archivedAt) throw unauthorized('Refresh token invalide ou expiré');
 
-  await prisma.refreshToken.update({
-    where: { id: stored.id },
+  // Révocation conditionnelle : deux rafraîchissements concurrents avec le
+  // même token ne doivent pas produire deux chaînes valides. Seul celui qui
+  // gagne la course voit count === 1.
+  const { count } = await prisma.refreshToken.updateMany({
+    where: { id: stored.id, revokedAt: null },
     data: { revokedAt: new Date() },
   });
+  if (count !== 1) throw unauthorized('Refresh token invalide ou expiré');
 
   const accessToken = signAccessToken({
     userId: stored.user.id,
@@ -136,7 +153,7 @@ export async function revokeAllRefreshTokens(userId: number): Promise<void> {
  */
 export async function requestPasswordReset(schoolId: number, email: string): Promise<void> {
   const user = await prisma.user.findFirst({
-    where: { schoolId, email: email.toLowerCase(), archivedAt: null },
+    where: { schoolId, email: normalizeEmail(email), archivedAt: null },
   });
   if (!user) return;
 

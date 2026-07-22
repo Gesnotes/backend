@@ -4,8 +4,8 @@ import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 
 import prisma from './lib/prisma';
+import { env } from './lib/env';
 import { logger } from './lib/logger';
-import { authLimiter } from './middlewares/rateLimit';
 import { authRoutes } from './routes/auth.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
@@ -15,7 +15,10 @@ import { schoolContext } from './middlewares/schoolContext';
 export function createApp() {
   const app = express();
 
-  app.set('trust proxy', 1); // sous-domaines et IP réelles derrière un reverse proxy
+  // 0 par défaut : ne faire confiance à X-Forwarded-For que si un reverse
+  // proxy est réellement devant (TRUST_PROXY_HOPS), sinon le rate-limit se
+  // contourne avec un en-tête forgé.
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   app.use(helmet());
   app.use(cors());
@@ -29,17 +32,20 @@ export function createApp() {
       await prisma.$queryRaw`SELECT 1`;
       res.json({ status: 'ok', database: 'connected' });
     } catch (error) {
-      res.status(500).json({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'erreur inconnue',
-      });
+      // Route publique : le détail (hôte, port, utilisateur de la base) reste
+      // dans les logs et ne part jamais au client.
+      logger.error({ err: error }, 'Sonde /health : base injoignable');
+      res.status(500).json({ status: 'error', database: 'unreachable' });
     }
   });
 
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);
 
-  app.use('/auth', authLimiter, authRoutes);
+  // Le rate-limit est posé route par route dans authRoutes : les routes de
+  // session (/refresh, /logout) ne doivent pas consommer le budget
+  // anti-bruteforce du login.
+  app.use('/auth', authRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   app.get('/me', requireAuth, (req, res) => {

@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { Client } from 'pg';
 
 /**
@@ -33,9 +33,11 @@ export default async function setup() {
   }
   await admin.end();
 
-  execFileSync('npx', ['prisma', 'migrate', 'deploy'], {
+  // Commande unique plutôt que `execFileSync(..., { shell: true })` : Node
+  // refuse de lancer un .cmd sans shell sur Windows (EINVAL), et passer des
+  // arguments séparés avec shell:true les concatène sans échappement (DEP0190).
+  execSync('npx prisma migrate deploy', {
     stdio: 'inherit',
-    shell: true,
     env: { ...process.env, DATABASE_URL: url },
   });
 }
