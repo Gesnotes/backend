@@ -8,6 +8,7 @@ import { env } from './lib/env';
 import { logger } from './lib/logger';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
+import { dashboardRoutes } from './routes/dashboard.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
@@ -65,6 +66,7 @@ export function createApp() {
   app.use('/students', studentRoutes);
   app.use('/parents/me', parentMeRoutes);
   app.use('/parents', parentSearchRoutes);
+  app.use('/admin/dashboard', dashboardRoutes);
   app.use('/children', childrenRoutes);
   // Lecture avant écriture : GET /grades/:id est ouvert au parent, alors que
   // le reste de /grades est réservé aux enseignants.
