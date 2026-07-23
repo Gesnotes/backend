@@ -2,7 +2,8 @@ import argon2 from 'argon2';
 import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
-import { env, webAppUrl } from '../lib/env';
+import { env, isProduction, webAppUrl } from '../lib/env';
+import { logger } from '../lib/logger';
 import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
@@ -49,6 +50,7 @@ export async function login(
   // réponse trahit l'existence d'un compte (attaque temporelle).
   if (!user) {
     await argon2.hash('mot-de-passe-factice-pour-egaliser-le-temps');
+    await warnIfWrongSchool(schoolId, identifier, parEmail);
     throw unauthorized(LOGIN_FAILED);
   }
 
@@ -75,6 +77,40 @@ export async function login(
       lastName: user.lastName,
     },
   };
+}
+
+/**
+ * Trace, **en développement uniquement**, le cas « bons identifiants, mauvaise
+ * école ».
+ *
+ * C'est la confusion la plus coûteuse du travail en local : le compte existe,
+ * le mot de passe est bon, et l'API répond « Identifiants invalides » parce
+ * que le sous-domaine désigne un autre établissement. Rien dans la réponse ne
+ * peut le dire — l'y écrire permettrait d'énumérer les comptes d'une instance.
+ * Le message part donc dans les logs du serveur, que seul le développeur voit.
+ */
+async function warnIfWrongSchool(schoolId: number, identifier: string, parEmail: boolean) {
+  if (isProduction) return;
+
+  const elsewhere = await prisma.user.findFirst({
+    where: parEmail
+      ? { email: normalizeEmail(identifier), schoolId: { not: schoolId } }
+      : { phone: normalizePhone(identifier), schoolId: { not: schoolId } },
+    select: { school: { select: { subdomain: true } } },
+  });
+
+  if (!elsewhere) return;
+
+  const current = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: { subdomain: true },
+  });
+
+  logger.warn(
+    { identifier, ecoleInterrogee: current?.subdomain, ecoleDuCompte: elsewhere.school.subdomain },
+    `Ce compte existe dans l'école « ${elsewhere.school.subdomain} », pas dans « ${current?.subdomain} ». ` +
+      'Alignez DEFAULT_SCHOOL_SUBDOMAIN (backend) et VITE_SCHOOL_SUBDOMAIN (frontend).',
+  );
 }
 
 /** Rotation : l'ancien refresh token est révoqué, un nouveau est émis. */
