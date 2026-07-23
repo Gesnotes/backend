@@ -30,7 +30,19 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   MAIL_FROM: z.string().default('onboarding@resend.dev'),
 
+  /** Racine publique de l'API elle-même. */
   APP_BASE_URL: z.string().default('http://localhost:3000'),
+
+  /**
+   * Racine de l'application web, celle que l'utilisateur ouvre dans son
+   * navigateur.
+   *
+   * Les liens de réinitialisation et d'invitation doivent y pointer, pas sur
+   * l'API : `GET /reset-password?token=…` n'existe pas côté serveur et
+   * répondait 404 à chaque destinataire. Reprend `APP_BASE_URL` si absente,
+   * pour ne pas casser les déploiements existants.
+   */
+  WEB_APP_URL: z.string().optional(),
 
   /**
    * Notifications push. PUSH=console n'envoie rien et trace le message.
@@ -72,3 +84,9 @@ if (!parsed.success) {
 export const env = parsed.data;
 
 export const isProduction = env.NODE_ENV === 'production';
+
+/**
+ * Racine de l'application web pour les liens envoyés par email.
+ * Repli sur `APP_BASE_URL` tant que `WEB_APP_URL` n'est pas renseignée.
+ */
+export const webAppUrl = (env.WEB_APP_URL ?? env.APP_BASE_URL).replace(/\/+$/, '');

@@ -2,7 +2,7 @@ import argon2 from 'argon2';
 import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
-import { env } from '../lib/env';
+import { env, webAppUrl } from '../lib/env';
 import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
@@ -202,7 +202,7 @@ export async function requestPasswordReset(schoolId: number, email: string): Pro
     },
   });
 
-  const link = `${env.APP_BASE_URL}/reset-password?token=${rawToken}`;
+  const link = `${webAppUrl}/reset-password?token=${rawToken}`;
   await mailer.send(
     user.email,
     'Réinitialisation de votre mot de passe Gesnotes',

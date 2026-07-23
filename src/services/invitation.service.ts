@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
-import { env } from '../lib/env';
+import { env, webAppUrl } from '../lib/env';
 import { hashToken } from '../lib/tokens';
 import { mailer } from '../lib/mailer';
 
@@ -39,7 +39,7 @@ export async function sendInvitation(userId: number, email: string, role: Invite
   });
 
   const wording = WORDING[role];
-  const link = `${env.APP_BASE_URL}/reset-password?token=${rawToken}`;
+  const link = `${webAppUrl}/reset-password?token=${rawToken}`;
 
   await mailer.send(
     email,
