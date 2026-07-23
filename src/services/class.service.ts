@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { conflict, forbidden, notFound } from '../errors/AppError';
+import { labelKey } from '../lib/normalize';
 import { computeClassBulletin, computeClassBulletins } from './grading/grading.service';
 
 /**
@@ -112,10 +113,38 @@ export async function getClassDetail(auth: AuthPayload, id: number, termId: numb
  * d'une classe existante : c'est le rôle du niveau comme gabarit (plan §2.4),
  * créer une 6e B en copiant la 6e A plutôt que de tout ressaisir.
  */
+/**
+ * Refuse un nom déjà porté par une autre classe de l'école.
+ *
+ * Comparaison insensible à la casse, aux accents et aux espaces : « 6e A » et
+ * « 6E  A » désignent la même classe. Les classes archivées comptent, pour ne
+ * pas recréer le doublon d'une classe simplement mise de côté.
+ */
+async function assertClassNameAvailable(schoolId: number, name: string, exceptId?: number) {
+  const key = labelKey(name);
+  const siblings = await prisma.class.findMany({
+    where: { schoolId, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { id: true, name: true, archivedAt: true },
+  });
+
+  const clash = siblings.find((klass) => labelKey(klass.name) === key);
+  if (clash) {
+    throw conflict(
+      clash.archivedAt
+        ? `Une classe archivée porte déjà ce nom (« ${clash.name} »). Restaurez-la plutôt.`
+        : `La classe « ${clash.name} » existe déjà.`,
+      { classId: clash.id, archived: clash.archivedAt !== null },
+    );
+  }
+}
+
 export async function createClass(
   schoolId: number,
   data: { name: string; level: string; copyCoefficientsFromClassId?: number },
 ) {
+  data = { ...data, name: data.name.trim() };
+  await assertClassNameAvailable(schoolId, data.name);
+
   const source = data.copyCoefficientsFromClassId
     ? await prisma.class.findFirst({
         where: { id: data.copyCoefficientsFromClassId, schoolId },
@@ -152,7 +181,9 @@ export async function updateClass(
   data: { name?: string; level?: string },
 ) {
   await getClass(schoolId, id);
-  return prisma.class.update({ where: { id }, data });
+  const name = data.name?.trim();
+  if (name !== undefined) await assertClassNameAvailable(schoolId, name, id);
+  return prisma.class.update({ where: { id }, data: { ...data, ...(name ? { name } : {}) } });
 }
 
 /**

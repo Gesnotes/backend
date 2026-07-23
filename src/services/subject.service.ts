@@ -2,6 +2,7 @@ import { Prisma } from '../generated/prisma/client';
 
 import prisma from '../lib/prisma';
 import { conflict, notFound } from '../errors/AppError';
+import { labelKey } from '../lib/normalize';
 import { identityFields } from './userFields';
 
 /**
@@ -56,12 +57,43 @@ export async function getSubject(schoolId: number, id: number) {
   return subject;
 }
 
-export function createSubject(
+/**
+ * Refuse un nom déjà porté par une autre matière de l'école.
+ *
+ * La comparaison ignore casse et accents : « Mathématiques » et
+ * « Mathematiques » ne doivent pas coexister. Les matières archivées comptent
+ * dans le contrôle — sinon on recréerait un doublon d'une matière simplement
+ * mise de côté, et la restaurer produirait le doublon qu'on voulait éviter.
+ *
+ * `exceptId` exclut la matière en cours de modification.
+ */
+async function assertNameAvailable(schoolId: number, name: string, exceptId?: number) {
+  const key = labelKey(name);
+  const siblings = await prisma.subject.findMany({
+    where: { schoolId, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { id: true, name: true, archivedAt: true },
+  });
+
+  const clash = siblings.find((subject) => labelKey(subject.name) === key);
+  if (clash) {
+    throw conflict(
+      clash.archivedAt
+        ? `Une matière archivée porte déjà ce nom (« ${clash.name} »). Restaurez-la plutôt que d'en créer une nouvelle.`
+        : `La matière « ${clash.name} » existe déjà.`,
+      { subjectId: clash.id, archived: clash.archivedAt !== null },
+    );
+  }
+}
+
+export async function createSubject(
   schoolId: number,
   data: { name: string; coefficient?: number },
 ) {
+  const name = data.name.trim();
+  await assertNameAvailable(schoolId, name);
+
   return prisma.subject.create({
-    data: { schoolId, name: data.name, coefficient: data.coefficient ?? 1 },
+    data: { schoolId, name, coefficient: data.coefficient ?? 1 },
   });
 }
 
@@ -71,7 +103,12 @@ export async function updateSubject(
   data: { name?: string; coefficient?: number },
 ) {
   await getSubject(schoolId, id); // garantit l'appartenance à l'école
-  return prisma.subject.update({ where: { id }, data });
+  if (data.name !== undefined) await assertNameAvailable(schoolId, data.name.trim(), id);
+
+  return prisma.subject.update({
+    where: { id },
+    data: { ...data, ...(data.name !== undefined ? { name: data.name.trim() } : {}) },
+  });
 }
 
 /**

@@ -14,3 +14,24 @@ export function normalizeEmail(email: string): string {
 export function normalizePhone(phone: string): string {
   return phone.replace(/[\s.\-()]/g, '');
 }
+
+/**
+ * Clé de comparaison d'un libellé, insensible à la casse, aux accents et aux
+ * espaces superflus.
+ *
+ * Sert à détecter les quasi-doublons : « Mathématiques » et « Mathematiques »
+ * désignent la même matière, mais ce sont deux chaînes différentes. Sans cette
+ * normalisation, la garde d'unicité les laisserait coexister — c'est ainsi que
+ * deux « Maths » se retrouvaient dans la même liste.
+ *
+ * On ne stocke pas cette forme : le libellé affiché garde ses accents. Elle ne
+ * sert qu'à la comparaison.
+ */
+export function labelKey(label: string): string {
+  return label
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
