@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { env, isProduction } from '../lib/env';
 import { forbidden, notFound, unauthorized } from '../errors/AppError';
+import { logger } from '../lib/logger';
 import { verifyAccessToken } from '../lib/jwt';
 
 /**
@@ -22,7 +23,9 @@ import { verifyAccessToken } from '../lib/jwt';
 export async function schoolContext(req: Request, _res: Response, next: NextFunction) {
   try {
     const school = await resolveSchool(req);
-    if (!school) throw notFound('École introuvable pour ce sous-domaine');
+    if (!school) {
+      throw await schoolNotFound(req.headers['x-school-subdomain'] as string | undefined);
+    }
 
     req.schoolId = school.id;
 
@@ -81,9 +84,69 @@ async function resolveSchool(req: Request) {
 
   if (isProduction) return null;
 
-  const fallback =
+  const requested =
     (req.headers['x-school-subdomain'] as string | undefined) ?? env.DEFAULT_SCHOOL_SUBDOMAIN;
-  if (!fallback) return null;
 
-  return prisma.school.findUnique({ where: { subdomain: fallback } });
+  if (requested) {
+    const school = await prisma.school.findUnique({ where: { subdomain: requested } });
+    if (school) return school;
+  }
+
+  /**
+   * Dernier recours en développement : s'il n'existe qu'une seule école, c'est
+   * forcément celle-là.
+   *
+   * En local, personne ne travaille sur plusieurs établissements. Exiger un
+   * sous-domaine juste — dans le `.env` du backend **et** dans celui du
+   * frontend, qui peuvent diverger sans bruit — transformait un oubli de
+   * configuration en « Identifiants invalides » sur des identifiants pourtant
+   * corrects.
+   */
+  const schools = await prisma.school.findMany({
+    select: { id: true, name: true, subdomain: true },
+    orderBy: { id: 'asc' },
+    take: 2,
+  });
+
+  if (schools.length === 1) {
+    const only = schools[0]!;
+    if (requested) {
+      logger.warn(
+        { requested, resolved: only.subdomain },
+        'Sous-domaine inconnu : repli sur la seule école de la base (développement)',
+      );
+    }
+    return only;
+  }
+
+  return null;
+}
+
+/**
+ * Message d'erreur détaillé, réservé au développement.
+ *
+ * En production, on ne dit rien de plus que « introuvable » : la liste des
+ * sous-domaines d'une instance n'a pas à circuler. En local, c'est au
+ * contraire l'information qui débloque en dix secondes.
+ */
+async function schoolNotFound(requested: string | undefined) {
+  if (isProduction) return notFound('École introuvable pour ce sous-domaine');
+
+  const schools = await prisma.school.findMany({
+    select: { subdomain: true },
+    orderBy: { id: 'asc' },
+    take: 20,
+  });
+
+  if (schools.length === 0) {
+    return notFound(
+      "Aucune école en base. Lancez « npm run prisma:seed » (ou « prisma:seed:demo ») avant d'utiliser l'API.",
+    );
+  }
+
+  const available = schools.map((school) => school.subdomain).join(', ');
+  return notFound(
+    `École « ${requested ?? '(aucun sous-domaine)'} » introuvable. Écoles disponibles : ${available}. ` +
+      'Ajustez DEFAULT_SCHOOL_SUBDOMAIN côté backend ou VITE_SCHOOL_SUBDOMAIN côté frontend.',
+  );
 }
