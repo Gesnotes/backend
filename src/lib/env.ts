@@ -70,6 +70,24 @@ const envSchema = z.object({
   // Repli de sous-domaine hors production : en local, req.hostname vaut
   // "localhost" et ne résout aucune école (cf. plan §6.5).
   DEFAULT_SCHOOL_SUBDOMAIN: z.string().optional(),
+
+  /**
+   * Suivi des erreurs (GlitchTip, ou tout serveur compatible Sentry).
+   *
+   * Vide = désactivé, sans le moindre effet sur l'application. Le DSN d'un
+   * GlitchTip auto-hébergé ressemble à
+   * `http://<clé>@localhost:8000/1`.
+   */
+  SENTRY_DSN: z.string().optional(),
+  /** Étiquette de l'environnement dans le tableau de bord (dev, staging, prod). */
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  /**
+   * Part des requêtes tracées pour la performance, entre 0 et 1.
+   *
+   * À 0 par défaut : GlitchTip stocke chaque transaction, et tracer 100 % du
+   * trafic remplit la base pour un bénéfice nul sur un petit établissement.
+   */
+  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
 });
 
 const parsed = envSchema.safeParse(process.env);

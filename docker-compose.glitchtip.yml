@@ -1,0 +1,95 @@
+# GlitchTip — suivi des erreurs, auto-hébergé.
+#
+# Alternative libre et gratuite à Sentry, dont il parle le protocole : les SDK
+# officiels `@sentry/node` et `@sentry/react` fonctionnent tels quels, seul le
+# DSN change.
+#
+#   docker compose -f docker-compose.glitchtip.yml up -d
+#
+# Puis http://localhost:8000 → créer le compte, créer une organisation et un
+# projet, copier le DSN dans les `.env`. Marche à suivre : docs/MONITORING.md
+#
+# ⚠️ Fichier destiné au développement local. Pour la production, il faut au
+# minimum : un SECRET_KEY tiré au hasard, un mot de passe Postgres qui n'est
+# pas « postgres », HTTPS devant, et des volumes sauvegardés.
+
+services:
+  glitchtip-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: glitchtip
+      POSTGRES_DB: glitchtip
+    volumes:
+      - glitchtip-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U glitchtip']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  glitchtip-redis:
+    image: redis:7-alpine
+    volumes:
+      - glitchtip-redis:/data
+    restart: unless-stopped
+
+  glitchtip-web:
+    image: glitchtip/glitchtip:latest
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_started
+    ports:
+      - '8000:8080'
+    environment: &glitchtip-env
+      DATABASE_URL: postgres://glitchtip:glitchtip@glitchtip-postgres:5432/glitchtip
+      REDIS_URL: redis://glitchtip-redis:6379/0
+      # À remplacer par une valeur aléatoire en production :
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      SECRET_KEY: cle-de-developpement-a-remplacer-en-production
+      PORT: 8080
+      GLITCHTIP_DOMAIN: http://localhost:8000
+      # Inscription ouverte : pratique en local, à fermer dès qu'il est exposé.
+      ENABLE_USER_REGISTRATION: 'true'
+      ENABLE_ORGANIZATION_CREATION: 'true'
+      # Sans SMTP configuré, les emails partent dans les logs du conteneur.
+      EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+      DEFAULT_FROM_EMAIL: glitchtip@localhost
+      # Purge automatique : sans elle, la base grossit indéfiniment.
+      GLITCHTIP_MAX_EVENT_LIFE_DAYS: '30'
+    volumes:
+      - glitchtip-uploads:/code/uploads
+    restart: unless-stopped
+
+  # Traite les événements en file. Sans lui, l'interface reste vide : les
+  # erreurs sont reçues mais jamais ingérées.
+  glitchtip-worker:
+    image: glitchtip/glitchtip:latest
+    command: bin/run-celery-with-beat.sh
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_started
+    environment: *glitchtip-env
+    volumes:
+      - glitchtip-uploads:/code/uploads
+    restart: unless-stopped
+
+  # Migrations de schéma, jouées une fois au démarrage puis le conteneur sort.
+  glitchtip-migrate:
+    image: glitchtip/glitchtip:latest
+    command: ./manage.py migrate
+    depends_on:
+      glitchtip-postgres:
+        condition: service_healthy
+    environment: *glitchtip-env
+    restart: 'no'
+
+volumes:
+  glitchtip-pg:
+  glitchtip-redis:
+  glitchtip-uploads:

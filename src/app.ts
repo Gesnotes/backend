@@ -57,6 +57,21 @@ export function createApp() {
     }
   });
 
+  /**
+   * Déclenche une erreur volontaire, pour vérifier que la supervision reçoit
+   * bien les événements.
+   *
+   * Développement strict : absente en production — une route qui plante à la
+   * demande n'a rien à faire sur un serveur en service — et absente en test,
+   * où elle fausserait le décompte des routes publiques de
+   * `tests/route-guards.test.ts`.
+   */
+  if (env.NODE_ENV === 'development') {
+    app.get('/debug/erreur-test', publicRoute, () => {
+      throw new Error('Erreur de test Gesnotes — la supervision fonctionne');
+    });
+  }
+
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);
 
