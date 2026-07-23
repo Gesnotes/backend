@@ -51,9 +51,45 @@ async function main() {
     });
   }
 
+  /**
+   * Année scolaire et trois trimestres.
+   *
+   * Sans période, une base fraîchement seedée est inutilisable : `term_id` est
+   * exigé par le détail de classe, le bulletin et la fiche enfant, et rien ne
+   * permettait d'en découvrir une. L'année est calée sur septembre — celle en
+   * cours si l'on est après le 1er août, la précédente sinon.
+   */
+  const today = new Date();
+  const startYear = today.getMonth() >= 7 ? today.getFullYear() : today.getFullYear() - 1;
+
+  const terms = [
+    { label: `Trimestre 1`, startDate: `${startYear}-09-01`, endDate: `${startYear}-12-20` },
+    { label: `Trimestre 2`, startDate: `${startYear + 1}-01-05`, endDate: `${startYear + 1}-03-31` },
+    { label: `Trimestre 3`, startDate: `${startYear + 1}-04-01`, endDate: `${startYear + 1}-06-30` },
+  ];
+
+  for (const term of terms) {
+    // `Term` n'a pas de contrainte d'unicité exploitable par `upsert` : on
+    // recherche par libellé pour que le seed reste rejouable.
+    const existing = await prisma.term.findFirst({
+      where: { schoolId: school.id, label: term.label },
+      select: { id: true },
+    });
+
+    const data = {
+      label: term.label,
+      startDate: new Date(term.startDate),
+      endDate: new Date(term.endDate),
+    };
+
+    if (existing) await prisma.term.update({ where: { id: existing.id }, data });
+    else await prisma.term.create({ data: { schoolId: school.id, ...data } });
+  }
+
   console.log(`École   : ${school.name} (${school.subdomain})`);
   console.log(`Admin   : ${admin.email} / ${adminPassword}`);
   console.log(`Types de note : ${gradeTypes.map((t) => `${t.code}=${t.weight}`).join(', ')}`);
+  console.log(`Année   : ${startYear}-${startYear + 1} · ${terms.length} trimestres`);
 }
 
 main()

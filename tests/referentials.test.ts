@@ -196,3 +196,160 @@ describe('GET /grade-types', () => {
     expect(res.body).toEqual([]);
   });
 });
+
+describe('Écriture des périodes', () => {
+  const term = { label: 'Trimestre 1', startDate: '2025-09-01', endDate: '2025-12-20' };
+
+  const write = (token: string, subdomain = 'ecole-a') => ({
+    post: (p: string) =>
+      request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    patch: (p: string) =>
+      request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    delete: (p: string) =>
+      request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+  });
+
+  it('crée une période et la renvoie au format de lecture', async () => {
+    const res = await write(adminToken).post('/terms').send(term);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      label: 'Trimestre 1',
+      startDate: '2025-09-01',
+      endDate: '2025-12-20',
+      isCurrent: false,
+    });
+  });
+
+  /**
+   * Une seule borne rendrait `isCurrent` incalculable : la période
+   * n'apparaîtrait jamais comme en cours, sans que rien ne l'explique.
+   */
+  it('refuse une période bornée d’un seul côté', async () => {
+    const res = await write(adminToken).post('/terms').send({
+      label: 'Bancale',
+      startDate: '2025-09-01',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse une date de fin antérieure au début', async () => {
+    const res = await write(adminToken).post('/terms').send({
+      label: 'Inversée',
+      startDate: '2025-12-20',
+      endDate: '2025-09-01',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse deux périodes qui se chevauchent', async () => {
+    await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminToken).post('/terms').send({
+      label: 'Chevauche',
+      startDate: '2025-12-01',
+      endDate: '2026-02-01',
+    });
+
+    expect(res.status).toBe(409);
+  });
+
+  it('autorise deux périodes contiguës mais disjointes', async () => {
+    await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminToken).post('/terms').send({
+      label: 'Trimestre 2',
+      startDate: '2025-12-21',
+      endDate: '2026-03-31',
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('laisse une autre école utiliser les mêmes dates', async () => {
+    await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminBToken, 'ecole-b').post('/terms').send(term);
+    expect(res.status).toBe(201);
+  });
+
+  it('valide les bornes en tenant compte des dates déjà en base', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    // Seule la date de fin change : le contrôle doit voir la date de début
+    // stockée, sinon la période devient incohérente sans erreur.
+    const res = await write(adminToken)
+      .patch(`/terms/${created.body.id}`)
+      .send({ endDate: '2025-08-01' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('renomme une période sans toucher aux dates', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminToken)
+      .patch(`/terms/${created.body.id}`)
+      .send({ label: 'Premier trimestre' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ label: 'Premier trimestre', startDate: '2025-09-01' });
+  });
+
+  it('supprime une période vide', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    expect((await write(adminToken).delete(`/terms/${created.body.id}`)).status).toBe(204);
+  });
+
+  /**
+   * Il n'y a pas d'archivage sur Term : la cascade emporterait les notes de
+   * tout un trimestre, soit le travail de saisie d'une équipe entière.
+   */
+  it('refuse de supprimer une période portant des notes', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    const klass = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '6e A', level: '6e' },
+    });
+    const subject = await prisma.subject.create({
+      data: { schoolId: schoolA.id, name: 'Maths', coefficient: 2 },
+    });
+    const gradeType = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: klass.id, firstName: 'Adjovi', lastName: 'Sagbo' },
+    });
+    await prisma.grade.create({
+      data: {
+        schoolId: schoolA.id,
+        studentId: student.id,
+        subjectId: subject.id,
+        gradeTypeId: gradeType.id,
+        termId: created.body.id,
+        value: 15,
+        maxValue: 20,
+      },
+    });
+
+    const res = await write(adminToken).delete(`/terms/${created.body.id}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.details.gradeCount).toBe(1);
+  });
+
+  it('réserve l’écriture à l’administration', async () => {
+    expect((await write(teacherToken).post('/terms').send(term)).status).toBe(403);
+    expect((await write(parentToken).post('/terms').send(term)).status).toBe(403);
+  });
+
+  it('ne laisse pas modifier la période d’une autre école', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminBToken, 'ecole-b')
+      .patch(`/terms/${created.body.id}`)
+      .send({ label: 'Pirate' });
+
+    expect(res.status).toBe(404);
+  });
+});
