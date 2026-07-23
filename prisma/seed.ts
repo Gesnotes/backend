@@ -23,18 +23,38 @@ async function main() {
   });
 
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234';
-  const adminEmail = normalizeEmail('admin@ecole-demo.test');
-  const admin = await prisma.user.upsert({
-    where: { schoolId_email: { schoolId: school.id, email: adminEmail } },
-    update: {},
-    create: {
-      schoolId: school.id,
-      email: adminEmail,
-      passwordHash: await argon2.hash(adminPassword),
-      role: 'admin',
-      firstName: 'Admin',
-      lastName: 'Démo',
-    },
+  const passwordHash = await argon2.hash(adminPassword);
+
+  /**
+   * Un compte par rôle.
+   *
+   * L'admin seul ne permettait pas de parcourir l'application : les espaces
+   * enseignant et parent sont inaccessibles sans compte du rôle correspondant,
+   * et les comptes créés depuis l'interface le sont par invitation, donc sans
+   * mot de passe utilisable. Il fallait passer par la base pour les essayer.
+   */
+  const admin = await upsertUser(school.id, {
+    email: 'admin@ecole-demo.test',
+    role: 'admin',
+    firstName: 'Admin',
+    lastName: 'Démo',
+    passwordHash,
+  });
+
+  const teacher = await upsertUser(school.id, {
+    email: 'prof@ecole-demo.test',
+    role: 'teacher',
+    firstName: 'Prof',
+    lastName: 'Démo',
+    passwordHash,
+  });
+
+  const parent = await upsertUser(school.id, {
+    email: 'parent@ecole-demo.test',
+    role: 'parent',
+    firstName: 'Parent',
+    lastName: 'Démo',
+    passwordHash,
   });
 
   const gradeTypes = [
@@ -86,10 +106,115 @@ async function main() {
     else await prisma.term.create({ data: { schoolId: school.id, ...data } });
   }
 
-  console.log(`École   : ${school.name} (${school.subdomain})`);
-  console.log(`Admin   : ${admin.email} / ${adminPassword}`);
+  /**
+   * Minimum vital pour que les comptes enseignant et parent aient quelque
+   * chose à afficher : une classe, une matière, un élève, l'affectation du
+   * professeur et le rattachement de la famille.
+   *
+   * Sans cela, l'enseignant voit « aucune classe affectée » et le parent
+   * « aucun enfant associé » — techniquement corrects, mais on ne peut rien
+   * essayer. Le jeu de données complet reste `npm run prisma:seed:demo`.
+   */
+  const klass = await upsertBy(
+    () => prisma.class.findFirst({ where: { schoolId: school.id, name: '6e A' } }),
+    (id) => prisma.class.findUniqueOrThrow({ where: { id } }),
+    () => prisma.class.create({ data: { schoolId: school.id, name: '6e A', level: '6e' } }),
+  );
+
+  const subject = await upsertBy(
+    () => prisma.subject.findFirst({ where: { schoolId: school.id, name: 'Mathématiques' } }),
+    (id) => prisma.subject.findUniqueOrThrow({ where: { id } }),
+    () =>
+      prisma.subject.create({
+        data: { schoolId: school.id, name: 'Mathématiques', coefficient: 5 },
+      }),
+  );
+
+  await prisma.teacherAssignment.upsert({
+    where: {
+      teacherUserId_classId_subjectId: {
+        teacherUserId: teacher.id,
+        classId: klass.id,
+        subjectId: subject.id,
+      },
+    },
+    update: {},
+    create: {
+      schoolId: school.id,
+      teacherUserId: teacher.id,
+      classId: klass.id,
+      subjectId: subject.id,
+    },
+  });
+
+  const student = await upsertBy(
+    () =>
+      prisma.student.findFirst({
+        where: { schoolId: school.id, firstName: 'Élève', lastName: 'Démo' },
+      }),
+    (id) => prisma.student.findUniqueOrThrow({ where: { id } }),
+    () =>
+      prisma.student.create({
+        data: {
+          schoolId: school.id,
+          classId: klass.id,
+          firstName: 'Élève',
+          lastName: 'Démo',
+        },
+      }),
+  );
+
+  await prisma.studentParent.upsert({
+    where: { studentId_parentUserId: { studentId: student.id, parentUserId: parent.id } },
+    update: {},
+    create: { studentId: student.id, parentUserId: parent.id },
+  });
+
+  console.log('');
+  console.log(`École        : ${school.name} (${school.subdomain})`);
+  console.log(`Admin        : ${admin.email} / ${adminPassword}`);
+  console.log(`Enseignant   : ${teacher.email} / ${adminPassword}`);
+  console.log(`Parent       : ${parent.email} / ${adminPassword}`);
   console.log(`Types de note : ${gradeTypes.map((t) => `${t.code}=${t.weight}`).join(', ')}`);
-  console.log(`Année   : ${startYear}-${startYear + 1} · ${terms.length} trimestres`);
+  console.log(`Année        : ${startYear}-${startYear + 1} · ${terms.length} trimestres`);
+  console.log(`Rattachements : ${klass.name} · ${subject.name} · ${student.firstName} ${student.lastName}`);
+  console.log('');
+  console.log('Jeu de données complet : npm run prisma:seed:demo');
+}
+
+/** `upsert` par critère non unique : Prisma l'exige sur un index. */
+async function upsertBy<T>(
+  find: () => Promise<{ id: number } | null>,
+  load: (id: number) => Promise<T>,
+  create: () => Promise<T>,
+): Promise<T> {
+  const existing = await find();
+  return existing ? load(existing.id) : create();
+}
+
+async function upsertUser(
+  schoolId: number,
+  data: {
+    email: string;
+    role: 'admin' | 'teacher' | 'parent';
+    firstName: string;
+    lastName: string;
+    passwordHash: string;
+  },
+) {
+  const email = normalizeEmail(data.email);
+  return prisma.user.upsert({
+    where: { schoolId_email: { schoolId, email } },
+    update: {},
+    create: {
+      schoolId,
+      email,
+      role: data.role,
+      passwordHash: data.passwordHash,
+      firstName: data.firstName,
+      lastName: data.lastName,
+    },
+  });
 }
 
 main()
