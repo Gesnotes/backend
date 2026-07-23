@@ -6,6 +6,7 @@ import { createSchool, createUser, resetDatabase } from './helpers';
 import { createApp } from '../src/app';
 import { notifyParents } from '../src/services/notification.service';
 import { pushSender } from '../src/lib/push';
+import { webAppUrl } from '../src/lib/env';
 import { signAccessToken } from '../src/lib/jwt';
 
 const app = createApp();
@@ -152,6 +153,19 @@ describe('envoi des notifications', () => {
     expect(message.body).toContain('Ana');
     expect(message.body).toContain('15/20');
     expect(message.data).toMatchObject({ gradeId: String(note.id) });
+  });
+
+  /**
+   * Sans lien, le parent reçoit « Nouvelle note en Maths » et atterrit sur
+   * l'accueil, à charge pour lui de retrouver la note.
+   */
+  it('pointe la notification sur la note concernée', async () => {
+    await api(tokenParentA).post('/parents/me/devices').send({ fcmToken: TOKEN_1 });
+
+    const spy = vi.spyOn(pushSender, 'send').mockResolvedValue({ invalidTokens: [] });
+    await notifyParents(event(), 'nouvelle');
+
+    expect(spy.mock.calls[0]![1].link).toBe(`${webAppUrl}/parent/notes/${note.id}`);
   });
 
   it('distingue une note modifiée d\'une nouvelle note', async () => {
