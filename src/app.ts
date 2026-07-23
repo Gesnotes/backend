@@ -10,6 +10,8 @@ import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
+import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { termRoutes } from './routes/term.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
 import { ALL_ROLES, requireRole } from './middlewares/requireRole';
@@ -62,6 +64,10 @@ export function createApp() {
   // session (/refresh, /logout) ne doivent pas consommer le budget
   // anti-bruteforce du login.
   app.use('/auth', authRoutes);
+  // Référentiels : sans eux, aucun client ne peut construire les appels qui
+  // exigent un `term_id` ou un `gradeTypeId`.
+  app.use('/terms', termRoutes);
+  app.use('/grade-types', gradeTypeRoutes);
   app.use('/classes', classRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);
