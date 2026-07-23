@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppError, notFound } from '../errors/AppError';
 import { isProduction } from '../lib/env';
 import { logger } from '../lib/logger';
+import { captureException } from '../lib/monitoring';
 
 /** Route inconnue → 404 au même format que les autres erreurs. */
 export function notFoundHandler(_req: Request, _res: Response, next: NextFunction) {
@@ -16,11 +17,27 @@ export function notFoundHandler(_req: Request, _res: Response, next: NextFunctio
  * Les codes Prisma connus sont traduits en statuts HTTP ; tout le reste est un
  * 500 dont le détail reste dans les logs et ne fuit jamais au client.
  */
-export function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
   const mapped = mapError(err);
 
   if (mapped.status >= 500) {
     logger.error({ err }, 'Erreur non gérée');
+
+    /**
+     * Seules les erreurs 5xx partent vers la supervision.
+     *
+     * Un 404, un 409 ou un 401 sont des réponses métier normales — un élève
+     * introuvable, un doublon refusé, un mot de passe erroné. Les remonter
+     * noierait les vraies anomalies sous des milliers d'événements attendus.
+     */
+    captureException(err, {
+      method: req.method,
+      // `originalUrl` sans la query string : elle peut porter des filtres,
+      // jamais de secret, mais autant rester sobre.
+      path: (req.originalUrl ?? req.url).split('?')[0],
+      role: req.auth?.role,
+      schoolId: req.auth?.schoolId,
+    });
   }
 
   // La réponse a déjà commencé (export PDF en flux, double envoi) : réécrire

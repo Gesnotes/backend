@@ -4,6 +4,7 @@ import prisma from '../lib/prisma';
 import { env, isProduction } from '../lib/env';
 import { forbidden, notFound, unauthorized } from '../errors/AppError';
 import { logger } from '../lib/logger';
+import { setUserContext } from '../lib/monitoring';
 import { verifyAccessToken } from '../lib/jwt';
 
 /**
@@ -63,6 +64,11 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
     // immédiatement au lieu d'attendre l'expiration.
     req.auth = { userId: user.id, schoolId: user.schoolId, role: user.role };
     req.schoolId = user.schoolId;
+
+    // Contexte de supervision : identifiant, rôle et école seulement — de quoi
+    // reproduire un incident sans transporter de donnée nominative.
+    setUserContext(req.auth);
+
     return next();
   } catch (error) {
     return next(error);
