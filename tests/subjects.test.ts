@@ -242,3 +242,60 @@ describe('coefficients par classe (plan §2.4)', () => {
     expect(JSON.stringify(list.body)).not.toContain('$argon2');
   });
 });
+
+describe('unicité du nom de matière', () => {
+  it('refuse un nom déjà utilisé', async () => {
+    await createSubject('Mathématiques');
+    const res = await api(adminToken).post('/subjects').send({ name: 'Mathématiques' });
+    expect(res.status).toBe(409);
+  });
+
+  /**
+   * Le cœur du problème signalé : « Mathématiques » et « Mathematiques »
+   * désignent la même matière, mais restaient deux lignes distinctes.
+   */
+  it('refuse un quasi-doublon ne différant que par les accents ou la casse', async () => {
+    await createSubject('Mathématiques');
+
+    expect((await api(adminToken).post('/subjects').send({ name: 'Mathematiques' })).status).toBe(409);
+    expect((await api(adminToken).post('/subjects').send({ name: 'MATHÉMATIQUES' })).status).toBe(409);
+    expect((await api(adminToken).post('/subjects').send({ name: '  Mathématiques  ' })).status).toBe(409);
+
+    // Une seule matière a bien été créée.
+    expect((await api(adminToken).get('/subjects')).body).toHaveLength(1);
+  });
+
+  it('laisse deux écoles utiliser le même nom', async () => {
+    await createSubject('Mathématiques');
+    const res = await api(adminBToken, 'ecole-b').post('/subjects').send({ name: 'Mathématiques' });
+    expect(res.status).toBe(201);
+  });
+
+  it('signale un doublon avec une matière archivée et invite à la restaurer', async () => {
+    const created = await createSubject('Mathématiques');
+    await api(adminToken).delete(`/subjects/${created.body.id}`); // archive
+
+    const res = await api(adminToken).post('/subjects').send({ name: 'Mathematiques' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.details.archived).toBe(true);
+  });
+
+  it('autorise une matière à conserver son propre nom lors d’une modification', async () => {
+    const created = await createSubject('Mathématiques', 3);
+    const res = await api(adminToken)
+      .patch(`/subjects/${created.body.id}`)
+      .send({ name: 'Mathématiques', coefficient: 4 });
+    expect(res.status).toBe(200);
+    expect(Number(res.body.coefficient)).toBe(4);
+  });
+
+  it('empêche une modification de percuter une autre matière', async () => {
+    await createSubject('Mathématiques');
+    const physique = await createSubject('Physique');
+
+    const res = await api(adminToken)
+      .patch(`/subjects/${physique.body.id}`)
+      .send({ name: 'mathematiques' });
+    expect(res.status).toBe(409);
+  });
+});
