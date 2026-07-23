@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as gradeBatchService from '../services/gradeBatch.service';
 import * as gradeService from '../services/grade.service';
 import { authOf } from '../lib/requestContext';
 import { requireAuth } from '../middlewares/requireAuth';
@@ -33,6 +34,29 @@ const updateBody = z
     comment: z.string().trim().max(2000).nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
+
+/**
+ * Une classe entière tient dans un lot ; la borne à 300 élèves protège
+ * seulement contre une requête aberrante.
+ */
+const batchBody = z.object({
+  classId: z.coerce.number().int().positive(),
+  subjectId: z.coerce.number().int().positive(),
+  gradeTypeId: z.coerce.number().int().positive(),
+  termId: z.coerce.number().int().positive(),
+  maxValue: z.coerce.number().positive().optional(),
+  entries: z
+    .array(
+      z.object({
+        studentId: z.coerce.number().int().positive(),
+        // `null` est signifiant : il efface la note de cet élève.
+        value: z.coerce.number().min(0).nullable(),
+        comment: z.string().trim().max(2000).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(300),
+});
 
 const tableQuery = z.object({
   class_id: z.coerce.number().int().positive(),
@@ -69,6 +93,18 @@ teacherMeRoutes.get('/grades/history', validate({ query: historyQuery }), async 
       termId: term_id,
     }),
   );
+});
+
+/**
+ * Saisie d'une évaluation entière.
+ *
+ * `PUT` et non `POST` : l'opération est idempotente et décrit l'état voulu des
+ * notes pour le quadruplet (classe, matière, type, période). Rejouer le même
+ * lot — après une coupure réseau, par exemple — ne crée aucun doublon.
+ */
+teacherMeRoutes.put('/grades', validate({ body: batchBody }), async (req, res) => {
+  const data = req.body as z.infer<typeof batchBody>;
+  res.json(await gradeBatchService.saveGradeBatch(authOf(req), data));
 });
 
 gradeRoutes.post('/', validate({ body: createBody }), async (req, res) => {
