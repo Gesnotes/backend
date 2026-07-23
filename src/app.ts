@@ -1,10 +1,10 @@
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
-import pinoHttp from 'pino-http';
 
 import prisma from './lib/prisma';
 import { env } from './lib/env';
+import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
@@ -41,7 +41,7 @@ export function createApp() {
   app.use(helmet());
   app.use(cors());
   app.use(express.json());
-  app.use(pinoHttp({ logger }));
+  app.use(httpLogger);
 
   // Sondes de santé : avant le contexte école, elles doivent répondre même si
   // aucune école n'est résolue.
