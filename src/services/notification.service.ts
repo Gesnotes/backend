@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma';
 import type { GradeEvent } from '../lib/events';
 import { logger } from '../lib/logger';
+import { webAppUrl } from '../lib/env';
 import { onEvent } from '../lib/events';
 import { pushSender } from '../lib/push';
 
@@ -58,6 +59,8 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
       studentId: String(grade.studentId),
       termId: String(grade.termId),
     },
+    // Ouvre directement la note concernée dans l'application web.
+    link: `${webAppUrl}/parent/notes/${grade.id}`,
   };
 
   const { invalidTokens } = await pushSender.send(

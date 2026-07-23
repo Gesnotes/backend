@@ -8,6 +8,15 @@ export interface PushMessage {
   title: string;
   body: string;
   data?: Record<string, string>;
+  /**
+   * Page ouverte au clic sur la notification, côté Web.
+   *
+   * Sans elle, le clic ouvre la racine de l'application : le parent reçoit
+   * « Nouvelle note en Mathématiques » et atterrit sur l'accueil, à charge
+   * pour lui de retrouver la note. C'est la seule information qui rende la
+   * notification actionnable.
+   */
+  link?: string;
 }
 
 export interface PushResult {
@@ -58,6 +67,16 @@ class FcmPushSender implements PushSender {
       tokens,
       notification: { title: message.title, body: message.body },
       data: message.data,
+      webpush: {
+        notification: {
+          icon: '/icons/gesnotes.svg',
+          badge: '/icons/gesnotes.svg',
+          // Une notification par note : deux notes différentes ne doivent pas
+          // se remplacer l'une l'autre dans le centre de notifications.
+          tag: message.data?.gradeId ? `grade-${message.data.gradeId}` : undefined,
+        },
+        ...(message.link ? { fcmOptions: { link: message.link } } : {}),
+      },
     });
 
     const invalidTokens: string[] = [];
