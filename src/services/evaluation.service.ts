@@ -54,6 +54,17 @@ function toPublicEvaluation(evaluation: EvaluationRow) {
   };
 }
 
+/**
+ * Le barème est stocké en `Decimal(5,2)` : il doit tenir sous 1000, sinon
+ * PostgreSQL renvoie un « numeric field overflow » (500 illisible) au lieu
+ * d'un refus clair. Un barème d'école ne dépasse de toute façon jamais 999.
+ */
+function assertBareme(maxValue: number) {
+  if (!Number.isFinite(maxValue) || maxValue <= 0 || maxValue > 999) {
+    throw badRequest('Le barème doit être un nombre compris entre 1 et 999');
+  }
+}
+
 /** Évaluations d'un couple classe × matière pour une période, les plus récentes d'abord. */
 export async function listEvaluations(
   auth: AuthPayload,
@@ -93,7 +104,7 @@ export async function createEvaluation(
   await assertContext(auth.schoolId, data.gradeTypeId, data.termId);
 
   const maxValue = data.maxValue ?? 20;
-  if (maxValue <= 0) throw badRequest('Le barème doit être strictement positif');
+  assertBareme(maxValue);
 
   const evaluation = await prisma.evaluation.create({
     data: {
@@ -123,9 +134,7 @@ export async function updateEvaluation(
   const nextMax = data.maxValue;
   const maxChanged = nextMax !== undefined && nextMax !== Number(evaluation.maxValue);
 
-  if (nextMax !== undefined && nextMax <= 0) {
-    throw badRequest('Le barème doit être strictement positif');
-  }
+  if (nextMax !== undefined) assertBareme(nextMax);
 
   // Changer le barème d'une évaluation déjà notée ne doit pas laisser des notes
   // au-dessus du nouveau maximum : on refuse plutôt que de tronquer en silence.
