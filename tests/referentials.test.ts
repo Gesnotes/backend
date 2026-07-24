@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
 import { createApp } from '../src/app';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { signAccessToken } from '../src/lib/jwt';
 
 const app = createApp();
@@ -320,16 +320,14 @@ describe('Écriture des périodes', () => {
     const student = await prisma.student.create({
       data: { schoolId: schoolA.id, classId: klass.id, firstName: 'Adjovi', lastName: 'Sagbo' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: student.id,
-        subjectId: subject.id,
-        gradeTypeId: gradeType.id,
-        termId: created.body.id,
-        value: 15,
-        maxValue: 20,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subject.id,
+      gradeTypeId: gradeType.id,
+      termId: created.body.id,
+      value: 15,
+      maxValue: 20,
     });
 
     const res = await write(adminToken).delete(`/terms/${created.body.id}`);

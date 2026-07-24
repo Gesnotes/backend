@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
 import { Prisma } from '../src/generated/prisma/client';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedEvaluation, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -56,15 +56,13 @@ const addStudent = (classId: number, firstName: string) =>
   });
 
 const addGrade = (studentId: number, value: number) =>
-  prisma.grade.create({
-    data: {
-      schoolId: school.id,
-      studentId,
-      subjectId: maths.id,
-      gradeTypeId: compoId,
-      termId: term.id,
-      value,
-    },
+  seedGrade({
+    schoolId: school.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: compoId,
+    termId: term.id,
+    value,
   });
 
 describe('GET /admin/dashboard', () => {
@@ -191,26 +189,36 @@ describe('GET /admin/dashboard', () => {
     // Taille visée par le plan : un collège de 30 classes. En boucle sur
     // computeClassBulletin, ce dashboard ferait 150 requêtes SQL par
     // chargement ; le chemin par lot en fait cinq.
-    const eleves: number[] = [];
+    // Une évaluation par classe (une note ne vit plus sans son évaluation) ;
+    // les élèves d'une classe partagent la sienne.
+    const gradeRows: Prisma.GradeCreateManyInput[] = [];
+    let index = 0;
     for (let c = 0; c < 30; c += 1) {
       const classe = await prisma.class.create({
         data: { schoolId: school.id, name: `Classe ${c}`, level: '6e' },
       });
-      for (let e = 0; e < 20; e += 1) {
-        const eleve = await addStudent(classe.id, `E${c}-${e}`);
-        eleves.push(eleve.id);
-      }
-    }
-    await prisma.grade.createMany({
-      data: eleves.map((studentId, index) => ({
+      const evaluation = await seedEvaluation({
         schoolId: school.id,
-        studentId,
+        classId: classe.id,
         subjectId: maths.id,
         gradeTypeId: compoId,
         termId: term.id,
-        value: new Prisma.Decimal(10 + (index % 10)),
-      })),
-    });
+      });
+      for (let e = 0; e < 20; e += 1) {
+        const eleve = await addStudent(classe.id, `E${c}-${e}`);
+        gradeRows.push({
+          schoolId: school.id,
+          studentId: eleve.id,
+          evaluationId: evaluation.id,
+          subjectId: maths.id,
+          gradeTypeId: compoId,
+          termId: term.id,
+          value: new Prisma.Decimal(10 + (index % 10)),
+        });
+        index += 1;
+      }
+    }
+    await prisma.grade.createMany({ data: gradeRows });
 
     const debut = Date.now();
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
@@ -253,16 +261,14 @@ describe('GET /admin/dashboard/recent-grades', () => {
   it("ne divulgue ni email d'enseignant ni hash", async () => {
     const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
     const ana = await addStudent(classe6.id, 'Ana');
-    await prisma.grade.create({
-      data: {
-        schoolId: school.id,
-        studentId: ana.id,
-        subjectId: maths.id,
-        gradeTypeId: compoId,
-        termId: term.id,
-        teacherUserId: prof.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: compoId,
+      termId: term.id,
+      teacherUserId: prof.id,
+      value: 15,
     });
 
     const res = await get(tokenAdmin, '/admin/dashboard/recent-grades');
@@ -286,15 +292,13 @@ describe('GET /admin/dashboard/recent-grades', () => {
     const foreignTerm = await prisma.term.create({
       data: { schoolId: autreEcole.id, label: 'T1' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: autreEcole.id,
-        studentId: foreignStudent.id,
-        subjectId: foreignSubject.id,
-        gradeTypeId: foreignType.id,
-        termId: foreignTerm.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: autreEcole.id,
+      studentId: foreignStudent.id,
+      subjectId: foreignSubject.id,
+      gradeTypeId: foreignType.id,
+      termId: foreignTerm.id,
+      value: 15,
     });
 
     const res = await get(tokenAdmin, '/admin/dashboard/recent-grades');

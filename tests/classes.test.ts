@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -55,15 +55,13 @@ const addStudent = (firstName: string, lastName: string, classId = klass.id) =>
   prisma.student.create({ data: { schoolId: schoolA.id, classId, firstName, lastName } });
 
 const addGrade = (studentId: number, value: number) =>
-  prisma.grade.create({
-    data: {
-      schoolId: schoolA.id,
-      studentId,
-      subjectId: maths.id,
-      gradeTypeId: compoId,
-      termId: term.id,
-      value,
-    },
+  seedGrade({
+    schoolId: schoolA.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: compoId,
+    termId: term.id,
+    value,
   });
 
 describe('CRUD /classes', () => {

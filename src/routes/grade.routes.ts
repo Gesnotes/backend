@@ -17,34 +17,26 @@ teacherMeRoutes.use(requireAuth, requireRole('teacher', 'admin'));
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
 const createBody = z.object({
+  evaluationId: z.coerce.number().int().positive(),
   studentId: z.coerce.number().int().positive(),
-  subjectId: z.coerce.number().int().positive(),
-  gradeTypeId: z.coerce.number().int().positive(),
-  termId: z.coerce.number().int().positive(),
   value: z.coerce.number().min(0),
-  maxValue: z.coerce.number().positive().optional(),
   comment: z.string().trim().max(2000).optional(),
 });
 
 const updateBody = z
   .object({
     value: z.coerce.number().min(0).optional(),
-    maxValue: z.coerce.number().positive().optional(),
-    gradeTypeId: z.coerce.number().int().positive().optional(),
     comment: z.string().trim().max(2000).nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
 /**
  * Une classe entière tient dans un lot ; la borne à 300 élèves protège
- * seulement contre une requête aberrante.
+ * seulement contre une requête aberrante. La matière, le type, la période et le
+ * barème viennent de l'évaluation.
  */
 const batchBody = z.object({
-  classId: z.coerce.number().int().positive(),
-  subjectId: z.coerce.number().int().positive(),
-  gradeTypeId: z.coerce.number().int().positive(),
-  termId: z.coerce.number().int().positive(),
-  maxValue: z.coerce.number().positive().optional(),
+  evaluationId: z.coerce.number().int().positive(),
   entries: z
     .array(
       z.object({
@@ -58,10 +50,8 @@ const batchBody = z.object({
     .max(300),
 });
 
-const tableQuery = z.object({
-  class_id: z.coerce.number().int().positive(),
-  subject_id: z.coerce.number().int().positive(),
-  term_id: z.coerce.number().int().positive(),
+const gridQuery = z.object({
+  evaluation_id: z.coerce.number().int().positive(),
 });
 
 const historyQuery = z.object({
@@ -79,9 +69,9 @@ teacherMeRoutes.get(
   },
 );
 
-teacherMeRoutes.get('/grades', validate({ query: tableQuery }), async (req, res) => {
-  const { class_id, subject_id, term_id } = req.query as unknown as z.infer<typeof tableQuery>;
-  res.json(await gradeService.getGradingTable(authOf(req), class_id, subject_id, term_id));
+teacherMeRoutes.get('/grades', validate({ query: gridQuery }), async (req, res) => {
+  const { evaluation_id } = req.query as unknown as z.infer<typeof gridQuery>;
+  res.json(await gradeService.getEvaluationGrid(authOf(req), evaluation_id));
 });
 
 teacherMeRoutes.get('/grades/history', validate({ query: historyQuery }), async (req, res) => {
@@ -99,8 +89,8 @@ teacherMeRoutes.get('/grades/history', validate({ query: historyQuery }), async 
  * Saisie d'une évaluation entière.
  *
  * `PUT` et non `POST` : l'opération est idempotente et décrit l'état voulu des
- * notes pour le quadruplet (classe, matière, type, période). Rejouer le même
- * lot — après une coupure réseau, par exemple — ne crée aucun doublon.
+ * notes d'une évaluation. Rejouer le même lot — après une coupure réseau, par
+ * exemple — ne crée aucun doublon.
  */
 teacherMeRoutes.put('/grades', validate({ body: batchBody }), async (req, res) => {
   const data = req.body as z.infer<typeof batchBody>;

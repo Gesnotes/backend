@@ -93,6 +93,7 @@ export async function listChildGrades(
     orderBy: { createdAt: 'desc' },
     include: {
       gradeType: { select: { id: true, code: true, label: true, weight: true } },
+      evaluation: { select: { id: true, label: true, date: true } },
       subject: { select: { id: true, name: true } },
       term: { select: { id: true, label: true } },
       teacher: { select: { id: true, firstName: true, lastName: true } },
@@ -112,6 +113,7 @@ export async function getGradeDetail(auth: AuthPayload, gradeId: number) {
     where: { id: gradeId, schoolId: auth.schoolId },
     include: {
       gradeType: { select: { id: true, code: true, label: true, weight: true } },
+      evaluation: { select: { id: true, label: true, date: true } },
       subject: { select: { id: true, name: true } },
       term: { select: { id: true, label: true } },
       teacher: { select: { id: true, firstName: true, lastName: true } },
@@ -132,6 +134,7 @@ function toParentGrade(grade: {
   comment: string | null;
   createdAt: Date | null;
   gradeType: { id: number; code: string; label: string; weight: unknown };
+  evaluation: { id: number; label: string; date: Date | null };
   subject: { id: number; name: string };
   term: { id: number; label: string };
   teacher: { id: number; firstName: string | null; lastName: string | null } | null;
@@ -148,6 +151,11 @@ function toParentGrade(grade: {
       code: grade.gradeType.code,
       label: grade.gradeType.label,
       weight: Number(grade.gradeType.weight),
+    },
+    evaluation: {
+      id: grade.evaluation.id,
+      label: grade.evaluation.label,
+      date: grade.evaluation.date,
     },
     matiere: grade.subject,
     periode: grade.term,

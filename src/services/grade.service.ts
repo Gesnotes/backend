@@ -1,7 +1,6 @@
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
-import { badRequest, forbidden, notFound } from '../errors/AppError';
-import { checkDuplicateWarning } from './grading/grading.service';
+import { badRequest, conflict, forbidden, notFound } from '../errors/AppError';
 import { emitEvent } from '../lib/events';
 
 /**
@@ -108,82 +107,114 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
   }));
 }
 
-/** Table de saisie : tous les élèves de la classe et leurs notes du contexte. */
-export async function getGradingTable(
-  auth: AuthPayload,
-  classId: number,
-  subjectId: number,
-  termId: number,
-) {
-  await assertCanGrade(auth, classId, subjectId);
+/**
+ * Grille de saisie d'une **évaluation** : tous les élèves de sa classe, chacun
+ * avec sa note pour cette évaluation (une seule possible, ou aucune).
+ *
+ * L'ambiguïté « plusieurs notes du même type » a disparu : une évaluation
+ * désigne exactement une colonne de notes.
+ */
+export async function getEvaluationGrid(auth: AuthPayload, evaluationId: number) {
+  const evaluation = await prisma.evaluation.findFirst({
+    where: { id: evaluationId, schoolId: auth.schoolId },
+    include: { gradeType: { select: { id: true, code: true, label: true, weight: true } } },
+  });
+  if (!evaluation) throw notFound('Évaluation introuvable');
 
-  const term = await prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } });
-  if (!term) throw notFound('Période introuvable');
+  await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
 
   const [students, grades] = await Promise.all([
     prisma.student.findMany({
-      where: { classId, schoolId: auth.schoolId, archivedAt: null },
+      where: { classId: evaluation.classId, schoolId: auth.schoolId, archivedAt: null },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       select: { id: true, firstName: true, lastName: true },
     }),
     prisma.grade.findMany({
-      where: { subjectId, termId, schoolId: auth.schoolId, student: { classId } },
-      include: { gradeType: { select: { id: true, code: true, label: true, weight: true } } },
-      orderBy: { createdAt: 'asc' },
+      where: { evaluationId, schoolId: auth.schoolId },
+      select: { studentId: true, value: true, comment: true },
     }),
   ]);
 
-  const byStudent = new Map<number, typeof grades>();
-  for (const grade of grades) {
-    const list = byStudent.get(grade.studentId) ?? [];
-    list.push(grade);
-    byStudent.set(grade.studentId, list);
-  }
+  const byStudent = new Map(grades.map((grade) => [grade.studentId, grade]));
 
-  return students.map((student) => ({
-    ...student,
-    notes: (byStudent.get(student.id) ?? []).map(toPublicGrade),
-  }));
+  return {
+    evaluation: {
+      id: evaluation.id,
+      classId: evaluation.classId,
+      subjectId: evaluation.subjectId,
+      termId: evaluation.termId,
+      label: evaluation.label,
+      date: evaluation.date,
+      maxValue: Number(evaluation.maxValue),
+      type: {
+        id: evaluation.gradeType.id,
+        code: evaluation.gradeType.code,
+        label: evaluation.gradeType.label,
+        weight: Number(evaluation.gradeType.weight),
+      },
+    },
+    students: students.map((student) => {
+      const note = byStudent.get(student.id);
+      return {
+        ...student,
+        note: note ? { value: Number(note.value), comment: note.comment } : null,
+      };
+    }),
+  };
 }
 
+/**
+ * Note isolée, rattachée à une évaluation existante.
+ *
+ * La matière, le type, la période et le barème sont ceux de l'évaluation :
+ * une note ne peut plus diverger de son évaluation. La contrainte d'unicité
+ * (une note par élève et par évaluation) est traduite en 409 lisible.
+ */
 export async function createGrade(
   auth: AuthPayload,
   data: {
+    evaluationId: number;
     studentId: number;
-    subjectId: number;
-    gradeTypeId: number;
-    termId: number;
     value: number;
-    maxValue?: number;
     comment?: string;
   },
 ) {
+  const evaluation = await prisma.evaluation.findFirst({
+    where: { id: data.evaluationId, schoolId: auth.schoolId },
+    include: { gradeType: { select: { id: true, code: true, label: true, weight: true } } },
+  });
+  if (!evaluation) throw notFound('Évaluation introuvable');
+
   const student = await prisma.student.findFirst({
     where: { id: data.studentId, schoolId: auth.schoolId, archivedAt: null },
   });
   if (!student) throw notFound('Élève introuvable');
+  if (student.classId !== evaluation.classId) {
+    throw badRequest("L'élève n'appartient pas à la classe de cette évaluation");
+  }
 
-  await assertCanGrade(auth, student.classId, data.subjectId);
-  await assertContext(auth.schoolId, data.gradeTypeId, data.termId);
+  await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
 
-  const maxValue = data.maxValue ?? 20;
+  const maxValue = Number(evaluation.maxValue);
   assertValueInRange(data.value, maxValue);
 
-  const warning = await checkDuplicateWarning({
-    schoolId: auth.schoolId,
-    studentId: data.studentId,
-    subjectId: data.subjectId,
-    gradeTypeId: data.gradeTypeId,
-    termId: data.termId,
+  const already = await prisma.grade.findUnique({
+    where: {
+      evaluationId_studentId: { evaluationId: evaluation.id, studentId: data.studentId },
+    },
   });
+  if (already) {
+    throw conflict('Cet élève a déjà une note pour cette évaluation', { gradeId: already.id });
+  }
 
   const grade = await prisma.grade.create({
     data: {
       schoolId: auth.schoolId,
       studentId: data.studentId,
-      subjectId: data.subjectId,
-      gradeTypeId: data.gradeTypeId,
-      termId: data.termId,
+      evaluationId: evaluation.id,
+      subjectId: evaluation.subjectId,
+      gradeTypeId: evaluation.gradeTypeId,
+      termId: evaluation.termId,
       teacherUserId: auth.userId,
       value: data.value,
       maxValue,
@@ -200,30 +231,28 @@ export async function createGrade(
     termId: grade.termId,
   });
 
-  return { note: toPublicGrade(grade), avertissementDoublon: warning };
+  return toPublicGrade(grade);
 }
 
+/**
+ * Correction d'une note : seules la valeur et le commentaire changent. La
+ * matière, le type et le barème appartiennent désormais à l'évaluation et se
+ * modifient sur elle.
+ */
 export async function updateGrade(
   auth: AuthPayload,
   id: number,
-  data: { value?: number; maxValue?: number; gradeTypeId?: number; comment?: string | null },
+  data: { value?: number; comment?: string | null },
 ) {
   const existing = await findGradeForWrite(auth, id);
 
-  const maxValue = data.maxValue ?? Number(existing.maxValue);
   const value = data.value ?? Number(existing.value);
-  assertValueInRange(value, maxValue);
-
-  if (data.gradeTypeId !== undefined) {
-    await assertContext(auth.schoolId, data.gradeTypeId, existing.termId);
-  }
+  assertValueInRange(value, Number(existing.maxValue));
 
   const grade = await prisma.grade.update({
     where: { id },
     data: {
       ...(data.value !== undefined ? { value: data.value } : {}),
-      ...(data.maxValue !== undefined ? { maxValue: data.maxValue } : {}),
-      ...(data.gradeTypeId !== undefined ? { gradeTypeId: data.gradeTypeId } : {}),
       ...(data.comment !== undefined ? { comment: data.comment } : {}),
     },
     include: { gradeType: { select: { id: true, code: true, label: true, weight: true } } },
@@ -262,6 +291,7 @@ export async function listMyGradeHistory(
     take: 200,
     include: {
       gradeType: { select: { id: true, code: true, label: true, weight: true } },
+      evaluation: { select: { id: true, label: true, date: true } },
       student: { select: { id: true, firstName: true, lastName: true, classId: true } },
       subject: { select: { id: true, name: true } },
       term: { select: { id: true, label: true } },
@@ -270,6 +300,7 @@ export async function listMyGradeHistory(
 
   return grades.map((grade) => ({
     ...toPublicGrade(grade),
+    evaluation: grade.evaluation,
     eleve: grade.student,
     matiere: grade.subject,
     periode: grade.term,
@@ -292,7 +323,7 @@ async function findGradeForWrite(auth: AuthPayload, id: number) {
   return grade;
 }
 
-async function assertContext(schoolId: number, gradeTypeId: number, termId: number) {
+export async function assertContext(schoolId: number, gradeTypeId: number, termId: number) {
   const [gradeType, term] = await Promise.all([
     prisma.gradeType.findFirst({ where: { id: gradeTypeId, schoolId } }),
     prisma.term.findFirst({ where: { id: termId, schoolId } }),
@@ -312,6 +343,7 @@ function assertValueInRange(value: number, maxValue: number) {
 function toPublicGrade(grade: {
   id: number;
   studentId: number;
+  evaluationId: number;
   subjectId: number;
   termId: number;
   teacherUserId: number | null;
@@ -324,6 +356,7 @@ function toPublicGrade(grade: {
   return {
     id: grade.id,
     studentId: grade.studentId,
+    evaluationId: grade.evaluationId,
     subjectId: grade.subjectId,
     termId: grade.termId,
     teacherUserId: grade.teacherUserId,

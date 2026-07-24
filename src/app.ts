@@ -9,6 +9,7 @@ import { logger } from './lib/logger';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
+import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { termRoutes } from './routes/term.routes';
@@ -94,8 +95,10 @@ export function createApp() {
   // le reste de /grades est réservé aux enseignants.
   app.use('/grades', gradeDetailRoutes);
   app.use('/grades', gradeRoutes);
+  app.use('/evaluations', evaluationRoutes);
   // Monté avant /teachers : /teachers/me ne doit pas être capté par /teachers/:id
   app.use('/teachers/me', teacherMeRoutes);
+  app.use('/teachers/me', evaluationMeRoutes);
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
