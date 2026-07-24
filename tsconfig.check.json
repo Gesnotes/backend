@@ -1,0 +1,13 @@
+{
+  // Vérification de types élargie : le tsconfig de build est limité à `src`
+  // (rootDir/outDir), ce qui laissait tests/, prisma/seed.ts et la config
+  // vitest sans aucun contrôle de types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts", "prisma/**/*.ts", "*.ts"],
+  "exclude": ["node_modules", "dist", "src/generated"]
+}
