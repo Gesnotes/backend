@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedEvaluation, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { notifyParents } from '../src/services/notification.service';
 import { pushSender } from '../src/lib/push';
@@ -50,16 +50,14 @@ beforeEach(async () => {
   });
   await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parentA.id } });
 
-  note = await prisma.grade.create({
-    data: {
-      schoolId: school.id,
-      studentId: ana.id,
-      subjectId: maths.id,
-      gradeTypeId: compo.id,
-      termId: term.id,
-      teacherUserId: prof.id,
-      value: 15,
-    },
+  note = await seedGrade({
+    schoolId: school.id,
+    studentId: ana.id,
+    subjectId: maths.id,
+    gradeTypeId: compo.id,
+    termId: term.id,
+    teacherUserId: prof.id,
+    value: 15,
   });
 });
 
@@ -229,11 +227,18 @@ describe('découplage de la saisie', () => {
       data: { schoolId: school.id, teacherUserId: prof.id, classId: classe.id, subjectId: maths.id },
     });
 
-    const res = await api(tokenProf).post('/grades').send({
-      studentId: ana.id,
+    const evaluation = await seedEvaluation({
+      schoolId: school.id,
+      classId: classe.id,
       subjectId: maths.id,
       gradeTypeId: type.id,
       termId: term.id,
+      teacherUserId: prof.id,
+    });
+
+    const res = await api(tokenProf).post('/grades').send({
+      evaluationId: evaluation.id,
+      studentId: ana.id,
       value: 12,
     });
 

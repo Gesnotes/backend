@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { pdfTextOf } from './pdf-text';
 import { signAccessToken } from '../src/lib/jwt';
@@ -59,25 +59,21 @@ beforeEach(async () => {
     [ana, { interro: 12, compo: 16 }],
     [ben, { interro: 10, compo: 10 }],
   ] as const) {
-    await prisma.grade.create({
-      data: {
-        schoolId: school.id,
-        studentId: student.id,
-        subjectId: maths.id,
-        gradeTypeId: interro.id,
-        termId: term.id,
-        value: values.interro,
-      },
+    await seedGrade({
+      schoolId: school.id,
+      studentId: student.id,
+      subjectId: maths.id,
+      gradeTypeId: interro.id,
+      termId: term.id,
+      value: values.interro,
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: school.id,
-        studentId: student.id,
-        subjectId: maths.id,
-        gradeTypeId: compo.id,
-        termId: term.id,
-        value: values.compo,
-      },
+    await seedGrade({
+      schoolId: school.id,
+      studentId: student.id,
+      subjectId: maths.id,
+      gradeTypeId: compo.id,
+      termId: term.id,
+      value: values.compo,
     });
   }
 });
@@ -255,15 +251,13 @@ describe('cohérence avec le calcul', () => {
     const compo = await prisma.gradeType.findFirstOrThrow({
       where: { schoolId: school.id, code: 'composition' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: school.id,
-        studentId: ana.id,
-        subjectId: francais.id,
-        gradeTypeId: compo.id,
-        termId: term.id,
-        value: 11,
-      },
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: francais.id,
+      gradeTypeId: compo.id,
+      termId: term.id,
+      value: 11,
     });
 
     const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));

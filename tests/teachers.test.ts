@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { TEST_PASSWORD, createSchool, createUser, resetDatabase } from './helpers';
+import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -189,16 +189,14 @@ describe('désactivation', () => {
     const student = await prisma.student.create({
       data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: student.id,
-        subjectId: subjectA.id,
-        gradeTypeId: gradeType.id,
-        termId: term.id,
-        teacherUserId: created.body.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subjectA.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      teacherUserId: created.body.id,
+      value: 15,
     });
 
     expect((await api(adminToken).delete(`/teachers/${created.body.id}`)).status).toBe(204);
@@ -248,16 +246,14 @@ describe('désactivation', () => {
     const student = await prisma.student.create({
       data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: student.id,
-        subjectId: subjectA.id,
-        gradeTypeId: gradeType.id,
-        termId: term.id,
-        teacherUserId: created.body.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subjectA.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      teacherUserId: created.body.id,
+      value: 15,
     });
 
     const res = await api(adminToken).delete(`/teachers/${created.body.id}?permanent=true`);

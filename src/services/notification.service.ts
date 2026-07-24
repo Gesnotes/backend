@@ -24,6 +24,7 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
     include: {
       subject: { select: { name: true } },
       gradeType: { select: { label: true } },
+      evaluation: { select: { label: true } },
       student: {
         select: {
           firstName: true,
@@ -53,7 +54,9 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
 
   const message = {
     title,
-    body: `${grade.student.firstName} : ${Number(grade.value)}/${Number(grade.maxValue)} (${grade.gradeType.label})`,
+    // L'intitulé de l'évaluation (« Interro du 12/09 ») est plus parlant pour
+    // la famille que le seul type ; on garde le type entre parenthèses.
+    body: `${grade.student.firstName} · ${grade.evaluation.label} : ${Number(grade.value)}/${Number(grade.maxValue)} (${grade.gradeType.label})`,
     data: {
       gradeId: String(grade.id),
       studentId: String(grade.studentId),

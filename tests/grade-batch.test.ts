@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
 import { createApp } from '../src/app';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedEvaluation } from './helpers';
 import { signAccessToken } from '../src/lib/jwt';
 
 const app = createApp();
@@ -18,6 +18,9 @@ let subject: { id: number };
 let devoir: { id: number };
 let composition: { id: number };
 let term: { id: number };
+let teacher: { id: number };
+let evaluation: { id: number };
+let evaluationCompo: { id: number };
 let students: { id: number }[];
 
 beforeEach(async () => {
@@ -25,7 +28,7 @@ beforeEach(async () => {
 
   schoolA = await createSchool('ecole-a');
 
-  const teacher = await createUser({ schoolId: schoolA.id, email: 'prof@a.test', role: 'teacher' });
+  teacher = await createUser({ schoolId: schoolA.id, email: 'prof@a.test', role: 'teacher' });
   const other = await createUser({ schoolId: schoolA.id, email: 'autre@a.test', role: 'teacher' });
   const parent = await createUser({ schoolId: schoolA.id, email: 'parent@a.test', role: 'parent' });
 
@@ -57,6 +60,27 @@ beforeEach(async () => {
     },
   });
 
+  // Deux évaluations : un devoir (support de la plupart des cas) et une
+  // composition (pour vérifier que deux évaluations distinctes ne se mêlent pas).
+  evaluation = await seedEvaluation({
+    schoolId: schoolA.id,
+    classId: klass.id,
+    subjectId: subject.id,
+    gradeTypeId: devoir.id,
+    termId: term.id,
+    teacherUserId: teacher.id,
+    label: 'Devoir du 12/09',
+  });
+  evaluationCompo = await seedEvaluation({
+    schoolId: schoolA.id,
+    classId: klass.id,
+    subjectId: subject.id,
+    gradeTypeId: composition.id,
+    termId: term.id,
+    teacherUserId: teacher.id,
+    label: 'Composition du trimestre',
+  });
+
   students = [];
   for (const name of ['Adjovi', 'Kossi', 'Mawuena']) {
     students.push(
@@ -75,14 +99,10 @@ afterAll(async () => {
 const api = (token: string, subdomain = 'ecole-a') =>
   request(app).put('/teachers/me/grades').set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`);
 
-const batch = (entries: { studentId: number; value: number | null; comment?: string | null }[]) => ({
-  classId: klass.id,
-  subjectId: subject.id,
-  gradeTypeId: devoir.id,
-  termId: term.id,
-  maxValue: 20,
-  entries,
-});
+const batch = (
+  entries: { studentId: number; value: number | null; comment?: string | null }[],
+  evaluationId = evaluation.id,
+) => ({ evaluationId, entries });
 
 describe('PUT /teachers/me/grades', () => {
   it('crée les notes de toute la classe en une requête', async () => {
@@ -197,45 +217,42 @@ describe('PUT /teachers/me/grades', () => {
   });
 
   /**
-   * Deux devoirs déjà saisis pour le même élève : le lot ne désigne aucune des
-   * deux notes. En choisir une écraserait silencieusement le travail d'un
-   * collègue, donc l'élève est signalé et laissé intact.
+   * Le cœur de la fonctionnalité : deux évaluations du **même type** (deux
+   * devoirs) coexistent. Chacune a sa propre grille, sans que l'une écrase
+   * l'autre — ce qui était impossible tant que l'identité d'une note était son
+   * type.
    */
-  it('laisse intact un élève ayant déjà plusieurs notes du même type', async () => {
-    for (const value of [10, 14]) {
-      await prisma.grade.create({
-        data: {
-          schoolId: schoolA.id,
-          studentId: students[0]!.id,
-          subjectId: subject.id,
-          gradeTypeId: devoir.id,
-          termId: term.id,
-          value,
-          maxValue: 20,
-        },
-      });
-    }
+  it('permet deux évaluations du même type pour le même élève', async () => {
+    const second = await seedEvaluation({
+      schoolId: schoolA.id,
+      classId: klass.id,
+      subjectId: subject.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      teacherUserId: teacher.id,
+      label: 'Devoir du 3/10',
+    });
 
+    await api(teacherToken).send(batch([{ studentId: students[0]!.id, value: 10 }]));
     const res = await api(teacherToken).send(
-      batch([{ studentId: students[0]!.id, value: 20 }]),
+      batch([{ studentId: students[0]!.id, value: 14 }], second.id),
     );
 
-    expect(res.body.skipped).toEqual([
-      { studentId: students[0]!.id, reason: 'notes_multiples' },
-    ]);
-    const values = (await prisma.grade.findMany({ where: { studentId: students[0]!.id } })).map(
-      (g) => Number(g.value),
-    );
-    expect(values.sort()).toEqual([10, 14]);
+    expect(res.body).toMatchObject({ created: 1 });
+    const values = (
+      await prisma.grade.findMany({ where: { studentId: students[0]!.id, gradeTypeId: devoir.id } })
+    )
+      .map((g) => Number(g.value))
+      .sort();
+    expect(values).toEqual([10, 14]);
   });
 
-  it('ne confond pas deux types de note', async () => {
+  it('ne confond pas deux évaluations distinctes', async () => {
     await api(teacherToken).send(batch([{ studentId: students[0]!.id, value: 12 }]));
 
-    const res = await api(teacherToken).send({
-      ...batch([{ studentId: students[0]!.id, value: 18 }]),
-      gradeTypeId: composition.id,
-    });
+    const res = await api(teacherToken).send(
+      batch([{ studentId: students[0]!.id, value: 18 }], evaluationCompo.id),
+    );
 
     expect(res.body).toMatchObject({ created: 1 });
     expect(await prisma.grade.count()).toBe(2);
@@ -267,21 +284,15 @@ describe('PUT /teachers/me/grades', () => {
     expect(res.status).toBe(403);
   });
 
-  it('refuse une période ou un type inconnus', async () => {
-    expect(
-      (await api(teacherToken).send({ ...batch([{ studentId: students[0]!.id, value: 1 }]), termId: 999999 }))
-        .status,
-    ).toBe(404);
-    expect(
-      (await api(teacherToken).send({
-        ...batch([{ studentId: students[0]!.id, value: 1 }]),
-        gradeTypeId: 999999,
-      })).status,
-    ).toBe(404);
+  it('refuse une évaluation inconnue', async () => {
+    const res = await api(teacherToken).send(
+      batch([{ studentId: students[0]!.id, value: 1 }], 999999),
+    );
+    expect(res.status).toBe(404);
   });
 
   it('valide la forme du corps', async () => {
-    expect((await api(teacherToken).send({ classId: klass.id })).status).toBe(400);
+    expect((await api(teacherToken).send({ entries: [] })).status).toBe(400);
     expect((await api(teacherToken).send({ ...batch([]), entries: [] })).status).toBe(400);
   });
 });

@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { TEST_PASSWORD, createSchool, createUser, resetDatabase } from './helpers';
+import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { resolveSubjectCoefficient } from '../src/services/subject.service';
 import { signAccessToken } from '../src/lib/jwt';
@@ -161,15 +161,13 @@ describe('archivage et suppression', () => {
     const student = await prisma.student.create({
       data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: student.id,
-        subjectId: body.id,
-        gradeTypeId: gradeType.id,
-        termId: term.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: body.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      value: 15,
     });
 
     const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true`);

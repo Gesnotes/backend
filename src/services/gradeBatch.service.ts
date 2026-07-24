@@ -13,11 +13,13 @@ import { assertCanGrade } from './grade.service';
  * milieu : l'enseignant se retrouvait avec une saisie à moitié enregistrée,
  * sans savoir laquelle.
  *
- * L'opération est donc **idempotente** et porte sur le quadruplet
- * (classe, matière, type de note, période), qui identifie une évaluation :
+ * L'opération est donc **idempotente** et porte sur une **évaluation** :
  * rejouer exactement le même lot ne crée pas de doublon, il réécrit les mêmes
  * valeurs. C'est ce qui permet au client de réémettre sans risque une saisie
- * partie hors connexion.
+ * partie hors connexion. L'évaluation portant elle-même la matière, le type,
+ * la période et le barème, plusieurs évaluations du même type coexistent sans
+ * ambiguïté — ce qui n'était pas possible quand l'identité d'une note était son
+ * type.
  */
 
 export interface BatchEntry {
@@ -28,15 +30,11 @@ export interface BatchEntry {
 }
 
 export interface BatchInput {
-  classId: number;
-  subjectId: number;
-  gradeTypeId: number;
-  termId: number;
-  maxValue?: number;
+  evaluationId: number;
   entries: BatchEntry[];
 }
 
-export type SkipReason = 'eleve_hors_classe' | 'notes_multiples';
+export type SkipReason = 'eleve_hors_classe';
 
 export interface BatchResult {
   created: number;
@@ -48,17 +46,14 @@ export interface BatchResult {
 }
 
 export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Promise<BatchResult> {
-  const maxValue = input.maxValue ?? 20;
-  if (maxValue <= 0) throw badRequest('La note maximale doit être strictement positive');
+  const evaluation = await prisma.evaluation.findFirst({
+    where: { id: input.evaluationId, schoolId: auth.schoolId },
+  });
+  if (!evaluation) throw notFound('Évaluation introuvable');
 
-  await assertCanGrade(auth, input.classId, input.subjectId);
+  await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
 
-  const [gradeType, term] = await Promise.all([
-    prisma.gradeType.findFirst({ where: { id: input.gradeTypeId, schoolId: auth.schoolId } }),
-    prisma.term.findFirst({ where: { id: input.termId, schoolId: auth.schoolId } }),
-  ]);
-  if (!gradeType) throw notFound('Type de note introuvable');
-  if (!term) throw notFound('Période introuvable');
+  const maxValue = Number(evaluation.maxValue);
 
   /**
    * Un même élève envoyé deux fois dans le lot rendrait le résultat dépendant
@@ -92,7 +87,7 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
   const students = await prisma.student.findMany({
     where: {
       id: { in: [...seen] },
-      classId: input.classId,
+      classId: evaluation.classId,
       schoolId: auth.schoolId,
       archivedAt: null,
     },
@@ -100,21 +95,13 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
   });
   const validIds = new Set(students.map((student) => student.id));
 
+  // Une note par élève et par évaluation (contrainte d'unicité) : un simple
+  // Map suffit, plus aucune ambiguïté « plusieurs notes du même type ».
   const existing = await prisma.grade.findMany({
-    where: {
-      schoolId: auth.schoolId,
-      subjectId: input.subjectId,
-      gradeTypeId: input.gradeTypeId,
-      termId: input.termId,
-      studentId: { in: [...validIds] },
-    },
+    where: { evaluationId: evaluation.id, studentId: { in: [...validIds] } },
     select: { id: true, studentId: true, value: true, maxValue: true, comment: true },
   });
-
-  const byStudent = new Map<number, typeof existing>();
-  for (const grade of existing) {
-    byStudent.set(grade.studentId, [...(byStudent.get(grade.studentId) ?? []), grade]);
-  }
+  const byStudent = new Map(existing.map((grade) => [grade.studentId, grade]));
 
   const skipped: BatchResult['skipped'] = [];
   const toCreate: BatchEntry[] = [];
@@ -128,20 +115,7 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
       continue;
     }
 
-    const current = byStudent.get(entry.studentId) ?? [];
-
-    /**
-     * Plusieurs notes du même type existent déjà pour cet élève (deux devoirs
-     * dans le trimestre) : laquelle le lot désigne-t-il ? Aucune réponse n'est
-     * évidente, et en choisir une écraserait silencieusement le travail d'un
-     * collègue. L'élève est signalé et laissé intact, à corriger à l'unité.
-     */
-    if (current.length > 1) {
-      skipped.push({ studentId: entry.studentId, reason: 'notes_multiples' });
-      continue;
-    }
-
-    const grade = current[0];
+    const grade = byStudent.get(entry.studentId);
 
     if (entry.value === null) {
       if (grade) toDelete.push(grade.id);
@@ -187,9 +161,10 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
         data: {
           schoolId: auth.schoolId,
           studentId: entry.studentId,
-          subjectId: input.subjectId,
-          gradeTypeId: input.gradeTypeId,
-          termId: input.termId,
+          evaluationId: evaluation.id,
+          subjectId: evaluation.subjectId,
+          gradeTypeId: evaluation.gradeTypeId,
+          termId: evaluation.termId,
           teacherUserId: auth.userId,
           value: entry.value as number,
           maxValue,
@@ -210,8 +185,8 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
       gradeId: grade.id,
       schoolId: auth.schoolId,
       studentId: grade.studentId,
-      subjectId: input.subjectId,
-      termId: input.termId,
+      subjectId: evaluation.subjectId,
+      termId: evaluation.termId,
     });
   }
   for (const { id, entry } of toUpdate) {
@@ -219,8 +194,8 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
       gradeId: id,
       schoolId: auth.schoolId,
       studentId: entry.studentId,
-      subjectId: input.subjectId,
-      termId: input.termId,
+      subjectId: evaluation.subjectId,
+      termId: evaluation.termId,
     });
   }
 

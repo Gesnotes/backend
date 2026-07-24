@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, resetDatabase } from './helpers';
+import { createSchool, resetDatabase, seedGrade } from './helpers';
 import {
   checkDuplicateWarning,
   computeClassBulletin,
@@ -60,16 +60,14 @@ const addGrade = (
   value: number,
   maxValue = 20,
 ) =>
-  prisma.grade.create({
-    data: {
-      schoolId: school.id,
-      studentId,
-      subjectId,
-      gradeTypeId: types[code]!,
-      termId: term.id,
-      value,
-      maxValue,
-    },
+  seedGrade({
+    schoolId: school.id,
+    studentId,
+    subjectId,
+    gradeTypeId: types[code]!,
+    termId: term.id,
+    value,
+    maxValue,
   });
 
 describe('computeStudentResult', () => {
@@ -119,15 +117,13 @@ describe('computeStudentResult', () => {
       data: { schoolId: school.id, label: 'Trimestre 2' },
     });
     await addGrade(ana.id, maths.id, 'composition', 15);
-    await prisma.grade.create({
-      data: {
-        schoolId: school.id,
-        studentId: ana.id,
-        subjectId: maths.id,
-        gradeTypeId: types.composition!,
-        termId: other.id,
-        value: 5,
-      },
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: types.composition!,
+      termId: other.id,
+      value: 5,
     });
 
     const result = await computeStudentResult(school.id, ana.id, term.id);

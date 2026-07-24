@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { TEST_PASSWORD, createSchool, createUser, resetDatabase } from './helpers';
+import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -192,15 +192,13 @@ describe('archivage et suppression définitive', () => {
     const gradeType = await prisma.gradeType.create({
       data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: created.body.id,
-        subjectId: subject.id,
-        gradeTypeId: gradeType.id,
-        termId: term.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: created.body.id,
+      subjectId: subject.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      value: 15,
     });
 
     expect((await api(adminToken).delete(`/students/${created.body.id}`)).status).toBe(204);
@@ -237,15 +235,13 @@ describe('archivage et suppression définitive', () => {
     const gradeType = await prisma.gradeType.create({
       data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
     });
-    await prisma.grade.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: created.body.id,
-        subjectId: subject.id,
-        gradeTypeId: gradeType.id,
-        termId: term.id,
-        value: 15,
-      },
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: created.body.id,
+      subjectId: subject.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      value: 15,
     });
 
     const res = await api(adminToken).delete(

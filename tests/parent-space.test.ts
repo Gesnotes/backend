@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -69,17 +69,15 @@ beforeEach(async () => {
   await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parentA.id } });
   await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: parentB.id } });
 
-  noteAna = await prisma.grade.create({
-    data: {
-      schoolId: school.id,
-      studentId: ana.id,
-      subjectId: maths.id,
-      gradeTypeId: compoId,
-      termId: term.id,
-      teacherUserId: prof.id,
-      value: 15,
-      comment: 'Bon travail',
-    },
+  noteAna = await seedGrade({
+    schoolId: school.id,
+    studentId: ana.id,
+    subjectId: maths.id,
+    gradeTypeId: compoId,
+    termId: term.id,
+    teacherUserId: prof.id,
+    value: 15,
+    comment: 'Bon travail',
   });
 });
 

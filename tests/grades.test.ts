@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedEvaluation } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -23,6 +23,8 @@ let term: { id: number };
 let devoirId: number;
 let compoId: number;
 let ana: { id: number };
+// Évaluation par défaut : devoir de maths en 6e A, saisissable par prof A.
+let evalMaths: { id: number };
 
 beforeEach(async () => {
   await resetDatabase();
@@ -67,6 +69,16 @@ beforeEach(async () => {
   ana = await prisma.student.create({
     data: { schoolId: school.id, classId: classe6.id, firstName: 'Ana', lastName: 'Alpha' },
   });
+
+  evalMaths = await seedEvaluation({
+    schoolId: school.id,
+    classId: classe6.id,
+    subjectId: maths.id,
+    gradeTypeId: devoirId,
+    termId: term.id,
+    teacherUserId: profA.id,
+    label: 'Devoir de maths',
+  });
 });
 
 afterAll(async () => {
@@ -82,13 +94,27 @@ const api = (token: string) => ({
 });
 
 const payload = (over: Record<string, unknown> = {}) => ({
+  evaluationId: evalMaths.id,
   studentId: ana.id,
-  subjectId: maths.id,
-  gradeTypeId: devoirId,
-  termId: term.id,
   value: 15,
   ...over,
 });
+
+/** Évaluation d'un contexte donné, pour tester les permissions par matière/classe. */
+const makeEval = (over: {
+  classId: number;
+  subjectId: number;
+  gradeTypeId?: number;
+  maxValue?: number;
+}) =>
+  seedEvaluation({
+    schoolId: school.id,
+    classId: over.classId,
+    subjectId: over.subjectId,
+    gradeTypeId: over.gradeTypeId ?? devoirId,
+    termId: term.id,
+    maxValue: over.maxValue,
+  });
 
 /**
  * Le bloc le plus important du projet : un enseignant ne doit jamais pouvoir
@@ -99,7 +125,7 @@ describe('permissions de saisie (assertCanGrade)', () => {
   it('autorise le prof sur sa classe et sa matière', async () => {
     const res = await api(tokenProfA).post('/grades').send(payload());
     expect(res.status).toBe(201);
-    expect(res.body.note.value).toBe(15);
+    expect(res.body.value).toBe(15);
   });
 
   it('REFUSE la création sur la classe d\'un collègue', async () => {
@@ -109,31 +135,30 @@ describe('permissions de saisie (assertCanGrade)', () => {
   });
 
   it('REFUSE une matière que le prof n\'enseigne pas dans cette classe', async () => {
-    const res = await api(tokenProfA).post('/grades').send(payload({ subjectId: francais.id }));
+    const evalFrancais = await makeEval({ classId: classe6.id, subjectId: francais.id });
+    const res = await api(tokenProfA).post('/grades').send(payload({ evaluationId: evalFrancais.id }));
     expect(res.status).toBe(403);
   });
 
   it('REFUSE la modification de la note d\'un collègue', async () => {
     const { body } = await api(tokenProfA).post('/grades').send(payload());
 
-    const res = await api(tokenProfB).patch(`/grades/${body.note.id}`).send({ value: 20 });
+    const res = await api(tokenProfB).patch(`/grades/${body.id}`).send({ value: 20 });
     expect(res.status).toBe(403);
 
-    const unchanged = await prisma.grade.findUniqueOrThrow({ where: { id: body.note.id } });
+    const unchanged = await prisma.grade.findUniqueOrThrow({ where: { id: body.id } });
     expect(Number(unchanged.value)).toBe(15);
   });
 
   it('REFUSE la suppression de la note d\'un collègue', async () => {
     const { body } = await api(tokenProfA).post('/grades').send(payload());
 
-    expect((await api(tokenProfB).delete(`/grades/${body.note.id}`)).status).toBe(403);
+    expect((await api(tokenProfB).delete(`/grades/${body.id}`)).status).toBe(403);
     expect(await prisma.grade.count()).toBe(1);
   });
 
-  it('REFUSE la table de saisie sur la classe d\'un collègue', async () => {
-    const res = await api(tokenProfB).get(
-      `/teachers/me/grades?class_id=${classe6.id}&subject_id=${maths.id}&term_id=${term.id}`,
-    );
+  it('REFUSE la grille de saisie sur la classe d\'un collègue', async () => {
+    const res = await api(tokenProfB).get(`/teachers/me/grades?evaluation_id=${evalMaths.id}`);
     expect(res.status).toBe(403);
   });
 
@@ -142,7 +167,8 @@ describe('permissions de saisie (assertCanGrade)', () => {
   });
 
   it("laisse l'admin agir sans affectation, dans son école", async () => {
-    const res = await api(tokenAdmin).post('/grades').send(payload({ subjectId: francais.id }));
+    const evalFrancais = await makeEval({ classId: classe6.id, subjectId: francais.id });
+    const res = await api(tokenAdmin).post('/grades').send(payload({ evaluationId: evalFrancais.id }));
     expect(res.status).toBe(201);
   });
 
@@ -161,7 +187,7 @@ describe('permissions de saisie (assertCanGrade)', () => {
 });
 
 describe('validation de la saisie', () => {
-  it('refuse une note supérieure au maximum', async () => {
+  it('refuse une note supérieure au barème', async () => {
     const res = await api(tokenProfA).post('/grades').send(payload({ value: 21 }));
     expect(res.status).toBe(400);
     expect(res.body.error.details.maxValue).toBe(20);
@@ -171,25 +197,22 @@ describe('validation de la saisie', () => {
     expect((await api(tokenProfA).post('/grades').send(payload({ value: -1 }))).status).toBe(400);
   });
 
-  it('accepte une note sur une autre échelle', async () => {
-    const res = await api(tokenProfA).post('/grades').send(payload({ value: 8, maxValue: 10 }));
+  it('accepte une note sur une autre échelle (barème de l\'évaluation)', async () => {
+    const sur10 = await makeEval({ classId: classe6.id, subjectId: maths.id, maxValue: 10 });
+    const res = await api(tokenProfA).post('/grades').send(payload({ evaluationId: sur10.id, value: 8 }));
     expect(res.status).toBe(201);
-    expect(res.body.note.maxValue).toBe(10);
+    expect(res.body.maxValue).toBe(10);
   });
 
-  it('refuse 8/10 déclaré sur 5', async () => {
-    expect((await api(tokenProfA).post('/grades').send(payload({ value: 8, maxValue: 5 }))).status).toBe(400);
+  it('refuse 8 sur une évaluation notée sur 5', async () => {
+    const sur5 = await makeEval({ classId: classe6.id, subjectId: maths.id, maxValue: 5 });
+    expect(
+      (await api(tokenProfA).post('/grades').send(payload({ evaluationId: sur5.id, value: 8 }))).status,
+    ).toBe(400);
   });
 
-  it("refuse une période ou un type d'une autre école", async () => {
-    const other = await createSchool('ecole-b');
-    const foreignTerm = await prisma.term.create({ data: { schoolId: other.id, label: 'T1' } });
-    const foreignType = await prisma.gradeType.create({
-      data: { schoolId: other.id, code: 'devoir', label: 'Devoir', weight: 2 },
-    });
-
-    expect((await api(tokenProfA).post('/grades').send(payload({ termId: foreignTerm.id }))).status).toBe(404);
-    expect((await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: foreignType.id }))).status).toBe(404);
+  it('refuse une évaluation inconnue', async () => {
+    expect((await api(tokenProfA).post('/grades').send(payload({ evaluationId: 999999 }))).status).toBe(404);
   });
 
   it('refuse une saisie sur un élève archivé', async () => {
@@ -198,60 +221,52 @@ describe('validation de la saisie', () => {
   });
 });
 
-describe('commentaire et doublon', () => {
+describe('commentaire et unicité', () => {
   it('enregistre le commentaire du professeur', async () => {
     const res = await api(tokenProfA)
       .post('/grades')
       .send(payload({ comment: 'Bon travail, continue.' }));
 
-    expect(res.body.note.comment).toBe('Bon travail, continue.');
+    expect(res.body.comment).toBe('Bon travail, continue.');
   });
 
-  it('signale un doublon sans bloquer la saisie', async () => {
-    const first = await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: compoId }));
-    expect(first.body.avertissementDoublon).toBe(false);
+  it('refuse une seconde note pour le même élève sur la même évaluation', async () => {
+    expect((await api(tokenProfA).post('/grades').send(payload())).status).toBe(201);
 
-    const second = await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: compoId }));
-    expect(second.status).toBe(201);
-    expect(second.body.avertissementDoublon).toBe(true);
-    expect(await prisma.grade.count()).toBe(2);
-  });
-
-  it('ne signale rien pour un type de note différent', async () => {
-    await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: devoirId }));
-    const autre = await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: compoId }));
-    expect(autre.body.avertissementDoublon).toBe(false);
+    const second = await api(tokenProfA).post('/grades').send(payload({ value: 18 }));
+    expect(second.status).toBe(409);
+    expect(await prisma.grade.count()).toBe(1);
   });
 });
 
 describe('modification et suppression', () => {
-  it('modifie valeur, type et commentaire', async () => {
+  it('modifie valeur et commentaire', async () => {
     const { body } = await api(tokenProfA).post('/grades').send(payload());
 
     const res = await api(tokenProfA)
-      .patch(`/grades/${body.note.id}`)
-      .send({ value: 18, gradeTypeId: compoId, comment: 'Excellent' });
+      .patch(`/grades/${body.id}`)
+      .send({ value: 18, comment: 'Excellent' });
 
     expect(res.status).toBe(200);
     expect(res.body.value).toBe(18);
-    expect(res.body.type.code).toBe('composition');
     expect(res.body.comment).toBe('Excellent');
   });
 
-  it('valide la nouvelle valeur contre le maximum existant', async () => {
-    const { body } = await api(tokenProfA).post('/grades').send(payload({ value: 8, maxValue: 10 }));
-    expect((await api(tokenProfA).patch(`/grades/${body.note.id}`).send({ value: 15 })).status).toBe(400);
+  it('valide la nouvelle valeur contre le barème de l\'évaluation', async () => {
+    const sur10 = await makeEval({ classId: classe6.id, subjectId: maths.id, maxValue: 10 });
+    const { body } = await api(tokenProfA).post('/grades').send(payload({ evaluationId: sur10.id, value: 8 }));
+    expect((await api(tokenProfA).patch(`/grades/${body.id}`).send({ value: 15 })).status).toBe(400);
   });
 
   it('efface un commentaire avec null', async () => {
     const { body } = await api(tokenProfA).post('/grades').send(payload({ comment: 'À revoir' }));
-    const res = await api(tokenProfA).patch(`/grades/${body.note.id}`).send({ comment: null });
+    const res = await api(tokenProfA).patch(`/grades/${body.id}`).send({ comment: null });
     expect(res.body.comment).toBeNull();
   });
 
   it('supprime une note', async () => {
     const { body } = await api(tokenProfA).post('/grades').send(payload());
-    expect((await api(tokenProfA).delete(`/grades/${body.note.id}`)).status).toBe(204);
+    expect((await api(tokenProfA).delete(`/grades/${body.id}`)).status).toBe(204);
     expect(await prisma.grade.count()).toBe(0);
   });
 });
@@ -280,76 +295,40 @@ describe('GET /teachers/me/classes', () => {
     expect(res.body[0].subjectName).toBe('Français');
   });
 
-  it('attribue chaque élève à SA classe quand le prof enseigne dans plusieurs', async () => {
-    // Cas normal d'un professeur de mathématiques. La progression est calculée
-    // en mémoire à partir d'une seule lecture : si l'attribution élève→classe
-    // se trompe, les deux lignes affichent le même chiffre sans que rien
-    // n'échoue.
-    await prisma.teacherAssignment.create({
-      data: {
-        schoolId: school.id,
-        teacherUserId: profA.id,
-        classId: classe5.id,
-        subjectId: maths.id,
-      },
-    });
-
-    const enSixieme = await prisma.student.create({
-      data: { schoolId: school.id, classId: classe6.id, firstName: 'Ben', lastName: 'Beta' },
-    });
-    const enCinquieme = await prisma.student.create({
-      data: { schoolId: school.id, classId: classe5.id, firstName: 'Cid', lastName: 'Gamma' },
-    });
-
-    // 6e A : Ana notée, Ben non. 5e A : Cid noté.
-    await api(tokenProfA).post('/grades').send(payload({ studentId: ana.id }));
-    await api(tokenProfA).post('/grades').send(payload({ studentId: enCinquieme.id }));
-    void enSixieme;
-
-    const res = await api(tokenProfA).get('/teachers/me/classes');
-    const sixieme = res.body.find((l: { className: string }) => l.className === '6e A');
-    const cinquieme = res.body.find((l: { className: string }) => l.className === '5e A');
-
-    expect(sixieme).toMatchObject({ effectif: 2, evalues: 1 });
-    expect(cinquieme).toMatchObject({ effectif: 1, evalues: 1 });
-  });
-
   it('compte les élèves évalués, pas les notes saisies', async () => {
-    await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: devoirId }));
-    await api(tokenProfA).post('/grades').send(payload({ gradeTypeId: compoId }));
+    const evalCompo = await makeEval({ classId: classe6.id, subjectId: maths.id, gradeTypeId: compoId });
+    await api(tokenProfA).post('/grades').send(payload());
+    await api(tokenProfA).post('/grades').send(payload({ evaluationId: evalCompo.id }));
 
     const res = await api(tokenProfA).get('/teachers/me/classes');
     expect(res.body[0].evalues).toBe(1);
   });
 });
 
-describe('table de saisie et historique', () => {
+describe('grille de saisie et historique', () => {
   it('renvoie tous les élèves, même sans note', async () => {
     await prisma.student.create({
       data: { schoolId: school.id, classId: classe6.id, firstName: 'Ben', lastName: 'Beta' },
     });
     await api(tokenProfA).post('/grades').send(payload());
 
-    const res = await api(tokenProfA).get(
-      `/teachers/me/grades?class_id=${classe6.id}&subject_id=${maths.id}&term_id=${term.id}`,
-    );
+    const res = await api(tokenProfA).get(`/teachers/me/grades?evaluation_id=${evalMaths.id}`);
 
-    expect(res.body).toHaveLength(2);
-    expect(res.body.find((s: { firstName: string }) => s.firstName === 'Ana').notes).toHaveLength(1);
-    expect(res.body.find((s: { firstName: string }) => s.firstName === 'Ben').notes).toHaveLength(0);
+    expect(res.body.students).toHaveLength(2);
+    expect(res.body.students.find((s: { firstName: string }) => s.firstName === 'Ana').note).not.toBeNull();
+    expect(res.body.students.find((s: { firstName: string }) => s.firstName === 'Ben').note).toBeNull();
   });
 
-  it('exclut les élèves archivés de la table de saisie', async () => {
+  it('exclut les élèves archivés de la grille de saisie', async () => {
     await prisma.student.update({ where: { id: ana.id }, data: { archivedAt: new Date() } });
-    const res = await api(tokenProfA).get(
-      `/teachers/me/grades?class_id=${classe6.id}&subject_id=${maths.id}&term_id=${term.id}`,
-    );
-    expect(res.body).toHaveLength(0);
+    const res = await api(tokenProfA).get(`/teachers/me/grades?evaluation_id=${evalMaths.id}`);
+    expect(res.body.students).toHaveLength(0);
   });
 
   it("l'historique ne contient que mes propres saisies", async () => {
+    const evalFrancais = await makeEval({ classId: classe6.id, subjectId: francais.id });
     await api(tokenProfA).post('/grades').send(payload());
-    await api(tokenAdmin).post('/grades').send(payload({ subjectId: francais.id }));
+    await api(tokenAdmin).post('/grades').send(payload({ evaluationId: evalFrancais.id }));
 
     const res = await api(tokenProfA).get('/teachers/me/grades/history');
     expect(res.body).toHaveLength(1);

@@ -55,6 +55,7 @@ model User {
   children       StudentParent[]
   assignments    TeacherAssignment[]
   grades         Grade[]
+  evaluations    Evaluation[]
   devices        Device[]
   refreshTokens  RefreshToken[]
   resetTokens    PasswordResetToken[]
@@ -107,8 +108,9 @@ model Term {
   startDate DateTime? @map("start_date") @db.Date
   endDate   DateTime? @map("end_date") @db.Date
 
-  school School  @relation(fields: [schoolId], references: [id])
-  grades Grade[]
+  school      School       @relation(fields: [schoolId], references: [id])
+  grades      Grade[]
+  evaluations Evaluation[]
 
   @@map("terms")
 }
@@ -125,6 +127,7 @@ model Class {
   students     Student[]
   assignments  TeacherAssignment[]
   coefficients SubjectCoefficient[]
+  evaluations  Evaluation[]
 
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
@@ -144,6 +147,7 @@ model Subject {
   assignments  TeacherAssignment[]
   grades       Grade[]
   coefficients SubjectCoefficient[]
+  evaluations  Evaluation[]
 
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
@@ -175,8 +179,9 @@ model GradeType {
   weight   Decimal @db.Decimal(4, 2)
   position Int     @default(0)
 
-  school School  @relation(fields: [schoolId], references: [id])
-  grades Grade[]
+  school      School       @relation(fields: [schoolId], references: [id])
+  grades      Grade[]
+  evaluations Evaluation[]
 
   @@unique([schoolId, code])
   @@map("grade_types")
@@ -260,11 +265,16 @@ model Grade {
   id            Int       @id @default(autoincrement())
   schoolId      Int       @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
   studentId     Int       @map("student_id")
+  evaluationId  Int       @map("evaluation_id")
   subjectId     Int       @map("subject_id")
   gradeTypeId   Int       @map("grade_type_id")
   termId        Int       @map("term_id")
   teacherUserId Int?      @map("teacher_user_id")
   value         Decimal   @db.Decimal(5, 2)
+  // Recopié depuis l'évaluation, qui en est la source de vérité. Dénormalisé
+  // ici comme school_id l'est plus haut : le calcul des moyennes lit la note
+  // sans jointure sur l'évaluation. Toute écriture passe par le barème de
+  // l'évaluation, ce qui garde les deux alignés.
   maxValue      Decimal   @default(20) @map("max_value") @db.Decimal(5, 2)
   comment       String?   @db.Text // commentaire du prof, visible par le parent
   createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
@@ -272,14 +282,52 @@ model Grade {
   // Clé composite : impossible d'enregistrer une note dont le school_id
   // dénormalisé diverge de celui de l'élève. Sans cela, la colonne qui porte
   // tout le filtrage d'isolation ne serait garantie par rien.
-  student   Student   @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  subject   Subject   @relation(fields: [subjectId], references: [id])
-  gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
-  term      Term      @relation(fields: [termId], references: [id])
-  teacher   User?     @relation(fields: [teacherUserId], references: [id])
+  student    Student    @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  evaluation Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  subject    Subject    @relation(fields: [subjectId], references: [id])
+  gradeType  GradeType  @relation(fields: [gradeTypeId], references: [id])
+  term       Term       @relation(fields: [termId], references: [id])
+  teacher    User?      @relation(fields: [teacherUserId], references: [id])
 
+  // Une seule note par élève et par évaluation : l'ambiguïté « plusieurs notes
+  // du même type » disparaît, l'identité d'une note étant désormais son
+  // évaluation, non son type.
+  @@unique([evaluationId, studentId])
   @@index([studentId, termId]) // porte tout le calcul des moyennes
   @@index([schoolId, createdAt]) // porte le dashboard admin
   @@index([subjectId, termId])
   @@map("grades")
+}
+
+// Une évaluation concrète : « Interro du 12/09 », « Composition du 2e trimestre ».
+//
+// C'est elle qui permet plusieurs notes du même type dans une même période :
+// deux interrogations sont deux évaluations distinctes, chacune portant son
+// libellé, sa date et son barème. Le poids reste porté par le type de note.
+model Evaluation {
+  id            Int       @id @default(autoincrement())
+  schoolId      Int       @map("school_id")
+  classId       Int       @map("class_id")
+  subjectId     Int       @map("subject_id")
+  gradeTypeId   Int       @map("grade_type_id")
+  termId        Int       @map("term_id")
+  teacherUserId Int?      @map("teacher_user_id")
+  label         String    @db.VarChar(120)
+  date          DateTime? @db.Date
+  maxValue      Decimal   @default(20) @map("max_value") @db.Decimal(5, 2)
+  createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // Comme Grade s'ancre à son école via l'élève, l'évaluation s'y ancre via sa
+  // classe : la clé composite interdit une évaluation dont le school_id diverge
+  // de celui de la classe.
+  class     Class     @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  subject   Subject   @relation(fields: [subjectId], references: [id])
+  gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
+  term      Term      @relation(fields: [termId], references: [id])
+  teacher   User?     @relation(fields: [teacherUserId], references: [id])
+  grades    Grade[]
+
+  @@index([classId, subjectId, termId])
+  @@index([schoolId])
+  @@map("evaluations")
 }

@@ -314,13 +314,35 @@ async function main() {
           // Pas de composition au troisième trimestre : elle n'a pas eu lieu.
           if (termIndex === 2 && gradeType.code === 'composition') continue;
 
-          for (const student of classStudents) {
-            const existing = await prisma.grade.findFirst({
+          // Une évaluation par (classe, matière, type, période) : les notes de
+          // la démo s'y rattachent. Idempotent comme le reste du seed.
+          const evaluation =
+            (await prisma.evaluation.findFirst({
               where: {
-                studentId: student.id,
+                schoolId: school.id,
+                classId: klass.id,
                 subjectId: subject.id,
                 gradeTypeId: gradeType.id,
                 termId: term.id,
+              },
+            })) ??
+            (await prisma.evaluation.create({
+              data: {
+                schoolId: school.id,
+                classId: klass.id,
+                subjectId: subject.id,
+                gradeTypeId: gradeType.id,
+                termId: term.id,
+                teacherUserId: user.id,
+                label: gradeType.label,
+                maxValue: 20,
+              },
+            }));
+
+          for (const student of classStudents) {
+            const existing = await prisma.grade.findUnique({
+              where: {
+                evaluationId_studentId: { evaluationId: evaluation.id, studentId: student.id },
               },
               select: { id: true },
             });
@@ -331,6 +353,7 @@ async function main() {
               data: {
                 schoolId: school.id,
                 studentId: student.id,
+                evaluationId: evaluation.id,
                 subjectId: subject.id,
                 gradeTypeId: gradeType.id,
                 termId: term.id,
