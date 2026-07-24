@@ -271,6 +271,31 @@ export async function detachParent(schoolId: number, studentId: number, parentUs
   return getStudentForAdmin(schoolId, studentId);
 }
 
+/**
+ * Renvoie le lien d'invitation à un parent déjà associé (email perdu, lien
+ * expiré). Émet un nouveau token à usage unique, comme la première invitation.
+ */
+export async function resendParentInvitation(
+  schoolId: number,
+  studentId: number,
+  parentUserId: number,
+) {
+  await getStudentForAdmin(schoolId, studentId);
+
+  const link = await prisma.studentParent.findUnique({
+    where: { studentId_parentUserId: { studentId, parentUserId } },
+  });
+  if (!link) throw notFound("Ce parent n'est pas associé à cet élève");
+
+  const parent = await prisma.user.findFirst({
+    where: { id: parentUserId, schoolId, role: 'parent', archivedAt: null },
+    select: { id: true, email: true },
+  });
+  if (!parent) throw notFound('Parent introuvable dans cette école');
+
+  await sendInvitation(parent.id, parent.email, 'parent');
+}
+
 async function findExistingParent(schoolId: number, parentUserId: number) {
   const parent = await prisma.user.findFirst({
     where: { id: parentUserId, schoolId, role: 'parent', archivedAt: null },
