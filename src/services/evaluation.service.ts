@@ -55,13 +55,13 @@ function toPublicEvaluation(evaluation: EvaluationRow) {
 }
 
 /**
- * Le barème est stocké en `Decimal(5,2)` : il doit tenir sous 1000, sinon
- * PostgreSQL renvoie un « numeric field overflow » (500 illisible) au lieu
- * d'un refus clair. Un barème d'école ne dépasse de toute façon jamais 999.
+ * Un barème d'école ne dépasse jamais 100 (le plus souvent 20). Le borner évite
+ * aussi le « numeric field overflow » de la colonne `Decimal(5,2)`, qui remontait
+ * en 500 illisible au lieu d'un refus clair.
  */
 function assertBareme(maxValue: number) {
-  if (!Number.isFinite(maxValue) || maxValue <= 0 || maxValue > 999) {
-    throw badRequest('Le barème doit être un nombre compris entre 1 et 999');
+  if (!Number.isFinite(maxValue) || maxValue <= 0 || maxValue > 100) {
+    throw badRequest('Le barème doit être un nombre compris entre 1 et 100.');
   }
 }
 
