@@ -56,15 +56,19 @@ const deleteQuery = z.object({
 });
 
 /** Association : soit un compte existant, soit un nouveau par invitation. */
-const attachParentBody = z.union([
-  z.object({ parentUserId: z.coerce.number().int().positive() }),
-  z.object({
-    email: z.email(),
+// Objet (plutôt qu'un `z.union`) pour que l'erreur pointe le bon champ :
+// un `union` renvoie un « Invalid input » générique qui n'aide personne.
+const attachParentBody = z
+  .object({
+    parentUserId: z.coerce.number().int().positive().optional(),
+    email: z.email('Adresse email invalide.').optional(),
     firstName: z.string().trim().max(100).optional(),
     lastName: z.string().trim().max(100).optional(),
     phone: z.string().trim().max(30).optional(),
-  }),
-]);
+  })
+  .refine((data) => data.parentUserId !== undefined || data.email !== undefined, {
+    message: "Indiquez un compte parent existant ou un email pour l'invitation.",
+  });
 
 /**
  * Lecture réservée à l'équipe. Le service borne en plus l'enseignant à ses

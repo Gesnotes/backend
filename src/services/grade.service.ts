@@ -194,6 +194,7 @@ export async function createGrade(
   }
 
   await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
+  await assertTermOpen(auth, evaluation.termId);
 
   const maxValue = Number(evaluation.maxValue);
   assertValueInRange(data.value, maxValue);
@@ -319,8 +320,36 @@ async function findGradeForWrite(auth: AuthPayload, id: number) {
   if (!grade) throw notFound('Note introuvable');
 
   await assertCanGrade(auth, grade.student.classId, grade.subjectId);
+  await assertTermOpen(auth, grade.termId);
 
   return grade;
+}
+
+/**
+ * Interdit à un enseignant de saisir/modifier des notes sur un trimestre déjà
+ * clos (date de fin passée). L'administration garde la main — corrections,
+ * rattrapages, erreurs constatées après coup relèvent d'elle, pas du prof.
+ */
+export function assertTermWritable(auth: AuthPayload, term: { endDate: Date | null }) {
+  if (auth.role === 'admin') return;
+  if (!term.endDate) return;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const end = term.endDate.toISOString().slice(0, 10);
+  if (end < today) {
+    throw forbidden(
+      "Ce trimestre est terminé : la saisie n'est plus possible. Contactez l'administration.",
+    );
+  }
+}
+
+/** Charge la période et applique {@link assertTermWritable}. */
+export async function assertTermOpen(auth: AuthPayload, termId: number) {
+  const term = await prisma.term.findFirst({
+    where: { id: termId, schoolId: auth.schoolId },
+    select: { endDate: true },
+  });
+  if (term) assertTermWritable(auth, term);
 }
 
 export async function assertContext(schoolId: number, gradeTypeId: number, termId: number) {
