@@ -76,6 +76,24 @@ function mapError(err: unknown): {
     return { status: 409, code: 'CONFLICT', message: 'Référence invalide vers une autre ressource' };
   }
 
+  /**
+   * Violation de clé étrangère remontée brute par l'adaptateur Postgres.
+   *
+   * Prisma ne la traduit pas toujours en P2003 : une contrainte `RESTRICT`
+   * déclenchée par un `DELETE` arrive en P2039 avec le code SQLSTATE enfoui
+   * dans `driverAdapterError`. Sans ce filet, le client reçoit « Erreur
+   * interne » là où le refus est parfaitement métier. Les services doivent
+   * quand même contrôler en amont pour donner un message précis : on ne sait
+   * pas ici *quelle* ressource référence l'objet.
+   */
+  if (isForeignKeyViolation(err)) {
+    return {
+      status: 409,
+      code: 'CONFLICT',
+      message: "Suppression impossible : d'autres données référencent cette ressource",
+    };
+  }
+
   return {
     status: 500,
     code: 'INTERNAL_ERROR',
@@ -83,4 +101,16 @@ function mapError(err: unknown): {
     // Le détail n'est exposé qu'en dehors de la production.
     details: isProduction ? undefined : (err as Error)?.message,
   };
+}
+
+/**
+ * SQLSTATE 23503 (foreign_key_violation) et 23001 (restrict_violation), tels
+ * que l'adaptateur les expose : `meta.driverAdapterError.cause.code`.
+ */
+function isForeignKeyViolation(err: unknown): boolean {
+  const cause = (
+    err as { meta?: { driverAdapterError?: { cause?: { code?: unknown } } } }
+  )?.meta?.driverAdapterError?.cause?.code;
+
+  return cause === '23503' || cause === '23001';
 }

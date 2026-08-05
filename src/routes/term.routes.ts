@@ -19,6 +19,32 @@ termRoutes.use(requireAuth, requireRole(...ALL_ROLES));
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 
+const boolFlag = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((value) => value === 'true');
+
+const listQuery = z.object({ include_archived: boolFlag });
+
+/**
+ * `permanent` efface la période, ses évaluations et ses notes ; sans le
+ * drapeau, elle est seulement archivée. La suppression définitive exige le
+ * libellé exact : elle détruit le travail de saisie d'un trimestre entier.
+ */
+const deleteQuery = z.object({
+  permanent: boolFlag,
+  confirm_label: z.string().optional(),
+});
+
+/**
+ * Réouverture : un instant, pas un jour. Rouvrir « jusqu'au 12 » doit couvrir
+ * la journée du 12 entière — c'est au client d'envoyer 23h59, mais le format
+ * doit le permettre.
+ */
+const reopenBody = z.object({
+  until: z.iso.datetime({ offset: true, message: 'Échéance attendue au format ISO.' }),
+});
+
 const createBody = z.object({
   label: z.string().trim().min(1).max(50),
   startDate: z.iso.date().nullable().optional(),
@@ -29,8 +55,9 @@ const updateBody = createBody
   .partial()
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
-termRoutes.get('/', async (req, res) => {
-  res.json(await termService.listTerms(schoolIdOf(req)));
+termRoutes.get('/', validate({ query: listQuery }), async (req, res) => {
+  const { include_archived } = req.query as unknown as z.infer<typeof listQuery>;
+  res.json(await termService.listTerms(schoolIdOf(req), include_archived));
 });
 
 termRoutes.get('/:id', validate({ params: idParam }), async (req, res) => {
@@ -57,10 +84,52 @@ termRoutes.patch(
 termRoutes.delete(
   '/:id',
   requireRole('admin'),
+  validate({ params: idParam, query: deleteQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteQuery>;
+
+    if (permanent) {
+      await termService.deleteTermPermanently(schoolIdOf(req), id, confirm_label ?? '');
+    } else {
+      await termService.archiveTerm(schoolIdOf(req), id);
+    }
+    res.status(204).send();
+  },
+);
+
+termRoutes.post(
+  '/:id/restore',
+  requireRole('admin'),
   validate({ params: idParam }),
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
-    await termService.deleteTerm(schoolIdOf(req), id);
-    res.status(204).send();
+    res.json(await termService.restoreTerm(schoolIdOf(req), id));
+  },
+);
+
+/**
+ * Rouvre la saisie sur une période terminée, jusqu'à l'échéance indiquée.
+ * Réservé à l'administration : c'est elle qui arbitre un rattrapage.
+ */
+termRoutes.post(
+  '/:id/reopen',
+  requireRole('admin'),
+  validate({ params: idParam, body: reopenBody }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { until } = req.body as z.infer<typeof reopenBody>;
+    res.json(await termService.reopenTerm(schoolIdOf(req), id, until));
+  },
+);
+
+/** Referme la saisie avant l'échéance, une fois la correction faite. */
+termRoutes.delete(
+  '/:id/reopen',
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    res.json(await termService.closeTermEntry(schoolIdOf(req), id));
   },
 );
