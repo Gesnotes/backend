@@ -227,14 +227,35 @@ describe('cohérence avec le calcul', () => {
   });
 
   it('imprime « — » et jamais « 0 » pour un élève sans note', async () => {
-    const vide = await prisma.class.create({
+    // La classe porte une note : c'est le rendu du tiret pour l'élève non
+    // évalué qu'on vérifie, pas le bulletin vide — celui-ci est refusé.
+    const mixte = await prisma.class.create({
       data: { schoolId: school.id, name: '3e A', level: '3e' },
     });
+    const histoire = await prisma.subject.create({
+      data: { schoolId: school.id, name: 'Histoire', coefficient: 1 },
+    });
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 1, position: 2 },
+    });
+    const max = await prisma.student.create({
+      data: { schoolId: school.id, classId: mixte.id, firstName: 'Max', lastName: 'Mu' },
+    });
     await prisma.student.create({
-      data: { schoolId: school.id, classId: vide.id, firstName: 'Zoe', lastName: 'Zeta' },
+      data: { schoolId: school.id, classId: mixte.id, firstName: 'Zoe', lastName: 'Zeta' },
+    });
+    // 13,5 plutôt qu'un compte rond : « 10,00 » contiendrait « 0,00 » et
+    // ferait passer l'assertion suivante pour une réussite.
+    await seedGrade({
+      schoolId: school.id,
+      studentId: max.id,
+      subjectId: histoire.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 13.5,
     });
 
-    const texte = pdfTextOf(await pdfBody(`/classes/${vide.id}/bulletin/export?term_id=${term.id}`));
+    const texte = pdfTextOf(await pdfBody(`/classes/${mixte.id}/bulletin/export?term_id=${term.id}`));
 
     expect(texte).toContain('ZETAZoe');
     expect(texte).toContain('—');
@@ -268,7 +289,12 @@ describe('cohérence avec le calcul', () => {
     expect(texte).toContain('11,00');
   });
 
-  it('génère un PDF même pour une classe sans aucune note', async () => {
+  /**
+   * Un bulletin sans note est un document vide paye au prix fort : le calcul
+   * agrege toute la classe et la mise en page ouvre une page par eleve, pour
+   * n'imprimer que des tirets. Le refus vaut mieux que le PDF.
+   */
+  it('refuse de générer un bulletin sans aucune note', async () => {
     const vide = await prisma.class.create({
       data: { schoolId: school.id, name: '5e A', level: '5e' },
     });
@@ -276,32 +302,20 @@ describe('cohérence avec le calcul', () => {
       data: { schoolId: school.id, classId: vide.id, firstName: 'Zoe', lastName: 'Zeta' },
     });
 
-    const res = await get(tokenAdmin, `/classes/${vide.id}/bulletin/export?term_id=${term.id}`)
-      .buffer()
-      .parse((r, cb) => {
-        const chunks: Buffer[] = [];
-        r.on('data', (c: Buffer) => chunks.push(c));
-        r.on('end', () => cb(null, Buffer.concat(chunks)));
-      });
+    const res = await get(tokenAdmin, `/classes/${vide.id}/bulletin/export?term_id=${term.id}`);
 
-    expect(res.status).toBe(200);
-    expect(isPdf(res.body)).toBe(true);
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/aucune note/i);
   });
 
-  it('génère un PDF pour une classe vide', async () => {
+  it('refuse de générer un bulletin pour une classe sans élève', async () => {
     const vide = await prisma.class.create({
       data: { schoolId: school.id, name: '4e A', level: '4e' },
     });
 
-    const res = await get(tokenAdmin, `/classes/${vide.id}/bulletin/export?term_id=${term.id}`)
-      .buffer()
-      .parse((r, cb) => {
-        const chunks: Buffer[] = [];
-        r.on('data', (c: Buffer) => chunks.push(c));
-        r.on('end', () => cb(null, Buffer.concat(chunks)));
-      });
+    const res = await get(tokenAdmin, `/classes/${vide.id}/bulletin/export?term_id=${term.id}`);
 
-    expect(res.status).toBe(200);
-    expect(isPdf(res.body)).toBe(true);
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/aucun élève/i);
   });
 });
