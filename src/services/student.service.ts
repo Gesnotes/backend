@@ -205,17 +205,19 @@ export async function importStudents(
 ): Promise<ImportReport> {
   const table = parseCsv(csv);
   const header = table[0];
-  if (!header) throw badRequest('Le fichier est vide.');
+  if (!header) throw badRequest('Ce fichier est vide.');
 
   const body = table.slice(1);
   const columns = mapColumns(header);
 
   if (body.length === 0) {
-    throw badRequest("Le fichier ne contient que l'en-tête : aucune ligne à importer.");
+    throw badRequest(
+      "Ce fichier ne contient aucun élève : il n'y a que la première ligne, celle des titres.",
+    );
   }
   if (body.length > IMPORT_MAX_ROWS) {
     throw badRequest(
-      `Le fichier contient ${body.length} lignes ; l'import est limité à ${IMPORT_MAX_ROWS}. Découpez-le par niveau.`,
+      `Ce fichier contient ${body.length} élèves. On peut en ajouter ${IMPORT_MAX_ROWS} à la fois : coupez-le en plusieurs fichiers, par exemple un par niveau.`,
       { max: IMPORT_MAX_ROWS },
     );
   }
@@ -285,15 +287,26 @@ function mapColumns(header: string[]): Record<keyof typeof COLUMN_ALIASES, numbe
     birthDate: find(COLUMN_ALIASES.birthDate),
   };
 
-  const missing = (['lastName', 'firstName', 'className'] as const).filter(
-    (key) => columns[key] === -1,
-  );
+  const missing = (['lastName', 'firstName', 'className'] as const)
+    .filter((key) => columns[key] === -1)
+    .map((key) => ({ lastName: 'Nom', firstName: 'Prénom', className: 'Classe' })[key]);
+
   if (missing.length > 0) {
+    // Message écrit pour un secrétariat, pas pour un développeur : on nomme ce
+    // qui manque, on dit où le mettre, et on montre à quoi doit ressembler la
+    // première ligne. « Colonne manquante dans l'en-tête » ne dit rien à qui
+    // n'a jamais entendu le mot « en-tête ».
+    const quoted = missing.map((name) => `« ${name} »`);
+    const list =
+      quoted.length === 1
+        ? quoted[0]
+        : `${quoted.slice(0, -1).join(', ')} et ${quoted[quoted.length - 1]}`;
+
     throw badRequest(
-      `Colonnes manquantes dans l'en-tête : ${missing
-        .map((key) => ({ lastName: 'Nom', firstName: 'Prénom', className: 'Classe' })[key])
-        .join(', ')}. Attendu : Nom ; Prénom ; Classe ; Date de naissance (facultative).`,
-      { attendu: ['Nom', 'Prénom', 'Classe', 'Date de naissance'] },
+      `Il manque ${missing.length === 1 ? 'la colonne' : 'les colonnes'} ${list} dans votre fichier. ` +
+        'Tout en haut, la première ligne doit donner le titre de chaque colonne, comme ceci : ' +
+        "Nom ; Prénom ; Classe ; Date de naissance. La date de naissance n'est pas obligatoire.",
+      { attendu: ['Nom', 'Prénom', 'Classe', 'Date de naissance'], manquant: missing },
     );
   }
 
@@ -322,7 +335,13 @@ function readRow(
   const base = { line, firstName, lastName, className, birthDate: null as string | null };
 
   if (!lastName || !firstName) {
-    return { ...base, status: 'error', reason: 'Nom ou prénom manquant.' };
+    return {
+      ...base,
+      status: 'error',
+      reason: !lastName && !firstName
+        ? 'Le nom et le prénom sont vides.'
+        : `Le ${lastName ? 'prénom' : 'nom'} est vide.`,
+    };
   }
 
   const classId = classByKey.get(labelKey(className));
@@ -331,8 +350,8 @@ function readRow(
       ...base,
       status: 'error',
       reason: className
-        ? `La classe « ${className} » n'existe pas. Créez-la d'abord, ou corrigez l'orthographe.`
-        : 'Classe manquante.',
+        ? `La classe « ${className} » n'existe pas encore dans Gesnotes. Créez-la, ou corrigez son écriture dans le fichier.`
+        : "La classe n'est pas indiquée.",
     };
   }
 
@@ -341,13 +360,18 @@ function readRow(
     return {
       ...base,
       status: 'error',
-      reason: `Date de naissance illisible : « ${rawBirth} ». Attendu JJ/MM/AAAA ou AAAA-MM-JJ.`,
+      reason: `Date de naissance incomprise : « ${rawBirth} ». Écrivez-la comme ceci : 12/03/2012.`,
     };
   }
 
   const key = studentKey(firstName, lastName, classId);
   if (seen.has(key)) {
-    return { ...base, birthDate, status: 'duplicate', reason: 'Déjà inscrit dans cette classe.' };
+    return {
+      ...base,
+      birthDate,
+      status: 'duplicate',
+      reason: 'Cet élève est déjà inscrit dans cette classe.',
+    };
   }
 
   // Le fichier lui-même peut contenir deux fois la même ligne.
