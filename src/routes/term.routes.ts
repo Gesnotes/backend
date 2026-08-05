@@ -36,6 +36,15 @@ const deleteQuery = z.object({
   confirm_label: z.string().optional(),
 });
 
+/**
+ * Réouverture : un instant, pas un jour. Rouvrir « jusqu'au 12 » doit couvrir
+ * la journée du 12 entière — c'est au client d'envoyer 23h59, mais le format
+ * doit le permettre.
+ */
+const reopenBody = z.object({
+  until: z.iso.datetime({ offset: true, message: 'Échéance attendue au format ISO.' }),
+});
+
 const createBody = z.object({
   label: z.string().trim().min(1).max(50),
   startDate: z.iso.date().nullable().optional(),
@@ -96,5 +105,31 @@ termRoutes.post(
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     res.json(await termService.restoreTerm(schoolIdOf(req), id));
+  },
+);
+
+/**
+ * Rouvre la saisie sur une période terminée, jusqu'à l'échéance indiquée.
+ * Réservé à l'administration : c'est elle qui arbitre un rattrapage.
+ */
+termRoutes.post(
+  '/:id/reopen',
+  requireRole('admin'),
+  validate({ params: idParam, body: reopenBody }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { until } = req.body as z.infer<typeof reopenBody>;
+    res.json(await termService.reopenTerm(schoolIdOf(req), id, until));
+  },
+);
+
+/** Referme la saisie avant l'échéance, une fois la correction faite. */
+termRoutes.delete(
+  '/:id/reopen',
+  requireRole('admin'),
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    res.json(await termService.closeTermEntry(schoolIdOf(req), id));
   },
 );

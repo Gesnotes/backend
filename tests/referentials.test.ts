@@ -435,3 +435,123 @@ describe('Écriture des périodes', () => {
     expect(res.status).toBe(404);
   });
 });
+
+/**
+ * Réouverture temporaire d'une période terminée.
+ *
+ * Le verrou interdit à un enseignant d'écrire sur un trimestre clos. Sans
+ * soupape, la moindre note oubliée obligeait l'administration à saisir à la
+ * place du professeur, ou à repousser la date de fin — ce qui aurait faussé
+ * « période en cours » pour toute l'école.
+ */
+describe('Réouverture d’une période terminée', () => {
+  const write = (token: string, subdomain = 'ecole-a') => ({
+    post: (p: string) =>
+      request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    delete: (p: string) =>
+      request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+  });
+
+  /** Période dont la date de fin est passée. */
+  function closedTerm() {
+    return prisma.term.create({
+      data: {
+        schoolId: schoolA.id,
+        label: 'Trimestre clos',
+        startDate: new Date(day(-60)),
+        endDate: new Date(day(-10)),
+      },
+    });
+  }
+
+  /** Instant ISO, décalé de `days` jours. */
+  function instant(days: number): string {
+    return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  it('rouvre la saisie jusqu’à une échéance', async () => {
+    const closed = await closedTerm();
+
+    const res = await write(adminToken)
+      .post(`/terms/${closed.id}/reopen`)
+      .send({ until: instant(3) });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ isClosed: true, isOpenForEntry: true });
+    expect(res.body.reopenedUntil).not.toBeNull();
+  });
+
+  it('referme la saisie avant l’échéance', async () => {
+    const closed = await closedTerm();
+    await write(adminToken).post(`/terms/${closed.id}/reopen`).send({ until: instant(3) });
+
+    const res = await write(adminToken).delete(`/terms/${closed.id}/reopen`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ isOpenForEntry: false, reopenedUntil: null });
+  });
+
+  /**
+   * Une échéance dépassée ne vaut plus rien : la remonter ferait annoncer à
+   * l'interface une réouverture qui ne produit plus aucun effet.
+   */
+  it('ignore une réouverture expirée', async () => {
+    const closed = await closedTerm();
+    await prisma.term.update({
+      where: { id: closed.id },
+      data: { reopenedUntil: new Date(Date.now() - 60_000) },
+    });
+
+    const res = await api(adminToken).get('/terms');
+
+    expect(res.body[0]).toMatchObject({ isOpenForEntry: false, reopenedUntil: null });
+  });
+
+  it('refuse une échéance passée', async () => {
+    const closed = await closedTerm();
+
+    const res = await write(adminToken)
+      .post(`/terms/${closed.id}/reopen`)
+      .send({ until: instant(-1) });
+
+    expect(res.status).toBe(400);
+  });
+
+  /** Rouvrir « jusqu'en 2099 » lèverait le verrou sans que personne ne le voie. */
+  it('refuse une réouverture au-delà de 90 jours', async () => {
+    const closed = await closedTerm();
+
+    const res = await write(adminToken)
+      .post(`/terms/${closed.id}/reopen`)
+      .send({ until: instant(120) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.details.maxDays).toBe(90);
+  });
+
+  it('refuse de rouvrir une période qui n’est pas terminée', async () => {
+    const open = await prisma.term.create({
+      data: {
+        schoolId: schoolA.id,
+        label: 'En cours',
+        startDate: new Date(day(-5)),
+        endDate: new Date(day(5)),
+      },
+    });
+
+    const res = await write(adminToken)
+      .post(`/terms/${open.id}/reopen`)
+      .send({ until: instant(3) });
+
+    expect(res.status).toBe(409);
+  });
+
+  it('réserve la réouverture à l’administration', async () => {
+    const closed = await closedTerm();
+
+    for (const token of [teacherToken, parentToken]) {
+      const res = await write(token).post(`/terms/${closed.id}/reopen`).send({ until: instant(3) });
+      expect(res.status).toBe(403);
+    }
+  });
+});

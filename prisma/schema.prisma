@@ -112,6 +112,14 @@ model Term {
   // sort des sélecteurs sans rien détruire ; la suppression définitive se fait
   // depuis les archives, en connaissance de cause.
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  // Instant jusqu'auquel la saisie reste ouverte sur une période pourtant
+  // terminée. Une correction de dernière minute ne doit pas obliger
+  // l'administration à ressaisir à la place de l'enseignant, ni à repousser la
+  // date de fin du trimestre — ce qui fausserait « période en cours ».
+  // L'échéance est portée par la période plutôt que par une table
+  // d'autorisations nominatives : le besoin réel est de rouvrir un trimestre
+  // pour l'équipe le temps d'un rattrapage, et le verrou se remet seul.
+  reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
   grades      Grade[]

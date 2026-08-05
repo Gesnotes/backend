@@ -22,6 +22,15 @@ export interface TermView {
   /** Ce qu'une suppression définitive emporterait. */
   evaluationCount: number;
   gradeCount: number;
+  /** Période terminée : sa date de fin est passée. */
+  isClosed: boolean;
+  /**
+   * Échéance d'une réouverture accordée par l'administration, `null` sinon.
+   * Passée cette date, le verrou se remet de lui-même.
+   */
+  reopenedUntil: string | null;
+  /** Un enseignant peut y saisir : période non close, ou rouverte à temps. */
+  isOpenForEntry: boolean;
 }
 
 /**
@@ -52,8 +61,34 @@ type TermRow = {
   startDate: Date | null;
   endDate: Date | null;
   archivedAt: Date | null;
+  reopenedUntil: Date | null;
   _count: { evaluations: number; grades: number };
 };
+
+/**
+ * Période terminée : sa date de fin est passée.
+ *
+ * Comparaison en jours, comme `isCurrentTerm` : le dernier jour du trimestre
+ * est celui des compositions, il ne doit pas basculer en « clos » à minuit UTC.
+ */
+export function isClosedTerm(term: { endDate: Date | null }, today: string): boolean {
+  return term.endDate !== null && toIsoDay(term.endDate) < today;
+}
+
+/**
+ * La saisie est-elle ouverte à un enseignant sur cette période ?
+ *
+ * Règle unique, partagée par la vue et par le contrôle d'écriture : une
+ * période non close est ouverte ; une période close ne l'est que si
+ * l'administration a accordé une réouverture non encore expirée.
+ */
+export function isOpenForEntry(
+  term: { endDate: Date | null; reopenedUntil: Date | null },
+  now = new Date(),
+): boolean {
+  if (!isClosedTerm(term, toIsoDay(now))) return true;
+  return term.reopenedUntil !== null && term.reopenedUntil.getTime() > now.getTime();
+}
 
 /**
  * Les compteurs voyagent avec la période : l'écran des archives doit annoncer
@@ -66,6 +101,7 @@ const termSelect = {
   startDate: true,
   endDate: true,
   archivedAt: true,
+  reopenedUntil: true,
   _count: { select: { evaluations: true, grades: true } },
 } as const;
 
@@ -82,6 +118,11 @@ function toView(term: TermRow, today: string): TermView {
     archivedAt: term.archivedAt ? term.archivedAt.toISOString() : null,
     evaluationCount: term._count.evaluations,
     gradeCount: term._count.grades,
+    isClosed: isClosedTerm(term, today),
+    // Une échéance dépassée ne vaut plus rien : on ne la remonte pas, sinon
+    // l'interface annoncerait une réouverture qui ne produit plus aucun effet.
+    reopenedUntil: isOpenForEntry(term) && term.reopenedUntil ? term.reopenedUntil.toISOString() : null,
+    isOpenForEntry: isOpenForEntry(term),
   };
 }
 
@@ -264,6 +305,82 @@ export async function restoreTerm(schoolId: number, id: number): Promise<TermVie
   });
 
   return toView(term, toIsoDay(new Date()));
+}
+
+/**
+ * Au-delà de ce délai, une réouverture n'est plus une soupape mais une levée
+ * du verrou : une période « rouverte jusqu'en 2099 » l'annulerait sans que
+ * personne ne s'en aperçoive.
+ */
+const MAX_REOPEN_DAYS = 90;
+
+/**
+ * Rouvre la saisie sur une période terminée, jusqu'à une échéance.
+ *
+ * Réservé à l'administration. Sans cette soupape, la moindre note oubliée
+ * après la clôture obligeait à saisir à la place de l'enseignant, ou à
+ * repousser la date de fin du trimestre — ce qui aurait faussé « période en
+ * cours » pour toute l'école.
+ */
+export async function reopenTerm(
+  schoolId: number,
+  id: number,
+  until: string,
+): Promise<TermView> {
+  const term = await prisma.term.findFirst({
+    where: { id, schoolId },
+    select: { id: true, label: true, endDate: true, archivedAt: true },
+  });
+  if (!term) throw notFound('Période introuvable');
+
+  if (term.archivedAt) {
+    throw conflict('Cette période est archivée : restaurez-la avant de rouvrir la saisie.');
+  }
+
+  const today = toIsoDay(new Date());
+  if (!isClosedTerm(term, today)) {
+    throw conflict(
+      `« ${term.label} » n'est pas terminée : la saisie y est déjà possible.`,
+      { endDate: term.endDate ? toIsoDay(term.endDate) : null },
+    );
+  }
+
+  const deadline = new Date(until);
+  if (Number.isNaN(deadline.getTime())) throw badRequest('Échéance invalide.');
+
+  const now = new Date();
+  if (deadline.getTime() <= now.getTime()) {
+    throw badRequest('L’échéance doit être dans le futur.');
+  }
+
+  const maxDeadline = new Date(now.getTime() + MAX_REOPEN_DAYS * 24 * 60 * 60 * 1000);
+  if (deadline.getTime() > maxDeadline.getTime()) {
+    throw badRequest(
+      `Une réouverture ne peut pas dépasser ${MAX_REOPEN_DAYS} jours. Au-delà, corrigez plutôt les dates de la période.`,
+      { maxDays: MAX_REOPEN_DAYS },
+    );
+  }
+
+  const updated = await prisma.term.update({
+    where: { id },
+    data: { reopenedUntil: deadline },
+    select: termSelect,
+  });
+
+  return toView(updated, today);
+}
+
+/** Referme la saisie avant l'échéance, une fois la correction faite. */
+export async function closeTermEntry(schoolId: number, id: number): Promise<TermView> {
+  await getTerm(schoolId, id);
+
+  const updated = await prisma.term.update({
+    where: { id },
+    data: { reopenedUntil: null },
+    select: termSelect,
+  });
+
+  return toView(updated, toIsoDay(new Date()));
 }
 
 /**

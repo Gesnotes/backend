@@ -76,6 +76,77 @@ const body = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/**
+ * Verrou de trimestre clos, et sa soupape.
+ *
+ * Un enseignant n'écrit pas sur un trimestre dont la date de fin est passée :
+ * les moyennes et les bulletins en dépendent. L'administration garde la main,
+ * et peut rouvrir la période jusqu'à une échéance pour un rattrapage.
+ */
+describe('Trimestre clos', () => {
+  /** Rend la période de test terminée, éventuellement rouverte jusqu'à `until`. */
+  async function close(until?: Date) {
+    const past = new Date();
+    past.setDate(past.getDate() - 10);
+    await prisma.term.update({
+      where: { id: term.id },
+      data: {
+        startDate: new Date(past.getTime() - 30 * 24 * 60 * 60 * 1000),
+        endDate: past,
+        reopenedUntil: until ?? null,
+      },
+    });
+  }
+
+  it('interdit à un enseignant de créer une évaluation', async () => {
+    await close();
+
+    const res = await api(tokenProfA).post('/teachers/me/evaluations').send(body());
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/terminé/i);
+  });
+
+  it('laisse l’administration corriger malgré la clôture', async () => {
+    await close();
+
+    const res = await api(tokenAdmin).post('/teachers/me/evaluations').send(body());
+
+    expect(res.status).toBe(201);
+  });
+
+  it('rouvre la saisie à l’enseignant jusqu’à l’échéance', async () => {
+    await close(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000));
+
+    const res = await api(tokenProfA).post('/teachers/me/evaluations').send(body());
+
+    expect(res.status).toBe(201);
+  });
+
+  it('referme la saisie une fois l’échéance passée', async () => {
+    await close(new Date(Date.now() - 60_000));
+
+    const res = await api(tokenProfA).post('/teachers/me/evaluations').send(body());
+
+    expect(res.status).toBe(403);
+  });
+
+  it('interdit aussi la modification d’une évaluation existante', async () => {
+    const evaluation = await seedEvaluation({
+      schoolId: school.id,
+      classId: classe6.id,
+      subjectId: maths.id,
+      gradeTypeId: devoirId,
+      termId: term.id,
+    });
+    await close();
+
+    const res = await api(tokenProfA).patch(`/evaluations/${evaluation.id}`).send({ label: 'Renommée' });
+
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('POST /teachers/me/evaluations', () => {
   it('crée une évaluation sur sa classe et sa matière', async () => {
     const res = await api(tokenProfA).post('/teachers/me/evaluations').send(body({ maxValue: 10 }));
