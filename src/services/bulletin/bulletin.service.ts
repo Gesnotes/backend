@@ -9,6 +9,7 @@ import {
   generateStudentBulletinPdf,
 } from './pdf';
 import { conflict, notFound } from '../../errors/AppError';
+import { formatAverage, toCsv, type CsvCell } from '../../lib/csv';
 
 export type BulletinFormat = 'classe' | 'eleves';
 
@@ -105,6 +106,83 @@ export async function exportStudentBulletin(
     buffer,
     filename:
       slugify(`bulletin-${result.lastName}-${result.firstName}-${bulletin.termLabel}`) + '.pdf',
+  };
+}
+
+/**
+ * Export tableur du bulletin d'une classe.
+ *
+ * Le PDF est fait pour être remis aux familles ; celui-ci est fait pour être
+ * retravaillé — trier par moyenne, isoler une matière, recopier dans le tableau
+ * de l'inspection. C'est la demande concrète des écoles, et le PDF n'y répond
+ * pas.
+ *
+ * Une colonne par matière notée, dans le même ordre que le tableau à l'écran,
+ * puis moyenne et rang. Les élèves sont classés par moyenne décroissante, les
+ * non évalués en fin — un élève sans note n'est pas dernier de la classe.
+ */
+export async function exportClassBulletinCsv(
+  auth: AuthPayload,
+  classId: number,
+  termId: number,
+): Promise<{ content: string; filename: string }> {
+  await assertCanViewClass(auth, classId);
+
+  const bulletin = await computeClassBulletin(auth.schoolId, classId, termId);
+  assertHasResults(bulletin.students, bulletin.termLabel);
+
+  // Le calcul ne retient que les matières notées, et chaque élève porte la même
+  // liste : la lire sur le premier suffit, et éviter l'union empêche les
+  // colonnes fantômes.
+  const subjects = bulletin.students[0]?.subjects ?? [];
+
+  const ranked = [...bulletin.students].sort((a, b) => {
+    if (a.average === null && b.average === null) {
+      return a.lastName.localeCompare(b.lastName, 'fr');
+    }
+    if (a.average === null) return 1;
+    if (b.average === null) return -1;
+    return b.average - a.average;
+  });
+
+  const header: CsvCell[] = [
+    'Nom',
+    'Prénom',
+    ...subjects.map((subject) => `${subject.subjectName} (coef. ${subject.coefficient})`),
+    'Moyenne',
+    'Rang',
+  ];
+
+  let rank = 0;
+  const rows: CsvCell[][] = ranked.map((student) => {
+    if (student.average !== null) rank += 1;
+    return [
+      student.lastName,
+      student.firstName,
+      ...subjects.map((subject) =>
+        formatAverage(
+          student.subjects.find((s) => s.subjectId === subject.subjectId)?.average,
+        ),
+      ),
+      formatAverage(student.average),
+      // Chaîne et non nombre : le formateur de cellules met deux décimales,
+      // ce qui a du sens pour une moyenne et donnerait « 1,00 » pour un rang.
+      student.average === null ? '—' : String(rank),
+    ];
+  });
+
+  // Une ligne de synthèse plutôt qu'une cellule isolée : elle survit à un tri.
+  const footer: CsvCell[] = [
+    'Moyenne de la classe',
+    '',
+    ...subjects.map(() => ''),
+    formatAverage(bulletin.classAverage),
+    '',
+  ];
+
+  return {
+    content: toCsv([header, ...rows, footer]),
+    filename: slugify(`bulletin-${bulletin.className}-${bulletin.termLabel}`) + '.csv',
   };
 }
 

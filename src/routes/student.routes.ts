@@ -31,6 +31,23 @@ const listQuery = z.object({
   page: z.coerce.number().int().positive().default(1),
 });
 
+const exportQuery = z.object({
+  class_id: z.coerce.number().int().positive().optional(),
+  include_archived: boolFlag,
+});
+
+/**
+ * Le CSV voyage dans le corps JSON plutôt qu'en `multipart` : le client lit le
+ * fichier et poste son texte. Aucune dépendance d'upload à embarquer pour un
+ * import qui reste, par construction, de quelques dizaines de kilo-octets.
+ */
+const importBody = z.object({
+  csv: z.string().min(1, 'Fichier vide.').max(1_000_000, 'Fichier trop volumineux (1 Mo maximum).'),
+  // Par défaut on ne fait qu'analyser : écrire d'emblée priverait
+  // l'utilisateur de la relecture avant validation.
+  dryRun: z.boolean().default(true),
+});
+
 const createBody = z.object({
   firstName: z.string().trim().min(1).max(100),
   lastName: z.string().trim().min(1).max(100),
@@ -77,6 +94,44 @@ const attachParentBody = z
   .refine((data) => data.parentUserId !== undefined || data.email !== undefined, {
     message: "Indiquez un compte parent existant ou un email pour l'invitation.",
   });
+
+/**
+ * Export tableur de l'annuaire, sans pagination — c'est sa raison d'être : la
+ * liste à l'écran s'arrête à 100 élèves. Déclaré avant `/:id` pour que
+ * « export » ne soit pas lu comme un identifiant.
+ */
+studentRoutes.get(
+  '/export/csv',
+  requireRole('admin', 'teacher'),
+  validate({ query: exportQuery }),
+  async (req, res) => {
+    const { class_id, include_archived } = req.query as unknown as z.infer<typeof exportQuery>;
+
+    const content = await studentService.exportStudentsCsv(authOf(req), {
+      classId: class_id,
+      includeArchived: include_archived,
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="eleves.csv"');
+    res.send(content);
+  },
+);
+
+/**
+ * Import d'une liste. Deux temps : `dryRun` (défaut) rend le rapport ligne à
+ * ligne, puis le même appel avec `dryRun: false` applique. Réservé à
+ * l'administration : c'est une écriture de masse sur l'annuaire.
+ */
+studentRoutes.post(
+  '/import',
+  requireRole('admin'),
+  validate({ body: importBody }),
+  async (req, res) => {
+    const { csv, dryRun } = req.body as z.infer<typeof importBody>;
+    res.json(await studentService.importStudents(schoolIdOf(req), csv, { dryRun }));
+  },
+);
 
 /**
  * Lecture réservée à l'équipe. Le service borne en plus l'enseignant à ses

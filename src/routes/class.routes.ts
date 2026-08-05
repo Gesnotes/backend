@@ -102,6 +102,26 @@ classRoutes.get(
   },
 );
 
+/**
+ * Export tableur. Route distincte de l'export PDF : ce n'est pas une variante
+ * de mise en page mais un autre usage — le PDF se remet aux familles, le CSV se
+ * retravaille.
+ */
+classRoutes.get(
+  '/:id/bulletin/csv',
+  validate({ params: idParam, query: detailQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
+
+    const file = await bulletinService.exportClassBulletinCsv(authOf(req), id, term_id);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.send(file.content);
+  },
+);
+
 classRoutes.post('/', requireRole('admin'), validate({ body: createBody }), async (req, res) => {
   const data = req.body as z.infer<typeof createBody>;
   res.status(201).json(await classService.createClass(schoolIdOf(req), data));
