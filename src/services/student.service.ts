@@ -6,7 +6,8 @@ import type { AuthPayload } from '../types/express';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { contactFields, identityFields } from './userFields';
-import { normalizeEmail, normalizePhone } from '../lib/normalize';
+import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
+import { parseCsv, toCsv, type CsvCell } from '../lib/csv';
 import { sendInvitation } from './invitation.service';
 
 export const STUDENTS_PAGE_SIZE = 100;
@@ -84,6 +85,313 @@ export async function listStudents(
       parents: parents.map((p) => p.parent),
     })),
   };
+}
+
+/**
+ * Export tableur de l'annuaire, **sans pagination**.
+ *
+ * C'est la raison d'être de cet export : la liste à l'écran s'arrête à 100
+ * élèves, et un secrétariat qui veut la liste de l'établissement ne va pas
+ * recopier neuf pages. Le volume reste raisonnable — quelques centaines de
+ * lignes de texte, sans commune mesure avec le JSON complet que la pagination
+ * évitait.
+ *
+ * Le périmètre de l'appelant s'applique comme partout : un enseignant n'exporte
+ * que ses classes.
+ */
+export async function exportStudentsCsv(
+  auth: AuthPayload,
+  filters: { classId?: number; includeArchived?: boolean },
+): Promise<string> {
+  const students = await prisma.student.findMany({
+    where: {
+      schoolId: auth.schoolId,
+      ...(await scopeFor(auth, filters.classId)),
+      ...(filters.includeArchived ? {} : { archivedAt: null }),
+    },
+    orderBy: [{ class: { name: 'asc' } }, { lastName: 'asc' }, { firstName: 'asc' }],
+    include: {
+      class: { select: { name: true } },
+      parents: { include: { parent: { select: parentSelectFor(auth) } } },
+    },
+  });
+
+  const isAdmin = auth.role === 'admin';
+
+  const header: CsvCell[] = [
+    'Nom',
+    'Prénom',
+    'Classe',
+    'Date de naissance',
+    'Parents',
+    // Les coordonnées des familles ne sortent pas pour un enseignant, comme
+    // dans toutes les autres lectures.
+    ...(isAdmin ? ['Contacts parents'] : []),
+    'Statut',
+  ];
+
+  const rows: CsvCell[][] = students.map((student) => {
+    const parents = student.parents.map((p) => p.parent);
+    return [
+      student.lastName,
+      student.firstName,
+      student.class.name,
+      student.birthDate ? student.birthDate.toISOString().slice(0, 10) : '',
+      parents
+        .map((p) => [p.firstName, p.lastName].filter(Boolean).join(' ').trim())
+        .filter(Boolean)
+        .join(' / '),
+      ...(isAdmin ? [parents.map(contactOf).filter(Boolean).join(' / ')] : []),
+      student.archivedAt ? 'Archivé' : 'Inscrit',
+    ];
+  });
+
+  return toCsv([header, ...rows]);
+}
+
+// ------------------------------------------------------ Import d'une liste
+
+/** Ce qu'on a compris d'une ligne du fichier. */
+export type ImportRow = {
+  /** Numéro de ligne dans le fichier, en-tête comprise : c'est ce que voit l'utilisateur. */
+  line: number;
+  firstName: string;
+  lastName: string;
+  className: string;
+  birthDate: string | null;
+  /** `create` : sera inscrit. `duplicate`/`error` : ignoré, avec le motif. */
+  status: 'create' | 'duplicate' | 'error';
+  reason?: string;
+};
+
+export type ImportReport = {
+  rows: ImportRow[];
+  counts: { create: number; duplicate: number; error: number };
+  /** Vrai si rien n'a été écrit : l'appelant n'a demandé qu'un aperçu. */
+  dryRun: boolean;
+};
+
+const IMPORT_MAX_ROWS = 2000;
+
+/**
+ * En-têtes acceptées, par colonne. Les fichiers viennent de secrétariats
+ * différents et personne ne les nommera à l'identique ; comparer sur une clé
+ * insensible à la casse et aux accents évite de refuser « PRENOM » ou
+ * « Classe  ».
+ */
+const COLUMN_ALIASES: Record<'lastName' | 'firstName' | 'className' | 'birthDate', string[]> = {
+  lastName: ['nom', 'nom de famille', 'last name', 'lastname'],
+  firstName: ['prenom', 'prenoms', 'first name', 'firstname'],
+  className: ['classe', 'class', 'classe actuelle'],
+  birthDate: ['date de naissance', 'naissance', 'birth date', 'birthdate', 'ne le', 'nee le'],
+};
+
+/**
+ * Import d'une liste d'élèves depuis un CSV.
+ *
+ * Toujours en deux temps : `dryRun` rend le rapport ligne à ligne, l'appelant
+ * le montre, puis rejoue avec `dryRun: false`. Une inscription de masse qu'on
+ * ne peut pas relire avant de valider est une inscription qu'on passera la
+ * journée à défaire.
+ *
+ * Aucune classe n'est créée implicitement : une classe inconnue est une faute
+ * de frappe neuf fois sur dix, et en créer une silencieusement scinderait
+ * l'effectif d'un niveau entre « 6e A » et « 6eA » sans que personne ne le voie.
+ */
+export async function importStudents(
+  schoolId: number,
+  csv: string,
+  options: { dryRun: boolean },
+): Promise<ImportReport> {
+  const table = parseCsv(csv);
+  const header = table[0];
+  if (!header) throw badRequest('Le fichier est vide.');
+
+  const body = table.slice(1);
+  const columns = mapColumns(header);
+
+  if (body.length === 0) {
+    throw badRequest("Le fichier ne contient que l'en-tête : aucune ligne à importer.");
+  }
+  if (body.length > IMPORT_MAX_ROWS) {
+    throw badRequest(
+      `Le fichier contient ${body.length} lignes ; l'import est limité à ${IMPORT_MAX_ROWS}. Découpez-le par niveau.`,
+      { max: IMPORT_MAX_ROWS },
+    );
+  }
+
+  const classes = await prisma.class.findMany({
+    where: { schoolId, archivedAt: null },
+    select: { id: true, name: true },
+  });
+  const classByKey = new Map(classes.map((klass) => [labelKey(klass.name), klass.id]));
+
+  const existing = await prisma.student.findMany({
+    where: { schoolId },
+    select: { firstName: true, lastName: true, classId: true },
+  });
+  // Les élèves archivés comptent comme doublons : réinscrire un homonyme
+  // créerait une seconde scolarité au lieu de restaurer la première.
+  const seen = new Set(existing.map((s) => studentKey(s.firstName, s.lastName, s.classId)));
+
+  const rows: ImportRow[] = body.map((cells, index) =>
+    readRow(cells, index + 2, columns, classByKey, seen),
+  );
+
+  const counts = {
+    create: rows.filter((row) => row.status === 'create').length,
+    duplicate: rows.filter((row) => row.status === 'duplicate').length,
+    error: rows.filter((row) => row.status === 'error').length,
+  };
+
+  if (options.dryRun || counts.create === 0) {
+    return { rows, counts, dryRun: true };
+  }
+
+  // Tout ou rien : un import à moitié appliqué laisse le secrétariat sans
+  // moyen de savoir où il s'est arrêté.
+  await prisma.$transaction(
+    rows
+      .filter((row) => row.status === 'create')
+      .map((row) =>
+        prisma.student.create({
+          data: {
+            schoolId,
+            classId: classByKey.get(labelKey(row.className))!,
+            firstName: row.firstName,
+            lastName: row.lastName,
+            birthDate: row.birthDate ? new Date(row.birthDate) : null,
+          },
+        }),
+      ),
+  );
+
+  return { rows, counts, dryRun: false };
+}
+
+function studentKey(firstName: string, lastName: string, classId: number): string {
+  return `${labelKey(lastName)}|${labelKey(firstName)}|${classId}`;
+}
+
+/** Position de chaque colonne dans l'en-tête, ou -1 si absente. */
+function mapColumns(header: string[]): Record<keyof typeof COLUMN_ALIASES, number> {
+  const keys = header.map((cell) => labelKey(cell));
+  const find = (aliases: string[]) => keys.findIndex((key) => aliases.includes(key));
+
+  const columns = {
+    lastName: find(COLUMN_ALIASES.lastName),
+    firstName: find(COLUMN_ALIASES.firstName),
+    className: find(COLUMN_ALIASES.className),
+    birthDate: find(COLUMN_ALIASES.birthDate),
+  };
+
+  const missing = (['lastName', 'firstName', 'className'] as const).filter(
+    (key) => columns[key] === -1,
+  );
+  if (missing.length > 0) {
+    throw badRequest(
+      `Colonnes manquantes dans l'en-tête : ${missing
+        .map((key) => ({ lastName: 'Nom', firstName: 'Prénom', className: 'Classe' })[key])
+        .join(', ')}. Attendu : Nom ; Prénom ; Classe ; Date de naissance (facultative).`,
+      { attendu: ['Nom', 'Prénom', 'Classe', 'Date de naissance'] },
+    );
+  }
+
+  return columns;
+}
+
+/**
+ * Analyse d'une ligne. Ne lève jamais : une ligne fautive devient une ligne en
+ * erreur dans le rapport, pour que l'utilisateur les voie **toutes** d'un coup
+ * plutôt que de corriger son fichier une faute à la fois.
+ */
+function readRow(
+  cells: string[],
+  line: number,
+  columns: Record<keyof typeof COLUMN_ALIASES, number>,
+  classByKey: Map<string, number>,
+  seen: Set<string>,
+): ImportRow {
+  const at = (index: number) => (index === -1 ? '' : (cells[index] ?? '').trim());
+
+  const lastName = at(columns.lastName);
+  const firstName = at(columns.firstName);
+  const className = at(columns.className);
+  const rawBirth = at(columns.birthDate);
+
+  const base = { line, firstName, lastName, className, birthDate: null as string | null };
+
+  if (!lastName || !firstName) {
+    return { ...base, status: 'error', reason: 'Nom ou prénom manquant.' };
+  }
+
+  const classId = classByKey.get(labelKey(className));
+  if (classId === undefined) {
+    return {
+      ...base,
+      status: 'error',
+      reason: className
+        ? `La classe « ${className} » n'existe pas. Créez-la d'abord, ou corrigez l'orthographe.`
+        : 'Classe manquante.',
+    };
+  }
+
+  const birthDate = rawBirth ? parseBirthDate(rawBirth) : null;
+  if (rawBirth && birthDate === null) {
+    return {
+      ...base,
+      status: 'error',
+      reason: `Date de naissance illisible : « ${rawBirth} ». Attendu JJ/MM/AAAA ou AAAA-MM-JJ.`,
+    };
+  }
+
+  const key = studentKey(firstName, lastName, classId);
+  if (seen.has(key)) {
+    return { ...base, birthDate, status: 'duplicate', reason: 'Déjà inscrit dans cette classe.' };
+  }
+
+  // Le fichier lui-même peut contenir deux fois la même ligne.
+  seen.add(key);
+
+  return { ...base, birthDate, status: 'create' };
+}
+
+/**
+ * Date au format français ou ISO.
+ *
+ * Excel réécrit volontiers les dates selon la locale du poste : accepter les
+ * deux évite de renvoyer le secrétariat reformater 300 cellules.
+ */
+function parseBirthDate(value: string): string | null {
+  const french = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/.exec(value);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  const parts = french
+    ? { year: french[3]!, month: french[2]!.padStart(2, '0'), day: french[1]!.padStart(2, '0') }
+    : iso
+      ? { year: iso[1]!, month: iso[2]!, day: iso[3]! }
+      : null;
+
+  if (!parts) return null;
+  const { year, month, day } = parts;
+
+  const date = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  // Rejette le 31 février, que `Date` accepterait en glissant au 3 mars.
+  if (date.toISOString().slice(0, 10) !== `${year}-${month}-${day}`) return null;
+
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Coordonnée affichable d'un parent. Le `select` varie selon le rôle
+ * (`contactFields` ou `identityFields`) : la présence des champs se vérifie
+ * donc à l'exécution, pas au type.
+ */
+function contactOf(parent: object): string {
+  const email = 'email' in parent ? parent.email : null;
+  const phone = 'phone' in parent ? parent.phone : null;
+  return (typeof email === 'string' && email) || (typeof phone === 'string' && phone) || '';
 }
 
 export async function getStudent(auth: AuthPayload, id: number) {
