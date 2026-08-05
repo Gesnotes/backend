@@ -2,7 +2,7 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { badRequest, notFound } from '../errors/AppError';
 import { emitEvent } from '../lib/events';
-import { assertCanGrade } from './grade.service';
+import { assertCanGrade, assertTermOpen } from './grade.service';
 
 /**
  * Saisie d'une évaluation pour toute une classe, en une requête.
@@ -52,6 +52,7 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
   if (!evaluation) throw notFound('Évaluation introuvable');
 
   await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
+  await assertTermOpen(auth, evaluation.termId);
 
   const maxValue = Number(evaluation.maxValue);
 

@@ -241,16 +241,25 @@ export async function searchParents(schoolId: number, query: string) {
 export async function attachParent(
   schoolId: number,
   studentId: number,
-  input:
-    | { parentUserId: number }
-    | { email: string; firstName?: string; lastName?: string; phone?: string },
+  input: {
+    parentUserId?: number;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  },
 ) {
   await getStudentForAdmin(schoolId, studentId);
 
   const parent =
-    'parentUserId' in input
+    input.parentUserId !== undefined
       ? await findExistingParent(schoolId, input.parentUserId)
-      : await createParentAccount(schoolId, input);
+      : await createParentAccount(schoolId, {
+          email: input.email!,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          phone: input.phone,
+        });
 
   const already = await prisma.studentParent.findUnique({
     where: { studentId_parentUserId: { studentId, parentUserId: parent.id } },

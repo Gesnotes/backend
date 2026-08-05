@@ -3,7 +3,7 @@ import { Prisma } from '../generated/prisma/client';
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { badRequest, notFound } from '../errors/AppError';
-import { assertCanGrade, assertContext } from './grade.service';
+import { assertCanGrade, assertContext, assertTermOpen } from './grade.service';
 
 /**
  * Évaluations : une interrogation, un devoir, une composition **concrets**.
@@ -102,6 +102,7 @@ export async function createEvaluation(
 ) {
   await assertCanGrade(auth, data.classId, data.subjectId);
   await assertContext(auth.schoolId, data.gradeTypeId, data.termId);
+  await assertTermOpen(auth, data.termId);
 
   const maxValue = data.maxValue ?? 20;
   assertBareme(maxValue);
@@ -190,6 +191,7 @@ async function findEvaluationForWrite(auth: AuthPayload, id: number) {
   if (!evaluation) throw notFound('Évaluation introuvable');
 
   await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
+  await assertTermOpen(auth, evaluation.termId);
 
   return evaluation;
 }

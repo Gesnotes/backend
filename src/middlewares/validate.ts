@@ -23,15 +23,23 @@ export function validate(schemas: Schemas) {
 
       const result = schema.safeParse(req[key]);
       if (!result.success) {
-        return next(
-          badRequest(
-            'Données invalides',
-            result.error.issues.map((issue) => ({
-              champ: [key, ...issue.path].join('.'),
-              message: issue.message,
-            })),
-          ),
-        );
+        const details = result.error.issues.map((issue) => ({
+          champ: [key, ...issue.path].join('.'),
+          message: issue.message,
+        }));
+
+        // Message affichable : on nomme le champ fautif et sa raison, au lieu
+        // d'un « Données invalides » que l'utilisateur ne sait pas corriger.
+        // Le détail complet reste dans `details` pour la mise en évidence.
+        const first = result.error.issues[0];
+        const field = first ? [...first.path].reverse().find((p) => typeof p === 'string') : undefined;
+        const message = first
+          ? typeof field === 'string'
+            ? `Champ « ${field} » : ${first.message}`
+            : first.message
+          : 'Données invalides';
+
+        return next(badRequest(message, details));
       }
 
       // req.query et req.params sont en lecture seule sur Express 5.
