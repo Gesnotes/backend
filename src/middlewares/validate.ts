@@ -10,6 +10,59 @@ interface Schemas {
 }
 
 /**
+ * Nom lisible d'un champ, pour le message d'erreur.
+ *
+ * Les clés de l'API sont techniques (`classId`, `maxValue`, `confirm_label`) :
+ * telles quelles dans un message, elles n'apprennent rien à une secrétaire qui
+ * cherche quel champ de son formulaire est en cause. Un champ absent de cette
+ * table est rendu tel quel — mieux vaut un nom technique qu'un message muet.
+ */
+const FIELD_LABELS: Record<string, string> = {
+  identifier: 'Email ou téléphone',
+  password: 'Mot de passe',
+  newPassword: 'Nouveau mot de passe',
+  token: 'Lien de connexion',
+  email: 'Email',
+  phone: 'Téléphone',
+  firstName: 'Prénom',
+  lastName: 'Nom',
+  birthDate: 'Date de naissance',
+  name: 'Nom',
+  level: 'Niveau',
+  label: 'Libellé',
+  className: 'Classe',
+  classId: 'Classe',
+  class_id: 'Classe',
+  subjectId: 'Matière',
+  subject_id: 'Matière',
+  studentId: 'Élève',
+  student_id: 'Élève',
+  teacherUserId: 'Enseignant',
+  termId: 'Période',
+  term_id: 'Période',
+  gradeTypeId: 'Type de note',
+  grade_type_id: 'Type de note',
+  evaluationId: 'Évaluation',
+  value: 'Note',
+  maxValue: 'Barème',
+  coefficient: 'Coefficient',
+  weight: 'Poids',
+  comment: 'Commentaire',
+  startDate: 'Date de début',
+  endDate: 'Date de fin',
+  date: 'Date',
+  until: 'Échéance',
+  csv: 'Fichier',
+  page: 'Page',
+  assignments: 'Affectations',
+  entries: 'Notes saisies',
+};
+
+function labelOf(field: string): string {
+  return FIELD_LABELS[field] ?? `Champ « ${field} »`;
+}
+
+/**
  * Validation des entrées par Zod, en middleware.
  *
  * Les valeurs validées remplacent les valeurs brutes : le contrôleur reçoit
@@ -35,9 +88,9 @@ export function validate(schemas: Schemas) {
         const field = first ? [...first.path].reverse().find((p) => typeof p === 'string') : undefined;
         const message = first
           ? typeof field === 'string'
-            ? `Champ « ${field} » : ${first.message}`
+            ? `${labelOf(field)} : ${first.message}`
             : first.message
-          : 'Données invalides';
+          : 'Les informations envoyées ne sont pas valables.';
 
         return next(badRequest(message, details));
       }

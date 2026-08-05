@@ -42,7 +42,10 @@ const exportQuery = z.object({
  * import qui reste, par construction, de quelques dizaines de kilo-octets.
  */
 const importBody = z.object({
-  csv: z.string().min(1, 'Fichier vide.').max(1_000_000, 'Fichier trop volumineux (1 Mo maximum).'),
+  csv: z
+    .string()
+    .min(1, "Aucun fichier n'a été reçu.")
+    .max(1_000_000, 'Ce fichier est trop lourd : 1 Mo au maximum.'),
   // Par défaut on ne fait qu'analyser : écrire d'emblée priverait
   // l'utilisateur de la relecture avant validation.
   dryRun: z.boolean().default(true),

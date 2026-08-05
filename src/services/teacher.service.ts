@@ -87,7 +87,7 @@ export async function createTeacher(
   await assertAssignmentsBelongToSchool(schoolId, data.assignments ?? []);
 
   const existing = await prisma.user.findFirst({ where: { schoolId, email } });
-  if (existing) throw conflict('Un compte utilise déjà cet email dans cette école');
+  if (existing) throw conflict('Cette adresse email est déjà utilisée par un autre compte de l’établissement.');
 
   const teacher = await prisma.$transaction(async (tx) => {
     const created = await tx.user.create({
@@ -150,7 +150,7 @@ export async function updateTeacher(
     const clash = await prisma.user.findFirst({
       where: { schoolId, email, id: { not: id } },
     });
-    if (clash) throw conflict('Un compte utilise déjà cet email dans cette école');
+    if (clash) throw conflict('Cette adresse email est déjà utilisée par un autre compte de l’établissement.');
   }
 
   if (data.assignments) await assertAssignmentsBelongToSchool(schoolId, data.assignments);

@@ -26,7 +26,7 @@ export async function assertCanGrade(auth: AuthPayload, classId: number, subject
   if (!subject) throw notFound('Matière introuvable');
 
   if (auth.role === 'admin') return;
-  if (auth.role !== 'teacher') throw forbidden('Seuls les enseignants saisissent des notes');
+  if (auth.role !== 'teacher') throw forbidden('Seuls les enseignants peuvent saisir des notes.');
 
   const assignment = await prisma.teacherAssignment.findUnique({
     where: {
@@ -39,7 +39,7 @@ export async function assertCanGrade(auth: AuthPayload, classId: number, subject
   });
 
   if (!assignment) {
-    throw forbidden("Vous n'enseignez pas cette matière dans cette classe");
+    throw forbidden("Vous n'enseignez pas cette matière dans cette classe.");
   }
 }
 
@@ -191,7 +191,7 @@ export async function createGrade(
   });
   if (!student) throw notFound('Élève introuvable');
   if (student.classId !== evaluation.classId) {
-    throw badRequest("L'élève n'appartient pas à la classe de cette évaluation");
+    throw badRequest("Cet élève n'est pas inscrit dans la classe concernée par cette évaluation.");
   }
 
   await assertCanGrade(auth, evaluation.classId, evaluation.subjectId);
@@ -206,7 +206,7 @@ export async function createGrade(
     },
   });
   if (already) {
-    throw conflict('Cet élève a déjà une note pour cette évaluation', { gradeId: already.id });
+    throw conflict('Cet élève a déjà une note pour cette évaluation.', { gradeId: already.id });
   }
 
   const grade = await prisma.grade.create({
@@ -368,9 +368,9 @@ export async function assertContext(schoolId: number, gradeTypeId: number, termI
 }
 
 function assertValueInRange(value: number, maxValue: number) {
-  if (maxValue <= 0) throw badRequest('La note maximale doit être strictement positive');
+  if (maxValue <= 0) throw badRequest('Le barème doit être supérieur à zéro.');
   if (value < 0 || value > maxValue) {
-    throw badRequest(`La note doit être comprise entre 0 et ${maxValue}`, { value, maxValue });
+    throw badRequest(`La note doit être comprise entre 0 et ${maxValue}.`, { value, maxValue });
   }
 }
 

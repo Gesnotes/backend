@@ -21,7 +21,7 @@ export const ALL_ROLES: Role[] = ['admin', 'teacher', 'parent'];
 export function requireRole(...roles: Role[]) {
   return function roleGuard(req: Request, _res: Response, next: NextFunction) {
     if (!req.auth) return next(unauthorized());
-    if (!roles.includes(req.auth.role)) return next(forbidden('Rôle insuffisant'));
+    if (!roles.includes(req.auth.role)) return next(forbidden("Vous n'avez pas accès à cette partie de Gesnotes."));
     return next();
   };
 }

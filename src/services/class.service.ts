@@ -25,11 +25,11 @@ export async function assertCanViewClass(auth: AuthPayload, classId: number) {
     const assignment = await prisma.teacherAssignment.findFirst({
       where: { teacherUserId: auth.userId, classId },
     });
-    if (!assignment) throw forbidden("Vous n'enseignez pas dans cette classe");
+    if (!assignment) throw forbidden("Vous n'enseignez pas dans cette classe.");
     return klass;
   }
 
-  throw forbidden('Réservé à l\'équipe pédagogique');
+  throw forbidden("Les résultats d'une classe sont réservés à l'équipe pédagogique.");
 }
 
 export async function listClasses(schoolId: number, termId?: number, includeArchived = false) {
