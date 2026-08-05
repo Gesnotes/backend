@@ -161,6 +161,18 @@ studentRoutes.delete(
   },
 );
 
+/** Renvoie une invitation à un parent déjà associé (email perdu, lien expiré). */
+studentRoutes.post(
+  '/:id/parents/:parentId/invitation',
+  requireRole('admin'),
+  validate({ params: parentParams }),
+  async (req, res) => {
+    const { id, parentId } = req.params as unknown as z.infer<typeof parentParams>;
+    await studentService.resendParentInvitation(schoolIdOf(req), id, parentId);
+    res.json({ message: 'Invitation envoyée.' });
+  },
+);
+
 /** GET /parents/search?q= — recherche d'un compte parent à associer. */
 parentSearchRoutes.get(
   '/search',
