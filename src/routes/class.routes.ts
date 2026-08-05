@@ -33,8 +33,8 @@ const listQuery = z.object({
 const detailQuery = z.object({ term_id: z.coerce.number().int().positive() });
 
 const createBody = z.object({
-  name: z.string().trim().min(1).max(50),
-  level: z.string().trim().min(1).max(20),
+  name: z.string({ message: 'Le nom de la classe est obligatoire.' }).trim().min(1, 'Le nom de la classe est obligatoire.').max(50, 'Le nom ne doit pas dépasser 50 caractères.'),
+  level: z.string({ message: 'Le niveau est obligatoire.' }).trim().min(1, 'Le niveau est obligatoire.').max(20, 'Le niveau ne doit pas dépasser 20 caractères.'),
   copyCoefficientsFromClassId: z.coerce.number().int().positive().optional(),
 });
 
