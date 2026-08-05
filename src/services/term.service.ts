@@ -17,6 +17,11 @@ export interface TermView {
   endDate: string | null;
   /** Période en cours à la date du jour. Au plus une l'est. */
   isCurrent: boolean;
+  /** Non nul : la période est sortie des sélecteurs, sans rien perdre. */
+  archivedAt: string | null;
+  /** Ce qu'une suppression définitive emporterait. */
+  evaluationCount: number;
+  gradeCount: number;
 }
 
 /**
@@ -41,16 +46,42 @@ function toIsoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function toView(
-  term: { id: number; label: string; startDate: Date | null; endDate: Date | null },
-  today: string,
-): TermView {
+type TermRow = {
+  id: number;
+  label: string;
+  startDate: Date | null;
+  endDate: Date | null;
+  archivedAt: Date | null;
+  _count: { evaluations: number; grades: number };
+};
+
+/**
+ * Les compteurs voyagent avec la période : l'écran des archives doit annoncer
+ * ce qu'une suppression définitive détruit, et le faire ligne par ligne coûtait
+ * une requête par période.
+ */
+const termSelect = {
+  id: true,
+  label: true,
+  startDate: true,
+  endDate: true,
+  archivedAt: true,
+  _count: { select: { evaluations: true, grades: true } },
+} as const;
+
+function toView(term: TermRow, today: string): TermView {
   return {
     id: term.id,
     label: term.label,
     startDate: term.startDate ? toIsoDay(term.startDate) : null,
     endDate: term.endDate ? toIsoDay(term.endDate) : null,
-    isCurrent: isCurrentTerm(term, today),
+    // Une période archivée n'est jamais « en cours » : elle ne doit pas être
+    // proposée comme sélection par défaut le jour où ses dates couvrent
+    // aujourd'hui.
+    isCurrent: term.archivedAt === null && isCurrentTerm(term, today),
+    archivedAt: term.archivedAt ? term.archivedAt.toISOString() : null,
+    evaluationCount: term._count.evaluations,
+    gradeCount: term._count.grades,
   };
 }
 
@@ -59,12 +90,16 @@ function toView(
  *
  * Les périodes sans date de début passent en fin de liste : elles ne peuvent
  * pas être situées dans l'année, et les intercaler donnerait un ordre arbitraire.
+ *
+ * Les archivées sont exclues par défaut : elles ne doivent plus apparaître dans
+ * le sélecteur de période, qui est le premier consommateur de cette liste. Seul
+ * l'écran des archives demande `includeArchived`.
  */
-export async function listTerms(schoolId: number): Promise<TermView[]> {
+export async function listTerms(schoolId: number, includeArchived = false): Promise<TermView[]> {
   const terms = await prisma.term.findMany({
-    where: { schoolId },
+    where: { schoolId, ...(includeArchived ? {} : { archivedAt: null }) },
     orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
-    select: { id: true, label: true, startDate: true, endDate: true },
+    select: termSelect,
   });
 
   const today = toIsoDay(new Date());
@@ -72,10 +107,7 @@ export async function listTerms(schoolId: number): Promise<TermView[]> {
 }
 
 export async function getTerm(schoolId: number, id: number): Promise<TermView> {
-  const term = await prisma.term.findFirst({
-    where: { id, schoolId },
-    select: { id: true, label: true, startDate: true, endDate: true },
-  });
+  const term = await prisma.term.findFirst({ where: { id, schoolId }, select: termSelect });
   if (!term) throw notFound('Période introuvable');
 
   return toView(term, toIsoDay(new Date()));
@@ -106,6 +138,11 @@ function assertDateRange(startDate?: string | null, endDate?: string | null) {
 /**
  * Deux périodes qui se chevauchent rendent `isCurrent` ambigu et faussent la
  * lecture d'un bulletin : une même note tomberait dans deux trimestres.
+ *
+ * Les périodes archivées sont ignorées : elles ne sont plus proposées nulle
+ * part, et les garder dans le contrôle rendrait l'archivage inutile — on
+ * archive justement une période mal saisie pour pouvoir la refaire aux mêmes
+ * dates.
  */
 async function assertNoOverlap(
   schoolId: number,
@@ -118,6 +155,7 @@ async function assertNoOverlap(
   const overlapping = await prisma.term.findFirst({
     where: {
       schoolId,
+      archivedAt: null,
       ...(excludeId ? { id: { not: excludeId } } : {}),
       startDate: { lte: new Date(endDate) },
       endDate: { gte: new Date(startDate) },
@@ -143,7 +181,7 @@ export async function createTerm(schoolId: number, data: TermInput): Promise<Ter
       startDate: data.startDate ? new Date(data.startDate) : null,
       endDate: data.endDate ? new Date(data.endDate) : null,
     },
-    select: { id: true, label: true, startDate: true, endDate: true },
+    select: termSelect,
   });
 
   return toView(term, toIsoDay(new Date()));
@@ -184,30 +222,87 @@ export async function updateTerm(
         ? { endDate: data.endDate ? new Date(data.endDate) : null }
         : {}),
     },
-    select: { id: true, label: true, startDate: true, endDate: true },
+    select: termSelect,
   });
 
   return toView(term, toIsoDay(new Date()));
 }
 
 /**
- * Suppression refusée dès qu'une note est rattachée.
+ * Archivage : comportement par défaut de la suppression d'une période.
  *
- * Il n'y a pas d'archivage sur `Term` : la cascade emporterait les notes de
- * tout un trimestre, c'est-à-dire le travail de saisie d'une équipe entière.
- * Renommer la période couvre le cas réel (« Trimestre 1 » créé par erreur).
+ * `evaluations.term_id` et `grades.term_id` sont en `RESTRICT` — supprimer une
+ * période qui a servi échouait en base et remontait au client en 500 illisible.
+ * Refuser aurait laissé l'administration sans issue : une période créée par
+ * erreur puis utilisée ne pouvait plus disparaître. L'archivage la sort des
+ * sélecteurs et des listes sans rien détruire ; la suppression réelle devient
+ * une décision distincte, prise depuis les archives.
  */
-export async function deleteTerm(schoolId: number, id: number): Promise<void> {
-  const term = await prisma.term.findFirst({ where: { id, schoolId }, select: { id: true } });
-  if (!term) throw notFound('Période introuvable');
+export async function archiveTerm(schoolId: number, id: number): Promise<TermView> {
+  await getTerm(schoolId, id);
 
-  const gradeCount = await prisma.grade.count({ where: { termId: id } });
-  if (gradeCount > 0) {
+  const term = await prisma.term.update({
+    where: { id },
+    data: { archivedAt: new Date() },
+    select: termSelect,
+  });
+
+  return toView(term, toIsoDay(new Date()));
+}
+
+export async function restoreTerm(schoolId: number, id: number): Promise<TermView> {
+  const existing = await getTerm(schoolId, id);
+
+  // Le chevauchement n'est contrôlé qu'entre périodes actives : restaurer une
+  // période sur des dates reprises depuis rendrait `isCurrent` ambigu.
+  await assertNoOverlap(schoolId, existing.startDate, existing.endDate, id);
+
+  const term = await prisma.term.update({
+    where: { id },
+    data: { archivedAt: null },
+    select: termSelect,
+  });
+
+  return toView(term, toIsoDay(new Date()));
+}
+
+/**
+ * Suppression définitive, en cascade sur les évaluations et les notes.
+ *
+ * Réservée aux périodes déjà archivées : effacer un trimestre détruit le
+ * travail de saisie d'une équipe entière, et rien ne permet de revenir en
+ * arrière. Comme pour la suppression d'un élève, le libellé exact doit être
+ * retapé — c'est le seul garde-fou contre le clic sur la mauvaise ligne.
+ *
+ * L'ordre compte : les notes d'abord (elles référencent la période *et* les
+ * évaluations), puis les évaluations, puis la période. Le tout dans une
+ * transaction, faute de quoi un échec en cours de route laisserait une période
+ * à moitié vidée.
+ */
+export async function deleteTermPermanently(
+  schoolId: number,
+  id: number,
+  expectedLabel: string,
+): Promise<void> {
+  const term = await getTerm(schoolId, id);
+
+  if (!term.archivedAt) {
     throw conflict(
-      `Suppression impossible : ${gradeCount} note(s) sont rattachées à cette période.`,
-      { gradeCount },
+      'Archivez la période avant de la supprimer définitivement.',
+      { termId: id },
     );
   }
 
-  await prisma.term.delete({ where: { id } });
+  if (expectedLabel.trim().toLowerCase() !== term.label.trim().toLowerCase()) {
+    throw badRequest(
+      'La confirmation ne correspond pas au libellé de la période. Cette suppression est définitive.',
+      { attendu: term.label },
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.grade.deleteMany({ where: { termId: id } });
+    await tx.evaluation.deleteMany({ where: { termId: id } });
+    await tx.term.delete({ where: { id } });
+  });
 }

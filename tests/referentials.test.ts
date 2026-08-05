@@ -296,18 +296,11 @@ describe('Écriture des périodes', () => {
     expect(res.body).toMatchObject({ label: 'Premier trimestre', startDate: '2025-09-01' });
   });
 
-  it('supprime une période vide', async () => {
-    const created = await write(adminToken).post('/terms').send(term);
-    expect((await write(adminToken).delete(`/terms/${created.body.id}`)).status).toBe(204);
-  });
-
   /**
-   * Il n'y a pas d'archivage sur Term : la cascade emporterait les notes de
-   * tout un trimestre, soit le travail de saisie d'une équipe entière.
+   * Remplit une période : une classe, une matière, un élève et une note — donc
+   * aussi une évaluation, `seedGrade` en créant une au passage.
    */
-  it('refuse de supprimer une période portant des notes', async () => {
-    const created = await write(adminToken).post('/terms').send(term);
-
+  async function fillTerm(termId: number) {
     const klass = await prisma.class.create({
       data: { schoolId: schoolA.id, name: '6e A', level: '6e' },
     });
@@ -325,15 +318,106 @@ describe('Écriture des périodes', () => {
       studentId: student.id,
       subjectId: subject.id,
       gradeTypeId: gradeType.id,
-      termId: created.body.id,
+      termId,
       value: 15,
       maxValue: 20,
     });
+  }
 
-    const res = await write(adminToken).delete(`/terms/${created.body.id}`);
+  it('archive une période vide', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    expect((await write(adminToken).delete(`/terms/${created.body.id}`)).status).toBe(204);
+
+    // Archivée, pas effacée : elle sort des listes mais existe toujours.
+    expect((await api(adminToken).get('/terms')).body).toEqual([]);
+    const archived = (await api(adminToken).get('/terms?include_archived=true')).body;
+    expect(archived).toHaveLength(1);
+    expect(archived[0].archivedAt).not.toBeNull();
+  });
+
+  /**
+   * `evaluations.term_id` et `grades.term_id` sont en RESTRICT : le DELETE
+   * échouait en base et remontait en 500. L'archivage règle le cas sans rien
+   * détruire — c'est le comportement par défaut, y compris pour une période
+   * pleine.
+   */
+  it('archive une période portant des notes plutôt que d’échouer', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    await fillTerm(created.body.id);
+
+    expect((await write(adminToken).delete(`/terms/${created.body.id}`)).status).toBe(204);
+
+    const archived = (await api(adminToken).get('/terms?include_archived=true')).body[0];
+    expect(archived.archivedAt).not.toBeNull();
+    expect(archived).toMatchObject({ evaluationCount: 1, gradeCount: 1 });
+    // Rien n'a été détruit.
+    expect(await prisma.grade.count({ where: { termId: created.body.id } })).toBe(1);
+  });
+
+  it('restaure une période archivée', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    await write(adminToken).delete(`/terms/${created.body.id}`);
+
+    const res = await write(adminToken).post(`/terms/${created.body.id}/restore`).send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBeNull();
+    expect((await api(adminToken).get('/terms')).body).toHaveLength(1);
+  });
+
+  it('n’oppose pas une période archivée au contrôle de chevauchement', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    await write(adminToken).delete(`/terms/${created.body.id}`);
+
+    // Tout l'intérêt de l'archivage : refaire la période aux mêmes dates.
+    const res = await write(adminToken).post('/terms').send(term);
+    expect(res.status).toBe(201);
+  });
+
+  it('exige l’archivage avant la suppression définitive', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    const res = await write(adminToken).delete(
+      `/terms/${created.body.id}?permanent=true&confirm_label=${encodeURIComponent(term.label)}`,
+    );
 
     expect(res.status).toBe(409);
-    expect(res.body.error.details.gradeCount).toBe(1);
+  });
+
+  it('exige le libellé exact pour la suppression définitive', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    await write(adminToken).delete(`/terms/${created.body.id}`);
+
+    const res = await write(adminToken).delete(
+      `/terms/${created.body.id}?permanent=true&confirm_label=Trimestre%202`,
+    );
+
+    expect(res.status).toBe(400);
+    expect(await prisma.term.count({ where: { id: created.body.id } })).toBe(1);
+  });
+
+  it('supprime définitivement une période archivée, évaluations et notes comprises', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+    await fillTerm(created.body.id);
+    await write(adminToken).delete(`/terms/${created.body.id}`);
+
+    const res = await write(adminToken).delete(
+      `/terms/${created.body.id}?permanent=true&confirm_label=${encodeURIComponent(term.label)}`,
+    );
+
+    expect(res.status).toBe(204);
+    expect(await prisma.term.count({ where: { id: created.body.id } })).toBe(0);
+    expect(await prisma.evaluation.count({ where: { termId: created.body.id } })).toBe(0);
+    expect(await prisma.grade.count({ where: { termId: created.body.id } })).toBe(0);
+  });
+
+  it('réserve l’archivage et la restauration à l’administration', async () => {
+    const created = await write(adminToken).post('/terms').send(term);
+
+    expect((await write(teacherToken).delete(`/terms/${created.body.id}`)).status).toBe(403);
+    expect(
+      (await write(parentToken).post(`/terms/${created.body.id}/restore`).send({})).status,
+    ).toBe(403);
   });
 
   it('réserve l’écriture à l’administration', async () => {

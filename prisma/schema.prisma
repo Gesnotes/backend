@@ -107,11 +107,17 @@ model Term {
   label     String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
   startDate DateTime? @map("start_date") @db.Date
   endDate   DateTime? @map("end_date") @db.Date
+  // Une période portant des évaluations ne peut pas être effacée directement :
+  // `evaluations.term_id` et `grades.term_id` sont en RESTRICT. L'archivage la
+  // sort des sélecteurs sans rien détruire ; la suppression définitive se fait
+  // depuis les archives, en connaissance de cause.
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
   grades      Grade[]
   evaluations Evaluation[]
 
+  @@index([schoolId, archivedAt])
   @@map("terms")
 }
 
