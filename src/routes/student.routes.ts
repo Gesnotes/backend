@@ -5,6 +5,7 @@ import * as studentService from '../services/student.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
 import { authOf, schoolIdOf } from '../lib/requestContext';
+import { isValidPhone, PHONE_FORMAT_MESSAGE } from '../lib/normalize';
 import { validate } from '../middlewares/validate';
 
 export const studentRoutes = Router();
@@ -64,7 +65,14 @@ const attachParentBody = z
     email: z.email('Adresse email invalide.').optional(),
     firstName: z.string().trim().max(100).optional(),
     lastName: z.string().trim().max(100).optional(),
-    phone: z.string().trim().max(30).optional(),
+    // Le parent se connecte par email ou par téléphone : un numéro mal saisi
+    // le laisserait dehors sans que personne ne fasse le lien.
+    phone: z
+      .string()
+      .trim()
+      .max(30)
+      .refine((value) => value === '' || isValidPhone(value), PHONE_FORMAT_MESSAGE)
+      .optional(),
   })
   .refine((data) => data.parentUserId !== undefined || data.email !== undefined, {
     message: "Indiquez un compte parent existant ou un email pour l'invitation.",

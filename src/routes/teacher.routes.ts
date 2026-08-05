@@ -5,6 +5,7 @@ import * as teacherService from '../services/teacher.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
 import { schoolIdOf } from '../lib/requestContext';
+import { isValidPhone, PHONE_FORMAT_MESSAGE } from '../lib/normalize';
 import { validate } from '../middlewares/validate';
 
 export const teacherRoutes = Router();
@@ -26,11 +27,22 @@ const assignmentSchema = z.object({
   subjectId: z.coerce.number().int().positive(),
 });
 
+/**
+ * Le téléphone sert d'identifiant de connexion : un numéro mal saisi ne se voit
+ * pas à la création, il se découvre le jour où l'enseignant n'arrive pas à se
+ * connecter. La chaîne vide vaut « pas de numéro » et reste acceptée.
+ */
+const phoneField = z
+  .string()
+  .trim()
+  .max(30)
+  .refine((value) => value === '' || isValidPhone(value), PHONE_FORMAT_MESSAGE);
+
 const createBody = z.object({
   email: z.email(),
   firstName: z.string().trim().max(100).optional(),
   lastName: z.string().trim().max(100).optional(),
-  phone: z.string().trim().max(30).optional(),
+  phone: phoneField.optional(),
   assignments: z.array(assignmentSchema).max(50).optional(),
 });
 
@@ -39,7 +51,7 @@ const updateBody = z
     email: z.email().optional(),
     firstName: z.string().trim().max(100).nullable().optional(),
     lastName: z.string().trim().max(100).nullable().optional(),
-    phone: z.string().trim().max(30).nullable().optional(),
+    phone: phoneField.nullable().optional(),
     assignments: z.array(assignmentSchema).max(50).optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
