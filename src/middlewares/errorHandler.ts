@@ -7,7 +7,7 @@ import { captureException } from '../lib/monitoring';
 
 /** Route inconnue → 404 au même format que les autres erreurs. */
 export function notFoundHandler(_req: Request, _res: Response, next: NextFunction) {
-  next(notFound('Route inconnue'));
+  next(notFound("Cette adresse n'existe pas."));
 }
 
 /**

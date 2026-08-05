@@ -27,7 +27,9 @@ authRoutes.post(
   '/login',
   publicRoute,
   credentialsLimiter, validate({ body: loginSchema }), async (req, res) => {
-  if (!req.schoolId) throw badRequest('École non résolue');
+  if (!req.schoolId) throw badRequest(
+      "Établissement introuvable. Vérifiez l'adresse du site, ou prévenez votre administration.",
+    );
   const { identifier, password } = req.body as z.infer<typeof loginSchema>;
   res.json(await authService.login(req.schoolId, identifier, password));
 });
@@ -51,7 +53,9 @@ authRoutes.post(
   credentialsLimiter,
   validate({ body: forgotSchema }),
   async (req, res) => {
-    if (!req.schoolId) throw badRequest('École non résolue');
+    if (!req.schoolId) throw badRequest(
+      "Établissement introuvable. Vérifiez l'adresse du site, ou prévenez votre administration.",
+    );
     const { email } = req.body as z.infer<typeof forgotSchema>;
     await authService.requestPasswordReset(req.schoolId, email);
 

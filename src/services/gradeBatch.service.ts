@@ -63,7 +63,7 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
   const seen = new Set<number>();
   for (const entry of input.entries) {
     if (seen.has(entry.studentId)) {
-      throw badRequest('Un élève apparaît plusieurs fois dans le lot', {
+      throw badRequest('Le même élève apparaît deux fois dans cette saisie.', {
         studentId: entry.studentId,
       });
     }
@@ -79,7 +79,7 @@ export async function saveGradeBatch(auth: AuthPayload, input: BatchInput): Prom
     (entry) => entry.value !== null && (entry.value < 0 || entry.value > maxValue),
   );
   if (outOfRange.length > 0) {
-    throw badRequest(`Toutes les notes doivent être comprises entre 0 et ${maxValue}`, {
+    throw badRequest(`Toutes les notes doivent être comprises entre 0 et ${maxValue}.`, {
       studentIds: outOfRange.map((entry) => entry.studentId),
     });
   }

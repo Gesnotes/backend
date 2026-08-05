@@ -2,6 +2,10 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 
+// Avant tout le reste : les messages de validation doivent sortir en français,
+// et non dans l'anglais par défaut de Zod.
+import './lib/validationLocale';
+
 import prisma from './lib/prisma';
 import { env } from './lib/env';
 import { httpLogger } from './lib/httpLogger';

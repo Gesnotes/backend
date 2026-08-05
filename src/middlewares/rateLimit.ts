@@ -21,7 +21,9 @@ export const credentialsLimiter = rateLimit({
   legacyHeaders: false,
   // Désactivé en test pour ne pas rendre la suite dépendante de l'ordre des cas.
   skip: () => isTest,
-  handler: (_req, _res, next) => next(tooManyRequests('Trop de tentatives, réessayez plus tard')),
+  handler: (_req, _res, next) => next(tooManyRequests(
+      'Trop de tentatives de connexion. Patientez quelques minutes avant de réessayer.',
+    )),
 });
 
 /**
@@ -34,5 +36,5 @@ export const sessionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: () => isTest,
-  handler: (_req, _res, next) => next(tooManyRequests('Trop de requêtes, réessayez plus tard')),
+  handler: (_req, _res, next) => next(tooManyRequests('Vous allez trop vite pour nous. Patientez un instant, puis réessayez.')),
 });

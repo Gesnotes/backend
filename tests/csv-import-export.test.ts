@@ -130,7 +130,7 @@ describe('POST /students/import', () => {
 
     expect(res.body.counts).toMatchObject({ create: 1, error: 3 });
     expect(res.body.rows.map((r: { line: number }) => r.line)).toEqual([2, 3, 4, 5]);
-    expect(res.body.rows[2].reason).toMatch(/illisible/i);
+    expect(res.body.rows[2].reason).toMatch(/date de naissance/i);
   });
 
   it('accepte un fichier réenregistré depuis Excel (BOM, virgule, CRLF)', async () => {
@@ -138,11 +138,25 @@ describe('POST /students/import', () => {
     expect(res.body.counts).toMatchObject({ create: 1, error: 0 });
   });
 
-  it('nomme les colonnes manquantes plutôt que de refuser en bloc', async () => {
+  /**
+   * Message écrit pour un secrétariat : il nomme ce qui manque et montre la
+   * première ligne attendue. « Colonne manquante dans l'en-tête » ne dit rien
+   * à qui n'a jamais entendu le mot « en-tête ».
+   */
+  it('nomme les colonnes manquantes en clair, avec un exemple', async () => {
     const res = await importCsv('Nom;Classe\nSAGBO;6e A');
 
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toMatch(/Prénom/);
+    expect(res.body.error.message).toContain('« Prénom »');
+    expect(res.body.error.message).toContain('Nom ; Prénom ; Classe');
+    expect(res.body.error.message).not.toMatch(/en-tête/i);
+  });
+
+  it('accorde le message quand plusieurs colonnes manquent', async () => {
+    const res = await importCsv('Nom\nSAGBO');
+
+    expect(res.body.error.message).toContain('les colonnes');
+    expect(res.body.error.message).toContain('« Prénom » et « Classe »');
   });
 
   it('n’écrit rien si une seule ligne est fautive — tout ou rien', async () => {

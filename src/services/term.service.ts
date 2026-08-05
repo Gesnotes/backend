@@ -169,10 +169,12 @@ export interface TermInput {
  */
 function assertDateRange(startDate?: string | null, endDate?: string | null) {
   if ((startDate == null) !== (endDate == null)) {
-    throw badRequest('Renseignez les deux dates ou aucune');
+    throw badRequest(
+      'Indiquez la date de début et la date de fin, ou laissez les deux vides.',
+    );
   }
   if (startDate != null && endDate != null && startDate > endDate) {
-    throw badRequest('La date de fin doit suivre la date de début');
+    throw badRequest('La date de fin doit venir après la date de début.');
   }
 }
 
@@ -205,7 +207,7 @@ async function assertNoOverlap(
   });
 
   if (overlapping) {
-    throw conflict(`La période « ${overlapping.label} » couvre déjà ces dates`, {
+    throw conflict(`Ces dates se chevauchent avec la période « ${overlapping.label} ».`, {
       termId: overlapping.id,
     });
   }
@@ -346,7 +348,7 @@ export async function reopenTerm(
   }
 
   const deadline = new Date(until);
-  if (Number.isNaN(deadline.getTime())) throw badRequest('Échéance invalide.');
+  if (Number.isNaN(deadline.getTime())) throw badRequest("Cette date n'est pas valable.");
 
   const now = new Date();
   if (deadline.getTime() <= now.getTime()) {
