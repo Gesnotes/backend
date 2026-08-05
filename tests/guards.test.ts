@@ -67,7 +67,9 @@ describe('gardes des routes (plan lot 2)', () => {
   it("403 quand le sous-domaine n'est pas celui du token (isolation multi-écoles)", async () => {
     const res = await as('ecole-a', tokenFromSchoolB).get('/me');
     expect(res.status).toBe(403);
-    expect(res.body.error.message).toMatch(/incohérent/i);
+    // Le message dit à l'utilisateur ce qui se passe, sans vocabulaire
+    // technique : « sous-domaine incohérent » ne veut rien dire pour lui.
+    expect(res.body.error.message).toMatch(/établissement/i);
   });
 
   it('200 avec le bon rôle sur le bon sous-domaine', async () => {

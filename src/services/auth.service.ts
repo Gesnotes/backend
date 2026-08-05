@@ -16,7 +16,8 @@ import { unauthorized } from '../errors/AppError';
  * Ne jamais distinguer « compte inconnu », « mot de passe faux » et « compte
  * archivé » : la différence permettrait d'énumérer les comptes existants.
  */
-const LOGIN_FAILED = 'Identifiants invalides';
+const LOGIN_FAILED =
+  'Email, téléphone ou mot de passe incorrect. Vérifiez votre saisie, puis réessayez.';
 
 export interface LoginResult {
   accessToken: string;
@@ -121,7 +122,7 @@ export async function refresh(rawToken: string): Promise<LoginResult> {
   });
 
   if (!stored || stored.expiresAt < new Date()) {
-    throw unauthorized('Refresh token invalide ou expiré');
+    throw unauthorized('Votre session a expiré. Reconnectez-vous.');
   }
 
   /**
@@ -132,10 +133,10 @@ export async function refresh(rawToken: string): Promise<LoginResult> {
    */
   if (stored.revokedAt) {
     await revokeAllRefreshTokens(stored.userId);
-    throw unauthorized('Refresh token invalide ou expiré');
+    throw unauthorized('Votre session a expiré. Reconnectez-vous.');
   }
 
-  if (stored.user.archivedAt) throw unauthorized('Refresh token invalide ou expiré');
+  if (stored.user.archivedAt) throw unauthorized('Votre session a expiré. Reconnectez-vous.');
 
   // Révocation conditionnelle : deux rafraîchissements concurrents avec le
   // même token ne doivent pas produire deux chaînes valides. Seul celui qui
@@ -144,7 +145,7 @@ export async function refresh(rawToken: string): Promise<LoginResult> {
     where: { id: stored.id, revokedAt: null },
     data: { revokedAt: new Date() },
   });
-  if (count !== 1) throw unauthorized('Refresh token invalide ou expiré');
+  if (count !== 1) throw unauthorized('Votre session a expiré. Reconnectez-vous.');
 
   const accessToken = signAccessToken({
     userId: stored.user.id,
@@ -257,9 +258,13 @@ export async function resetPassword(rawToken: string, newPassword: string): Prom
   });
 
   if (!stored || stored.usedAt || stored.expiresAt < new Date()) {
-    throw unauthorized('Lien de réinitialisation invalide ou expiré');
+    throw unauthorized(
+      "Ce lien n'est plus valable : il a déjà servi, ou il est trop ancien. Demandez-en un nouveau depuis « Mot de passe oublié ».",
+    );
   }
-  if (stored.user.archivedAt) throw unauthorized('Lien de réinitialisation invalide ou expiré');
+  if (stored.user.archivedAt) throw unauthorized(
+      "Ce lien n'est plus valable : il a déjà servi, ou il est trop ancien. Demandez-en un nouveau depuis « Mot de passe oublié ».",
+    );
 
   const passwordHash = await argon2.hash(newPassword);
 

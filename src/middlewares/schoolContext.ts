@@ -37,10 +37,10 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
     }
 
     const payload = verifyAccessToken(header.slice('Bearer '.length));
-    if (!payload) throw unauthorized('Token invalide ou expiré');
+    if (!payload) throw unauthorized("Votre session n'est plus valable. Reconnectez-vous.");
 
     if (school.id !== payload.schoolId) {
-      throw forbidden('Sous-domaine incohérent avec le compte');
+      throw forbidden("Ce compte n'appartient pas à cet établissement.");
     }
 
     /**
@@ -54,10 +54,10 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
       select: { id: true, schoolId: true, role: true, archivedAt: true, sessionsRevokedAt: true },
     });
 
-    if (!user || user.archivedAt) throw unauthorized('Session expirée, reconnectez-vous');
-    if (user.schoolId !== school.id) throw forbidden('Sous-domaine incohérent avec le compte');
+    if (!user || user.archivedAt) throw unauthorized('Votre session a expiré. Reconnectez-vous.');
+    if (user.schoolId !== school.id) throw forbidden("Ce compte n'appartient pas à cet établissement.");
     if (user.sessionsRevokedAt && payload.issuedAt < user.sessionsRevokedAt) {
-      throw unauthorized('Session expirée, reconnectez-vous');
+      throw unauthorized('Votre session a expiré. Reconnectez-vous.');
     }
 
     // Le rôle vient de la base, pas du token : une rétrogradation prend effet
@@ -136,7 +136,9 @@ async function resolveSchool(req: Request) {
  * contraire l'information qui débloque en dix secondes.
  */
 async function schoolNotFound(requested: string | undefined) {
-  if (isProduction) return notFound('École introuvable pour ce sous-domaine');
+  if (isProduction) {
+    return notFound("Aucun établissement ne correspond à cette adresse. Vérifiez le lien que vous avez utilisé.");
+  }
 
   const schools = await prisma.school.findMany({
     select: { subdomain: true },

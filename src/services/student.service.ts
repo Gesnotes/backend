@@ -596,7 +596,7 @@ export async function attachParent(
   const already = await prisma.studentParent.findUnique({
     where: { studentId_parentUserId: { studentId, parentUserId: parent.id } },
   });
-  if (already) throw conflict('Ce parent est déjà associé à cet élève');
+  if (already) throw conflict('Ce parent est déjà associé à cet élève.');
 
   await prisma.studentParent.create({ data: { studentId, parentUserId: parent.id } });
 
@@ -607,7 +607,7 @@ export async function detachParent(schoolId: number, studentId: number, parentUs
   await getStudentForAdmin(schoolId, studentId);
 
   const { count } = await prisma.studentParent.deleteMany({ where: { studentId, parentUserId } });
-  if (count === 0) throw notFound("Ce parent n'est pas associé à cet élève");
+  if (count === 0) throw notFound("Ce parent n'est pas associé à cet élève.");
 
   return getStudentForAdmin(schoolId, studentId);
 }
@@ -626,13 +626,13 @@ export async function resendParentInvitation(
   const link = await prisma.studentParent.findUnique({
     where: { studentId_parentUserId: { studentId, parentUserId } },
   });
-  if (!link) throw notFound("Ce parent n'est pas associé à cet élève");
+  if (!link) throw notFound("Ce parent n'est pas associé à cet élève.");
 
   const parent = await prisma.user.findFirst({
     where: { id: parentUserId, schoolId, role: 'parent', archivedAt: null },
     select: { id: true, email: true },
   });
-  if (!parent) throw notFound('Parent introuvable dans cette école');
+  if (!parent) throw notFound("Ce compte parent n'existe pas dans cet établissement.");
 
   await sendInvitation(parent.id, parent.email, 'parent');
 }
@@ -642,7 +642,7 @@ async function findExistingParent(schoolId: number, parentUserId: number) {
     where: { id: parentUserId, schoolId, role: 'parent', archivedAt: null },
     select: contactFields,
   });
-  if (!parent) throw notFound('Parent introuvable dans cette école');
+  if (!parent) throw notFound("Ce compte parent n'existe pas dans cet établissement.");
   return parent;
 }
 
@@ -691,5 +691,5 @@ async function createParentAccount(
 
 async function assertClassInSchool(schoolId: number, classId: number) {
   const klass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
-  if (!klass) throw notFound('Classe introuvable dans cette école');
+  if (!klass) throw notFound("Cette classe n'existe pas dans cet établissement.");
 }
