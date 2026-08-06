@@ -85,6 +85,7 @@ model User {
   resetTokens         PasswordResetToken[]
   homeroomClasses     Class[]
   attendancesRecorded Attendance[]
+  enrollmentDecisions EnrollmentDecision[]
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -214,6 +215,8 @@ model Class {
   coefficients    SubjectCoefficient[]
   evaluations     Evaluation[]
   attendances     Attendance[]
+  enrolledFrom    EnrollmentDecision[] @relation("EnrollmentFrom")
+  enrolledTo      EnrollmentDecision[] @relation("EnrollmentTo")
 
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
@@ -284,11 +287,12 @@ model Student {
   birthDate  DateTime? @map("birth_date") @db.Date
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school      School          @relation(fields: [schoolId], references: [id])
-  class       Class           @relation(fields: [classId], references: [id])
-  parents     StudentParent[]
-  grades      Grade[]
-  attendances Attendance[]
+  school              School               @relation(fields: [schoolId], references: [id])
+  class               Class                @relation(fields: [classId], references: [id])
+  parents             StudentParent[]
+  grades              Grade[]
+  attendances         Attendance[]
+  enrollmentDecisions EnrollmentDecision[]
 
   // Cible de la clé étrangère composite de Grade : garantit en base qu'une
   // note et son élève appartiennent à la même école.
@@ -454,4 +458,39 @@ model Attendance {
   @@unique([studentId, date])
   @@index([classId, date]) // porte la feuille de présence d'une classe pour un jour
   @@map("attendances")
+}
+
+enum EnrollmentDecisionType {
+  promotion
+  redoublement
+  autre
+
+  @@map("enrollment_decision_type")
+}
+
+// Trace d'une réinscription : un élève déplacé de `fromClass` vers `toClass`
+// à la préparation d'une rentrée, avec la décision qui l'explique (monte,
+// redouble, ou autre). Pur historique — déplacer l'élève se fait sur
+// `Student.classId`, cette table ne fait qu'en garder la mémoire, pour qu'un
+// directeur retrouve qui a redoublé et vers où chacun est parti.
+model EnrollmentDecision {
+  id              Int                    @id @default(autoincrement())
+  schoolId        Int                    @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  studentId       Int                    @map("student_id")
+  fromClassId     Int                    @map("from_class_id")
+  toClassId       Int                    @map("to_class_id")
+  decision        EnrollmentDecisionType
+  decidedByUserId Int?                   @map("decided_by_user_id")
+  createdAt       DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // Comme Grade et Attendance, ancré à son école via l'élève ; les deux
+  // classes le sont pareillement, chacune via sa propre clé composite.
+  student   Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  fromClass Class   @relation("EnrollmentFrom", fields: [fromClassId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  toClass   Class   @relation("EnrollmentTo", fields: [toClassId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  decidedBy User?   @relation(fields: [decidedByUserId], references: [id])
+
+  @@index([fromClassId, createdAt]) // porte l'historique d'une classe qui a préparé sa rentrée
+  @@index([studentId])
+  @@map("enrollment_decisions")
 }
