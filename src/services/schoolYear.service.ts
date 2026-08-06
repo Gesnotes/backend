@@ -21,6 +21,8 @@ export interface SchoolYearView {
   archivedAt: string | null;
   /** Nombre de périodes rattachées — ce qu'une suppression définitive détacherait. */
   termCount: number;
+  /** Nombre de classes rattachées — pareillement détachées, pas détruites. */
+  classCount: number;
 }
 
 function toIsoDay(date: Date): string {
@@ -42,7 +44,7 @@ type SchoolYearRow = {
   startDate: Date | null;
   endDate: Date | null;
   archivedAt: Date | null;
-  _count: { terms: number };
+  _count: { terms: number; classes: number };
 };
 
 const schoolYearSelect = {
@@ -51,7 +53,7 @@ const schoolYearSelect = {
   startDate: true,
   endDate: true,
   archivedAt: true,
-  _count: { select: { terms: true } },
+  _count: { select: { terms: true, classes: true } },
 } as const;
 
 function toView(year: SchoolYearRow, today: string): SchoolYearView {
@@ -63,6 +65,7 @@ function toView(year: SchoolYearRow, today: string): SchoolYearView {
     isCurrent: year.archivedAt === null && isCurrentSchoolYear(year, today),
     archivedAt: year.archivedAt ? year.archivedAt.toISOString() : null,
     termCount: year._count.terms,
+    classCount: year._count.classes,
   };
 }
 
@@ -223,10 +226,11 @@ export async function restoreSchoolYear(schoolId: number, id: number): Promise<S
  * Suppression définitive. Réservée aux années déjà archivées, libellé exact
  * à retaper — même garde-fou que pour une période.
  *
- * Les périodes rattachées ne sont pas détruites : `terms.school_year_id` est
- * en RESTRICT en base, donc elles sont détachées (repassées à `null`) avant
- * la suppression de l'année. Une période garde son historique de notes
- * intact, elle perd seulement son regroupement par année.
+ * Les périodes et les classes rattachées ne sont pas détruites :
+ * `terms.school_year_id` et `classes.school_year_id` sont en RESTRICT en
+ * base, donc elles sont détachées (repassées à `null`) avant la suppression
+ * de l'année. Chacune garde son historique intact, elle perd seulement son
+ * regroupement par année.
  */
 export async function deleteSchoolYearPermanently(
   schoolId: number,
@@ -248,6 +252,7 @@ export async function deleteSchoolYearPermanently(
 
   await prisma.$transaction(async (tx) => {
     await tx.term.updateMany({ where: { schoolYearId: id }, data: { schoolYearId: null } });
+    await tx.class.updateMany({ where: { schoolYearId: id }, data: { schoolYearId: null } });
     await tx.schoolYear.delete({ where: { id } });
   });
 }

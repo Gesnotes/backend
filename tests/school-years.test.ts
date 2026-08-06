@@ -263,6 +263,23 @@ describe('Archivage et suppression définitive d’une année scolaire', () => {
     expect(survivor?.schoolYearId).toBeNull();
   });
 
+  it('détache aussi les classes plutôt que de les détruire à la suppression définitive', async () => {
+    const created = await write(adminToken).post('/school-years').send(year);
+    const klass = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '6e A', level: '6e', schoolYearId: created.body.id },
+    });
+    await write(adminToken).delete(`/school-years/${created.body.id}`);
+
+    const res = await write(adminToken).delete(
+      `/school-years/${created.body.id}?permanent=true&confirm_label=${encodeURIComponent(year.label)}`,
+    );
+
+    expect(res.status).toBe(204);
+    const survivor = await prisma.class.findUnique({ where: { id: klass.id } });
+    expect(survivor).not.toBeNull();
+    expect(survivor?.schoolYearId).toBeNull();
+  });
+
   it('réserve l’archivage et la restauration à l’administration', async () => {
     const created = await write(adminToken).post('/school-years').send(year);
 
