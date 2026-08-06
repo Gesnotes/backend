@@ -41,11 +41,11 @@ model School {
 // aucune migration de données n'est nécessaire pour les écoles déjà en
 // production.
 model SchoolYear {
-  id        Int       @id @default(autoincrement())
-  schoolId  Int       @map("school_id")
-  label     String    @db.VarChar(50) // "2025-2026"
-  startDate DateTime? @map("start_date") @db.Date
-  endDate   DateTime? @map("end_date") @db.Date
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  label      String    @db.VarChar(50) // "2025-2026"
+  startDate  DateTime? @map("start_date") @db.Date
+  endDate    DateTime? @map("end_date") @db.Date
   // Comme pour une période : archiver plutôt qu'effacer, la suppression
   // définitive restant une décision distincte prise depuis les archives.
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
@@ -59,29 +59,31 @@ model SchoolYear {
 
 // Utilisateurs (admin, prof, parent — un seul point d'auth)
 model User {
-  id           Int       @id @default(autoincrement())
-  schoolId     Int       @map("school_id")
-  email        String    @db.VarChar(150)
-  phone        String?   @db.VarChar(30)
-  passwordHash String    @map("password_hash") @db.VarChar(255)
-  role         Role
-  firstName    String?   @map("first_name") @db.VarChar(100)
-  lastName     String?   @map("last_name") @db.VarChar(100)
-  archivedAt   DateTime? @map("archived_at") @db.Timestamp(6)
+  id                Int       @id @default(autoincrement())
+  schoolId          Int       @map("school_id")
+  email             String    @db.VarChar(150)
+  phone             String?   @db.VarChar(30)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  role              Role
+  firstName         String?   @map("first_name") @db.VarChar(100)
+  lastName          String?   @map("last_name") @db.VarChar(100)
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
   /// Coupe les access tokens émis avant cette date. Indispensable avec des
   /// tokens longue durée : un JWT est stateless, seule cette borne permet de
   /// déconnecter réellement (logout, archivage, changement de mot de passe).
   sessionsRevokedAt DateTime? @map("sessions_revoked_at") @db.Timestamp(6)
-  createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  school         School               @relation(fields: [schoolId], references: [id])
-  children       StudentParent[]
-  assignments    TeacherAssignment[]
-  grades         Grade[]
-  evaluations    Evaluation[]
-  devices        Device[]
-  refreshTokens  RefreshToken[]
-  resetTokens    PasswordResetToken[]
+  school              School               @relation(fields: [schoolId], references: [id])
+  children            StudentParent[]
+  assignments         TeacherAssignment[]
+  grades              Grade[]
+  evaluations         Evaluation[]
+  devices             Device[]
+  refreshTokens       RefreshToken[]
+  resetTokens         PasswordResetToken[]
+  homeroomClasses     Class[]
+  attendancesRecorded Attendance[]
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -126,19 +128,19 @@ model PasswordResetToken {
 // Période (trimestre, semestre) — le regroupement par année scolaire vit sur
 // `SchoolYear`, `schoolYearId` ci-dessous.
 model Term {
-  id           Int    @id @default(autoincrement())
-  schoolId     Int    @map("school_id")
+  id            Int       @id @default(autoincrement())
+  schoolId      Int       @map("school_id")
   // Nullable : rattacher une période à une année scolaire est optionnel,
   // voir le commentaire sur `SchoolYear`.
-  schoolYearId Int?   @map("school_year_id")
-  label        String @db.VarChar(50) // "Trimestre 1", "2025-2026"
-  startDate DateTime? @map("start_date") @db.Date
-  endDate   DateTime? @map("end_date") @db.Date
+  schoolYearId  Int?      @map("school_year_id")
+  label         String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
+  startDate     DateTime? @map("start_date") @db.Date
+  endDate       DateTime? @map("end_date") @db.Date
   // Une période portant des évaluations ne peut pas être effacée directement :
   // `evaluations.term_id` et `grades.term_id` sont en RESTRICT. L'archivage la
   // sort des sélecteurs sans rien détruire ; la suppression définitive se fait
   // depuis les archives, en connaissance de cause.
-  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  archivedAt    DateTime? @map("archived_at") @db.Timestamp(6)
   // Instant jusqu'auquel la saisie reste ouverte sur une période pourtant
   // terminée. Une correction de dernière minute ne doit pas obliger
   // l'administration à ressaisir à la place de l'enseignant, ni à repousser la
@@ -148,8 +150,8 @@ model Term {
   // pour l'équipe le temps d'un rattrapage, et le verrou se remet seul.
   reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
-  school     School      @relation(fields: [schoolId], references: [id])
-  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
+  school      School       @relation(fields: [schoolId], references: [id])
+  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id])
   grades      Grade[]
   evaluations Evaluation[]
 
@@ -158,19 +160,40 @@ model Term {
   @@map("terms")
 }
 
+// Mode de fonctionnement d'une classe : `notes` pour le suivi habituel
+// (évaluations chiffrées), `presence` pour la maternelle/garderie où seule la
+// présence compte. Les deux sont mutuellement exclusifs — voir le garde-fou
+// dans evaluation.service.ts.
+enum ClassMode {
+  notes
+  presence
+
+  @@map("class_mode")
+}
+
 // Classes
 model Class {
-  id         Int       @id @default(autoincrement())
-  schoolId   Int       @map("school_id")
-  name       String    @db.VarChar(50) // "6e A"
-  level      String    @db.VarChar(20) // "6e" — gabarit de coefficients, jamais utilisé dans le calcul
-  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  id                Int       @id @default(autoincrement())
+  schoolId          Int       @map("school_id")
+  name              String    @db.VarChar(50) // "6e A"
+  level             String    @db.VarChar(20) // "6e" — gabarit de coefficients, jamais utilisé dans le calcul
+  mode              ClassMode @default(notes)
+  // Seul enseignant, avec l'admin, autorisé à saisir la présence de cette
+  // classe (plan maternelle/garderie). `null` : seul l'admin peut saisir.
+  homeroomTeacherId Int?      @map("homeroom_teacher_id")
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school       School               @relation(fields: [schoolId], references: [id])
-  students     Student[]
-  assignments  TeacherAssignment[]
-  coefficients SubjectCoefficient[]
-  evaluations  Evaluation[]
+  school          School               @relation(fields: [schoolId], references: [id])
+  // Clé composite : le référent d'une classe est nécessairement de la même
+  // école, comme pour TeacherAssignment. `Restrict` explicite : `school_id`
+  // n'est pas nullable, un `SetNull` par défaut échouerait à l'exécution.
+  // deleteTeacherPermanently refuse déjà la suppression d'un référent en poste.
+  homeroomTeacher User?                @relation(fields: [homeroomTeacherId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  students        Student[]
+  assignments     TeacherAssignment[]
+  coefficients    SubjectCoefficient[]
+  evaluations     Evaluation[]
+  attendances     Attendance[]
 
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
@@ -240,10 +263,11 @@ model Student {
   birthDate  DateTime? @map("birth_date") @db.Date
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school  School          @relation(fields: [schoolId], references: [id])
-  class   Class           @relation(fields: [classId], references: [id])
-  parents StudentParent[]
-  grades  Grade[]
+  school      School          @relation(fields: [schoolId], references: [id])
+  class       Class           @relation(fields: [classId], references: [id])
+  parents     StudentParent[]
+  grades      Grade[]
+  attendances Attendance[]
 
   // Cible de la clé étrangère composite de Grade : garantit en base qu'une
   // note et son élève appartiennent à la même école.
@@ -373,4 +397,40 @@ model Evaluation {
   @@index([classId, subjectId, termId])
   @@index([schoolId])
   @@map("evaluations")
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+
+  @@map("attendance_status")
+}
+
+// Présence : un statut par élève et par jour (plan maternelle/garderie, mais
+// utilisable par toute classe). `classId` est figé à la saisie, comme
+// `Evaluation.classId` pour les notes : déplacer un élève vers une autre
+// classe ne doit pas réécrire l'historique de présence déjà enregistré.
+model Attendance {
+  id               Int              @id @default(autoincrement())
+  schoolId         Int              @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  studentId        Int              @map("student_id")
+  classId          Int              @map("class_id")
+  date             DateTime         @db.Date
+  status           AttendanceStatus
+  comment          String?          @db.Text
+  recordedByUserId Int?             @map("recorded_by_user_id")
+  createdAt        DateTime?        @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // Comme Grade s'ancre à son école via l'élève, la présence s'y ancre aussi
+  // via la classe : les deux clés composites interdisent un enregistrement
+  // dont le school_id dénormalisé diverge de celui de l'élève ou de la classe.
+  student    Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  class      Class   @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  recordedBy User?   @relation(fields: [recordedByUserId], references: [id])
+
+  // Un seul statut par élève et par jour — la granularité décidée pour la v1.
+  @@unique([studentId, date])
+  @@index([classId, date]) // porte la feuille de présence d'une classe pour un jour
+  @@map("attendances")
 }

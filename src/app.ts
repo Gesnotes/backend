@@ -10,6 +10,7 @@ import prisma from './lib/prisma';
 import { env } from './lib/env';
 import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
+import { attendanceMeRoutes } from './routes/attendance.routes';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
@@ -105,6 +106,7 @@ export function createApp() {
   // Monté avant /teachers : /teachers/me ne doit pas être capté par /teachers/:id
   app.use('/teachers/me', teacherMeRoutes);
   app.use('/teachers/me', evaluationMeRoutes);
+  app.use('/teachers/me', attendanceMeRoutes);
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.

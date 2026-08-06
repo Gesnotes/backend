@@ -107,6 +107,76 @@ describe('CRUD /classes', () => {
   });
 });
 
+describe('mode par classe et enseignant référent', () => {
+  it('crée une classe en mode notes par défaut', async () => {
+    const res = await api(adminToken).post('/classes').send({ name: '5e A', level: '5e' });
+    expect(res.body.mode).toBe('notes');
+    expect(res.body.homeroomTeacherId).toBeNull();
+  });
+
+  it('crée une classe en mode présence avec un référent', async () => {
+    const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+
+    const res = await api(adminToken)
+      .post('/classes')
+      .send({ name: 'Petite section', level: 'maternelle', mode: 'presence', homeroomTeacherId: prof.id });
+
+    expect(res.status).toBe(201);
+    expect(res.body.mode).toBe('presence');
+    expect(res.body.homeroomTeacherId).toBe(prof.id);
+  });
+
+  it("refuse un référent qui n'est pas un enseignant de l'école", async () => {
+    const admin = await prisma.user.findFirstOrThrow({ where: { email: 'admin@a.test' } });
+    const foreignTeacher = await createUser({
+      schoolId: schoolB.id,
+      email: 'prof@b.test',
+      role: 'teacher',
+    });
+
+    expect(
+      (await api(adminToken).post('/classes').send({ name: '5e A', level: '5e', homeroomTeacherId: admin.id }))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await api(adminToken)
+          .post('/classes')
+          .send({ name: '5e A', level: '5e', homeroomTeacherId: foreignTeacher.id })
+      ).status,
+    ).toBe(404);
+  });
+
+  it('modifie le référent, puis le retire', async () => {
+    const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+
+    await api(adminToken).patch(`/classes/${klass.id}`).send({ homeroomTeacherId: prof.id });
+    const withReferent = await prisma.class.findUniqueOrThrow({ where: { id: klass.id } });
+    expect(withReferent.homeroomTeacherId).toBe(prof.id);
+
+    await api(adminToken).patch(`/classes/${klass.id}`).send({ homeroomTeacherId: null });
+    const withoutReferent = await prisma.class.findUniqueOrThrow({ where: { id: klass.id } });
+    expect(withoutReferent.homeroomTeacherId).toBeNull();
+  });
+
+  it('refuse de passer en mode présence une classe qui a déjà des évaluations', async () => {
+    const ana = await addStudent('Ana', 'Alpha');
+    await addGrade(ana.id, 12);
+
+    const res = await api(adminToken).patch(`/classes/${klass.id}`).send({ mode: 'presence' });
+    expect(res.status).toBe(409);
+    expect(await prisma.class.findUniqueOrThrow({ where: { id: klass.id } })).toMatchObject({
+      mode: 'notes',
+    });
+  });
+
+  it('permet le passage en mode présence sans évaluation existante', async () => {
+    const res = await api(adminToken).patch(`/classes/${klass.id}`).send({ mode: 'presence' });
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('presence');
+  });
+});
+
 describe('copie des coefficients depuis une classe du même niveau', () => {
   it('reprend les coefficients de la classe modèle', async () => {
     await prisma.subjectCoefficient.create({

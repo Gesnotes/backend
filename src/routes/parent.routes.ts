@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as notificationService from '../services/notification.service';
 import * as parentService from '../services/parent.service';
@@ -110,3 +111,18 @@ gradeDetailRoutes.get('/:id', validate({ params: idParam }), async (req, res) =>
   const { id } = req.params as unknown as z.infer<typeof idParam>;
   res.json(await parentService.getGradeDetail(authOf(req), id));
 });
+
+const attendanceHistoryQuery = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+});
+
+childrenRoutes.get(
+  '/:id/attendance',
+  validate({ params: idParam, query: attendanceHistoryQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { from, to } = req.query as unknown as z.infer<typeof attendanceHistoryQuery>;
+    res.json(await attendanceService.listChildAttendance(authOf(req), id, { from, to }));
+  },
+);

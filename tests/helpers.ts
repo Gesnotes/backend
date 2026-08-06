@@ -10,6 +10,7 @@ export const TEST_PASSWORD = 'motdepasse123';
 /** Supprime toutes les données de test, dans l'ordre des dépendances. */
 export async function resetDatabase() {
   await prisma.grade.deleteMany();
+  await prisma.attendance.deleteMany();
   await prisma.evaluation.deleteMany();
   await prisma.subjectCoefficient.deleteMany();
   await prisma.teacherAssignment.deleteMany();
@@ -107,6 +108,29 @@ export async function seedGrade(data: {
       value: data.value,
       maxValue,
       comment: data.comment ?? null,
+    },
+  });
+}
+
+/** Crée un enregistrement de présence de test. */
+export function seedAttendance(data: {
+  schoolId: number;
+  studentId: number;
+  classId: number;
+  date: Date | string;
+  status: 'present' | 'absent' | 'late';
+  comment?: string | null;
+  recordedByUserId?: number;
+}) {
+  return prisma.attendance.create({
+    data: {
+      schoolId: data.schoolId,
+      studentId: data.studentId,
+      classId: data.classId,
+      date: typeof data.date === 'string' ? new Date(data.date) : data.date,
+      status: data.status,
+      comment: data.comment ?? null,
+      recordedByUserId: data.recordedByUserId ?? null,
     },
   });
 }
