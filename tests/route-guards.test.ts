@@ -19,11 +19,12 @@ import { createApp } from '../src/app';
  */
 
 /**
- * Nombre de routes volontairement publiques (`publicRoute`) : /health et les
- * cinq routes d'authentification. Le compte est figé pour qu'en ouvrir une
- * sixième soit un geste conscient, pas un effet de bord.
+ * Nombre de routes volontairement publiques (`publicRoute`) : /health, les
+ * cinq routes d'authentification, et les deux routes d'avant-inscription
+ * (recherche d'école, demande de rappel). Le compte est figé pour qu'en
+ * ouvrir une neuvième soit un geste conscient, pas un effet de bord.
  */
-const ROUTES_PUBLIQUES_ATTENDUES = 6;
+const ROUTES_PUBLIQUES_ATTENDUES = 8;
 
 interface Route {
   methode: string;

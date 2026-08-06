@@ -22,6 +22,10 @@ model School {
   id        Int       @id @default(autoincrement())
   name      String    @db.VarChar(150)
   subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
+  // Sert à désambiguïser deux écoles de même nom dans la recherche « Quelle
+  // est votre école ? » (connexion sans sous-domaine). Nullable : les écoles
+  // existantes n'en ont pas encore, sans que rien ne casse.
+  city      String?   @db.VarChar(100)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
   users       User[]
@@ -33,6 +37,38 @@ model School {
   gradeTypes  GradeType[]
 
   @@map("schools")
+}
+
+enum SignupRequestStatus {
+  nouveau
+  traite
+
+  @@map("signup_request_status")
+}
+
+/// Demande de rappel du formulaire public d'inscription (inscription
+/// hybride, plan §1) : aucune école ni aucun compte n'existe encore à ce
+/// stade. Le formulaire capte la demande, l'équipe Gesnotes configure
+/// ensuite l'école et son administration au téléphone. Seule table du schéma
+/// qui n'appartient à aucune école — elle en précède l'existence.
+model SignupRequest {
+  id          Int                 @id @default(autoincrement())
+  schoolName  String              @map("school_name") @db.VarChar(150)
+  contactName String              @map("contact_name") @db.VarChar(150)
+  phone       String              @db.VarChar(30)
+  city        String              @db.VarChar(100)
+  // Niveaux cochés dans le formulaire ("maternelle", "primaire", ...), en
+  // texte libre côté saisie : la liste des niveaux n'est pas un référentiel
+  // fermé dans le reste de l'application.
+  levels      String[]
+  // Pas de route pour la faire évoluer pour l'instant : l'équipe la
+  // consulte et la met à jour directement en base le temps qu'un outil
+  // interne existe. Le champ évite une migration future pour l'ajouter.
+  status      SignupRequestStatus @default(nouveau)
+  createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([status, createdAt])
+  @@map("signup_requests")
 }
 
 // Année scolaire ("2025-2026") — regroupe les périodes (trimestres,

@@ -9,6 +9,7 @@ export const TEST_PASSWORD = 'motdepasse123';
 
 /** Supprime toutes les données de test, dans l'ordre des dépendances. */
 export async function resetDatabase() {
+  await prisma.signupRequest.deleteMany();
   await prisma.grade.deleteMany();
   await prisma.attendance.deleteMany();
   await prisma.enrollmentDecision.deleteMany();
