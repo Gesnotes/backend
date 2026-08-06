@@ -81,3 +81,29 @@ describe('résolution de l’école en développement', () => {
     expect(res.body.error.message).toContain('prisma:seed');
   });
 });
+
+/**
+ * Connexion sans sous-domaine (plan §1.2 bis) : sur le domaine principal,
+ * l'école vient de l'en-tête que le frontend pose une fois choisie par
+ * l'utilisateur, pas d'une adresse à taper. Contrairement au repli
+ * mono-école ci-dessus, ce mécanisme reste actif quel que soit le nombre
+ * d'écoles — c'est le cas réel visé, pas seulement un confort de développement.
+ */
+describe('résolution de l’école par en-tête (connexion sans sous-domaine)', () => {
+  it("identifie la bonne école par l'en-tête même quand plusieurs écoles existent", async () => {
+    const a = await createSchool('ecole-a');
+    await createSchool('ecole-b');
+    await createUser({ schoolId: a.id, email: 'admin@a.test', role: 'admin' });
+
+    const res = await login('ecole-a', 'admin@a.test');
+    expect(res.status).toBe(200);
+  });
+
+  it("refuse un compte d'une autre école même avec un en-tête valide", async () => {
+    const a = await createSchool('ecole-a');
+    await createSchool('ecole-b');
+    await createUser({ schoolId: a.id, email: 'admin@a.test', role: 'admin' });
+
+    expect((await login('ecole-b', 'admin@a.test')).status).toBe(401);
+  });
+});

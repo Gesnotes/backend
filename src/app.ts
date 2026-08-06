@@ -18,6 +18,7 @@ import { enrollmentRoutes } from './routes/enrollment.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { onboardingRoutes } from './routes/onboarding.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { termRoutes } from './routes/term.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
@@ -79,6 +80,10 @@ export function createApp() {
       throw new Error('Erreur de test Gesnotes — la supervision fonctionne');
     });
   }
+
+  // Avant-inscription : recherche d'école et demande de rappel, avant qu'une
+  // école existe ou soit résolue — comme /health, monté avant le contexte.
+  app.use(onboardingRoutes);
 
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);

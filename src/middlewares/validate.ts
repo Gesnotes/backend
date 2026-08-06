@@ -66,6 +66,11 @@ const FIELD_LABELS: Record<string, string> = {
   page: 'Page',
   assignments: 'Affectations',
   entries: 'Notes saisies',
+  schoolName: "Nom de l'école",
+  contactName: 'Votre nom',
+  city: 'Ville',
+  levels: 'Niveaux',
+  q: 'Recherche',
 };
 
 function labelOf(field: string): string {

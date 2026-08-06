@@ -10,11 +10,15 @@ import { verifyAccessToken } from '../lib/jwt';
 /**
  * Contexte école (plan §1.2).
  *
- * Le JWT fait autorité pour `school_id`. Le sous-domaine sert à :
+ * Le JWT fait autorité pour `school_id`. L'école est résolue soit par le
+ * sous-domaine de l'adresse (`ecole-x.gesnotes.app`), soit par l'en-tête
+ * `X-School-Subdomain` posé par le frontend quand l'utilisateur arrive par
+ * le domaine principal (connexion sans sous-domaine, plan §1.2 bis) — les
+ * deux servent à :
  *  - router la page de login avant qu'un token existe ;
  *  - vérifier la cohérence à chaque requête authentifiée.
  *
- * Si sous-domaine ≠ école du token → 403. C'est le point unique de
+ * Si école résolue ≠ école du token → 403. C'est le point unique de
  * l'isolation multi-écoles.
  *
  * ⚠️ Ce middleware N'EST PAS un garde d'authentification : une requête sans
@@ -78,7 +82,7 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
 /**
  * En local, `req.hostname` vaut "localhost" et ne résout aucune école : sans
  * repli, toutes les routes répondraient 404 en développement (plan §6.5).
- * Le repli est inactif en production.
+ * Le repli mono-école ci-dessous est, lui, inactif en production.
  */
 async function resolveSchool(req: Request) {
   const subdomain = req.hostname.split('.')[0];
@@ -88,10 +92,26 @@ async function resolveSchool(req: Request) {
     if (school) return school;
   }
 
+  const header = req.headers['x-school-subdomain'] as string | undefined;
+
+  /**
+   * Domaine principal (aucun sous-domaine dans l'adresse) : l'école vient de
+   * l'en-tête, posé par le frontend une fois choisie par l'utilisateur — via
+   * la recherche « Quelle est votre école ? » ou un lien d'invitation —
+   * jamais tapée dans une adresse. Valable en production comme en
+   * développement : le mécanisme ne change pas, seule la vitrine change (plan
+   * §1.2 bis). Sans risque une fois authentifié : la cohérence avec le JWT
+   * est vérifiée juste après, un en-tête forgé ne donne accès à rien qu'une
+   * visite directe du sous-domaine visé ne donnerait déjà.
+   */
+  if (header) {
+    const school = await prisma.school.findUnique({ where: { subdomain: header } });
+    if (school) return school;
+  }
+
   if (isProduction) return null;
 
-  const requested =
-    (req.headers['x-school-subdomain'] as string | undefined) ?? env.DEFAULT_SCHOOL_SUBDOMAIN;
+  const requested = header ?? env.DEFAULT_SCHOOL_SUBDOMAIN;
 
   if (requested) {
     const school = await prisma.school.findUnique({ where: { subdomain: requested } });

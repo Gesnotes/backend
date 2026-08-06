@@ -38,3 +38,19 @@ export const sessionLimiter = rateLimit({
   skip: () => isTest,
   handler: (_req, _res, next) => next(tooManyRequests('Vous allez trop vite pour nous. Patientez un instant, puis réessayez.')),
 });
+
+/**
+ * Routes publiques d'avant-inscription (recherche d'école, demande de
+ * rappel) : accessibles sans compte, donc sans le filet qu'apporte un
+ * `requireAuth`. Un budget dédié — ni celui du brute-force de connexion, ni
+ * la grande marge des routes de session — évite le spam du formulaire comme
+ * le raclage de la liste des écoles.
+ */
+export const publicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => isTest,
+  handler: (_req, _res, next) => next(tooManyRequests('Trop de requêtes. Patientez quelques minutes avant de réessayer.')),
+});
