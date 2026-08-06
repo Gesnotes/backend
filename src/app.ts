@@ -16,6 +16,7 @@ import { dashboardRoutes } from './routes/dashboard.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { termRoutes } from './routes/term.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
@@ -86,6 +87,7 @@ export function createApp() {
   app.use('/auth', authRoutes);
   // Référentiels : sans eux, aucun client ne peut construire les appels qui
   // exigent un `term_id` ou un `gradeTypeId`.
+  app.use('/school-years', schoolYearRoutes);
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);
   app.use('/classes', classRoutes);
