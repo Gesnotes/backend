@@ -76,6 +76,7 @@ describe('POST /signup-requests', () => {
   const body = {
     schoolName: 'École La Colombe',
     contactName: 'Rosine Adjovi',
+    email: 'rosine@lacolombe.test',
     phone: '97000000',
     city: 'Cotonou',
     levels: ['garderie', 'maternelle'],
@@ -91,10 +92,17 @@ describe('POST /signup-requests', () => {
     expect(saved).toMatchObject({
       schoolName: 'École La Colombe',
       contactName: 'Rosine Adjovi',
+      email: 'rosine@lacolombe.test',
       city: 'Cotonou',
       levels: ['garderie', 'maternelle'],
       status: 'nouveau',
     });
+  });
+
+  it('exige un email valide', async () => {
+    const res = await request(app).post('/signup-requests').send({ ...body, email: 'pas-un-email' });
+    expect(res.status).toBe(400);
+    expect(await prisma.signupRequest.count()).toBe(0);
   });
 
   it("exige le nom de l'école", async () => {

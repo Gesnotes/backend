@@ -9,6 +9,8 @@ export const TEST_PASSWORD = 'motdepasse123';
 
 /** Supprime toutes les données de test, dans l'ordre des dépendances. */
 export async function resetDatabase() {
+  await prisma.staffRefreshToken.deleteMany();
+  await prisma.staffUser.deleteMany();
   await prisma.signupRequest.deleteMany();
   await prisma.grade.deleteMany();
   await prisma.attendance.deleteMany();
@@ -155,6 +157,21 @@ export async function createUser(options: {
       email: normalizeEmail(options.email),
       phone: options.phone ? normalizePhone(options.phone) : null,
       role: options.role,
+      passwordHash: await argon2.hash(options.password ?? TEST_PASSWORD),
+      archivedAt: options.archived ? new Date() : null,
+    },
+  });
+}
+
+/** Compte de l'équipe Gesnotes, hors périmètre multi-écoles. */
+export async function createStaffUser(options: {
+  email: string;
+  password?: string;
+  archived?: boolean;
+}) {
+  return prisma.staffUser.create({
+    data: {
+      email: normalizeEmail(options.email),
       passwordHash: await argon2.hash(options.password ?? TEST_PASSWORD),
       archivedAt: options.archived ? new Date() : null,
     },

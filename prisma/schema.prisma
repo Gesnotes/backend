@@ -28,13 +28,14 @@ model School {
   city      String?   @db.VarChar(100)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  users       User[]
-  schoolYears SchoolYear[]
-  terms       Term[]
-  classes     Class[]
-  subjects    Subject[]
-  students    Student[]
-  gradeTypes  GradeType[]
+  users          User[]
+  schoolYears    SchoolYear[]
+  terms          Term[]
+  classes        Class[]
+  subjects       Subject[]
+  students       Student[]
+  gradeTypes     GradeType[]
+  signupRequests SignupRequest[]
 
   @@map("schools")
 }
@@ -55,20 +56,63 @@ model SignupRequest {
   id          Int                 @id @default(autoincrement())
   schoolName  String              @map("school_name") @db.VarChar(150)
   contactName String              @map("contact_name") @db.VarChar(150)
+  // Seul moyen de recontacter l'école si l'appel manque le téléphone, et sert
+  // à préremplir l'invitation du premier compte administrateur à l'acceptation.
+  email       String              @db.VarChar(150)
   phone       String              @db.VarChar(30)
   city        String              @db.VarChar(100)
   // Niveaux cochés dans le formulaire ("maternelle", "primaire", ...), en
   // texte libre côté saisie : la liste des niveaux n'est pas un référentiel
   // fermé dans le reste de l'application.
   levels      String[]
-  // Pas de route pour la faire évoluer pour l'instant : l'équipe la
-  // consulte et la met à jour directement en base le temps qu'un outil
-  // interne existe. Le champ évite une migration future pour l'ajouter.
   status      SignupRequestStatus @default(nouveau)
+  // Renseigné à l'acceptation (staff.service.ts) : l'école réellement créée à
+  // partir de cette demande, pour retrouver d'où vient chaque école.
+  schoolId    Int?                @map("school_id")
   createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+
+  school School? @relation(fields: [schoolId], references: [id])
 
   @@index([status, createdAt])
   @@map("signup_requests")
+}
+
+/// Comptes de l'équipe Gesnotes, hors du périmètre multi-écoles : n'appartient
+/// à aucune école, ne porte pas de rôle métier (admin/teacher/parent). Sert à
+/// superviser la plateforme et à traiter les demandes d'inscription. Créé à
+/// la main pour l'instant (script) : pas de self-service, n'importe qui
+/// pourrait sinon s'auto-inscrire comme membre de l'équipe.
+model StaffUser {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique @db.VarChar(150)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  firstName         String?   @map("first_name") @db.VarChar(100)
+  lastName          String?   @map("last_name") @db.VarChar(100)
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
+  /// Même rôle que `User.sessionsRevokedAt` : coupe les access tokens déjà
+  /// émis, le seul moyen de déconnecter réellement un JWT longue durée.
+  sessionsRevokedAt DateTime? @map("sessions_revoked_at") @db.Timestamp(6)
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  refreshTokens StaffRefreshToken[]
+
+  @@map("staff_users")
+}
+
+// Refresh tokens du staff — table dédiée plutôt que réutiliser `RefreshToken`
+// (qui référence `User`) : un compte staff n'est pas un `User` d'école.
+model StaffRefreshToken {
+  id          Int       @id @default(autoincrement())
+  staffUserId Int       @map("staff_user_id")
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamp(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamp(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId, revokedAt])
+  @@map("staff_refresh_tokens")
 }
 
 // Année scolaire ("2025-2026") — regroupe les périodes (trimestres,

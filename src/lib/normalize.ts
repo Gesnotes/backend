@@ -53,3 +53,18 @@ export function labelKey(label: string): string {
     .replace(/\s+/g, ' ')
     .toLowerCase();
 }
+
+/**
+ * Sous-domaine proposé à partir d'un nom d'école : minuscules, sans accents,
+ * tirets entre les mots. Une simple proposition — `staff.service.ts` vérifie
+ * et ajuste l'unicité avant de la retenir.
+ */
+export function slugify(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63);
+}

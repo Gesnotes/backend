@@ -32,6 +32,7 @@ onboardingRoutes.get(
 const signupBody = z.object({
   schoolName: z.string().trim().min(1, "Le nom de l'école est obligatoire.").max(150),
   contactName: z.string().trim().min(1, 'Votre nom est obligatoire.').max(150),
+  email: z.email("L'adresse email n'est pas valide."),
   phone: z
     .string()
     .trim()

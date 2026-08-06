@@ -6,6 +6,11 @@ export interface AuthPayload {
   role: Role;
 }
 
+/** Compte de l'équipe Gesnotes — hors périmètre multi-écoles, voir StaffUser. */
+export interface StaffAuthPayload {
+  staffId: number;
+}
+
 declare global {
   namespace Express {
     interface Request {
@@ -13,6 +18,8 @@ declare global {
       auth?: AuthPayload;
       /** École résolue par le sous-domaine (disponible même sans token). */
       schoolId?: number;
+      /** Présent uniquement sur les routes /staff, posé par `requireStaffAuth`. */
+      staffAuth?: StaffAuthPayload;
     }
   }
 }

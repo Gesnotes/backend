@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma';
-import { normalizePhone } from '../lib/normalize';
+import { normalizeEmail, normalizePhone } from '../lib/normalize';
 
 /**
  * Avant qu'une école existe.
@@ -31,6 +31,7 @@ export async function searchSchools(q: string) {
 export interface SignupRequestInput {
   schoolName: string;
   contactName: string;
+  email: string;
   phone: string;
   city: string;
   levels: string[];
@@ -42,6 +43,7 @@ export async function createSignupRequest(data: SignupRequestInput) {
     data: {
       schoolName: data.schoolName.trim(),
       contactName: data.contactName.trim(),
+      email: normalizeEmail(data.email),
       phone: normalizePhone(data.phone),
       city: data.city.trim(),
       levels: data.levels,
