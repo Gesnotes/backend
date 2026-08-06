@@ -14,6 +14,7 @@ import { attendanceMeRoutes } from './routes/attendance.routes';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
+import { enrollmentRoutes } from './routes/enrollment.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
@@ -92,6 +93,7 @@ export function createApp() {
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);
   app.use('/classes', classRoutes);
+  app.use('/classes', enrollmentRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);
   app.use('/parents/me', parentMeRoutes);

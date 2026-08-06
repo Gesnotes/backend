@@ -11,6 +11,7 @@ export const TEST_PASSWORD = 'motdepasse123';
 export async function resetDatabase() {
   await prisma.grade.deleteMany();
   await prisma.attendance.deleteMany();
+  await prisma.enrollmentDecision.deleteMany();
   await prisma.evaluation.deleteMany();
   await prisma.subjectCoefficient.deleteMany();
   await prisma.teacherAssignment.deleteMany();
