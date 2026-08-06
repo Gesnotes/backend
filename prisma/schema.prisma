@@ -24,14 +24,37 @@ model School {
   subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  users      User[]
-  terms      Term[]
-  classes    Class[]
-  subjects   Subject[]
-  students   Student[]
-  gradeTypes GradeType[]
+  users       User[]
+  schoolYears SchoolYear[]
+  terms       Term[]
+  classes     Class[]
+  subjects    Subject[]
+  students    Student[]
+  gradeTypes  GradeType[]
 
   @@map("schools")
+}
+
+// Année scolaire ("2025-2026") — regroupe les périodes (trimestres,
+// semestres) d'une même rentrée. Le rattachement d'une période est optionnel :
+// une période sans année continue de fonctionner exactement comme avant,
+// aucune migration de données n'est nécessaire pour les écoles déjà en
+// production.
+model SchoolYear {
+  id        Int       @id @default(autoincrement())
+  schoolId  Int       @map("school_id")
+  label     String    @db.VarChar(50) // "2025-2026"
+  startDate DateTime? @map("start_date") @db.Date
+  endDate   DateTime? @map("end_date") @db.Date
+  // Comme pour une période : archiver plutôt qu'effacer, la suppression
+  // définitive restant une décision distincte prise depuis les archives.
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+
+  school School @relation(fields: [schoolId], references: [id])
+  terms  Term[]
+
+  @@index([schoolId, archivedAt])
+  @@map("school_years")
 }
 
 // Utilisateurs (admin, prof, parent — un seul point d'auth)
@@ -100,11 +123,15 @@ model PasswordResetToken {
   @@map("password_reset_tokens")
 }
 
-// Année scolaire / période (trimestre, semestre)
+// Période (trimestre, semestre) — le regroupement par année scolaire vit sur
+// `SchoolYear`, `schoolYearId` ci-dessous.
 model Term {
-  id        Int       @id @default(autoincrement())
-  schoolId  Int       @map("school_id")
-  label     String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
+  id           Int    @id @default(autoincrement())
+  schoolId     Int    @map("school_id")
+  // Nullable : rattacher une période à une année scolaire est optionnel,
+  // voir le commentaire sur `SchoolYear`.
+  schoolYearId Int?   @map("school_year_id")
+  label        String @db.VarChar(50) // "Trimestre 1", "2025-2026"
   startDate DateTime? @map("start_date") @db.Date
   endDate   DateTime? @map("end_date") @db.Date
   // Une période portant des évaluations ne peut pas être effacée directement :
@@ -121,11 +148,13 @@ model Term {
   // pour l'équipe le temps d'un rattrapage, et le verrou se remet seul.
   reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
-  school      School       @relation(fields: [schoolId], references: [id])
+  school     School      @relation(fields: [schoolId], references: [id])
+  schoolYear SchoolYear? @relation(fields: [schoolYearId], references: [id])
   grades      Grade[]
   evaluations Evaluation[]
 
   @@index([schoolId, archivedAt])
+  @@index([schoolYearId])
   @@map("terms")
 }
 
