@@ -20,6 +20,7 @@ import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
+import { staffRoutes } from './routes/staff.routes';
 import { termRoutes } from './routes/term.routes';
 import { errorHandler, notFoundHandler } from './middlewares/errorHandler';
 import { requireAuth } from './middlewares/requireAuth';
@@ -84,6 +85,9 @@ export function createApp() {
   // Avant-inscription : recherche d'école et demande de rappel, avant qu'une
   // école existe ou soit résolue — comme /health, monté avant le contexte.
   app.use(onboardingRoutes);
+
+  // Équipe Gesnotes : hors périmètre multi-écoles, monté pour la même raison.
+  app.use('/staff', staffRoutes);
 
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);

@@ -44,6 +44,7 @@ const FIELD_LABELS: Record<string, string> = {
   schoolYearId: 'Année scolaire',
   school_year_id: 'Année scolaire',
   promotesToId: 'Classe supérieure',
+  subdomain: 'Sous-domaine',
   toClassId: 'Classe de destination',
   decision: 'Décision',
   termId: 'Période',
