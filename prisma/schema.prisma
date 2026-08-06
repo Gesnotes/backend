@@ -50,8 +50,9 @@ model SchoolYear {
   // définitive restant une décision distincte prise depuis les archives.
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school School @relation(fields: [schoolId], references: [id])
-  terms  Term[]
+  school  School  @relation(fields: [schoolId], references: [id])
+  terms   Term[]
+  classes Class[]
 
   @@index([schoolId, archivedAt])
   @@map("school_years")
@@ -151,7 +152,11 @@ model Term {
   reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
-  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id])
+  // RESTRICT explicite (déjà le comportement réel en base depuis la migration
+  // d'origine) : une année scolaire encore rattachée à une période ne peut pas
+  // être supprimée définitivement. `deleteSchoolYearPermanently` détache
+  // d'abord les périodes plutôt que de laisser filtrer une erreur SQL brute.
+  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   grades      Grade[]
   evaluations Evaluation[]
 
@@ -181,6 +186,16 @@ model Class {
   // Seul enseignant, avec l'admin, autorisé à saisir la présence de cette
   // classe (plan maternelle/garderie). `null` : seul l'admin peut saisir.
   homeroomTeacherId Int?      @map("homeroom_teacher_id")
+  // Nullable, comme `Term.schoolYearId` : une classe non rattachée continue de
+  // fonctionner exactement comme avant. Le nom d'une classe n'est unique que
+  // dans son année (ou parmi les classes sans année) — voir
+  // `assertClassNameAvailable` — pour qu'une « 6e A » puisse revenir chaque
+  // rentrée sans entrer en conflit avec elle-même l'an passé.
+  schoolYearId      Int?      @map("school_year_id")
+  // Classe où les élèves de celle-ci sont censés passer l'année suivante
+  // (« CP » → « CE1 »), posée par `duplicateClassForNextYear` ou à la main.
+  // Sert de base au futur assistant de réinscription (lot 4).
+  promotesToId      Int?      @map("promotes_to_id")
   archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
 
   school          School               @relation(fields: [schoolId], references: [id])
@@ -189,6 +204,11 @@ model Class {
   // n'est pas nullable, un `SetNull` par défaut échouerait à l'exécution.
   // deleteTeacherPermanently refuse déjà la suppression d'un référent en poste.
   homeroomTeacher User?                @relation(fields: [homeroomTeacherId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  schoolYear      SchoolYear?          @relation(fields: [schoolYearId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // Auto-relation nommée, composite pour la même raison que `homeroomTeacher` :
+  // la classe supérieure est forcément de la même école.
+  promotesTo      Class?               @relation("ClassPromotion", fields: [promotesToId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  promotedFrom    Class[]              @relation("ClassPromotion")
   students        Student[]
   assignments     TeacherAssignment[]
   coefficients    SubjectCoefficient[]
@@ -198,6 +218,7 @@ model Class {
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
   @@index([schoolId, archivedAt])
+  @@index([schoolYearId])
   @@map("classes")
 }
 

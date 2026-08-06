@@ -177,6 +177,139 @@ describe('mode par classe et enseignant référent', () => {
   });
 });
 
+describe('classes rattachées à une année scolaire et classe supérieure', () => {
+  const makeYear = (label: string) => prisma.schoolYear.create({ data: { schoolId: schoolA.id, label } });
+
+  it('crée une classe rattachée à une année scolaire', async () => {
+    const year = await makeYear('2025-2026');
+
+    const res = await api(adminToken)
+      .post('/classes')
+      .send({ name: '5e A', level: '5e', schoolYearId: year.id });
+
+    expect(res.status).toBe(201);
+    expect(res.body.schoolYearId).toBe(year.id);
+  });
+
+  it("refuse une année scolaire d'une autre école", async () => {
+    const foreignYear = await prisma.schoolYear.create({ data: { schoolId: schoolB.id, label: '2025-2026' } });
+
+    const res = await api(adminToken)
+      .post('/classes')
+      .send({ name: '5e A', level: '5e', schoolYearId: foreignYear.id });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('autorise le même nom de classe dans deux années différentes', async () => {
+    const y1 = await makeYear('2025-2026');
+    const y2 = await makeYear('2026-2027');
+
+    await api(adminToken).post('/classes').send({ name: '6e A', level: '6e', schoolYearId: y1.id });
+    const res = await api(adminToken).post('/classes').send({ name: '6e A', level: '6e', schoolYearId: y2.id });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('refuse le même nom de classe deux fois dans la même année', async () => {
+    const year = await makeYear('2025-2026');
+    await api(adminToken).post('/classes').send({ name: '6e A', level: '6e', schoolYearId: year.id });
+
+    const res = await api(adminToken).post('/classes').send({ name: '6e A', level: '6e', schoolYearId: year.id });
+    expect(res.status).toBe(409);
+  });
+
+  it('filtre les classes par année scolaire', async () => {
+    const year = await makeYear('2025-2026');
+    await api(adminToken).post('/classes').send({ name: '6e A', level: '6e', schoolYearId: year.id });
+    // `klass` (créée dans beforeEach) n'a pas d'année : elle ne doit pas apparaître dans le filtre.
+
+    const res = await api(adminToken).get(`/classes?school_year_id=${year.id}`);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].name).toBe('6e A');
+  });
+
+  it('modifie le rattachement à une année, puis le retire', async () => {
+    const year = await makeYear('2025-2026');
+
+    await api(adminToken).patch(`/classes/${klass.id}`).send({ schoolYearId: year.id });
+    expect((await prisma.class.findUniqueOrThrow({ where: { id: klass.id } })).schoolYearId).toBe(year.id);
+
+    await api(adminToken).patch(`/classes/${klass.id}`).send({ schoolYearId: null });
+    expect((await prisma.class.findUniqueOrThrow({ where: { id: klass.id } })).schoolYearId).toBeNull();
+  });
+
+  describe('POST /classes/:id/duplicate — préparer la rentrée suivante', () => {
+    it('duplique la classe dans la nouvelle année, coefficients et référent compris', async () => {
+      const prof = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+      await api(adminToken).patch(`/classes/${klass.id}`).send({ homeroomTeacherId: prof.id });
+      await prisma.subjectCoefficient.create({ data: { subjectId: maths.id, classId: klass.id, coefficient: 4 } });
+
+      const nextYear = await makeYear('2026-2027');
+      const res = await api(adminToken).post(`/classes/${klass.id}/duplicate`).send({ schoolYearId: nextYear.id });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ name: '6e A', level: '6e', schoolYearId: nextYear.id, homeroomTeacherId: prof.id });
+
+      const coefficients = await prisma.subjectCoefficient.findMany({ where: { classId: res.body.id } });
+      expect(coefficients).toHaveLength(1);
+      expect(Number(coefficients[0]!.coefficient)).toBe(4);
+
+      const source = await prisma.class.findUniqueOrThrow({ where: { id: klass.id } });
+      expect(source.promotesToId).toBe(res.body.id);
+    });
+
+    it('accepte un nom et un niveau différents', async () => {
+      const nextYear = await makeYear('2026-2027');
+      const res = await api(adminToken)
+        .post(`/classes/${klass.id}/duplicate`)
+        .send({ schoolYearId: nextYear.id, name: '5e A', level: '5e' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ name: '5e A', level: '5e' });
+    });
+
+    it('refuse de dupliquer deux fois la même classe', async () => {
+      const nextYear = await makeYear('2026-2027');
+      await api(adminToken).post(`/classes/${klass.id}/duplicate`).send({ schoolYearId: nextYear.id });
+
+      const res = await api(adminToken).post(`/classes/${klass.id}/duplicate`).send({ schoolYearId: nextYear.id });
+      expect(res.status).toBe(409);
+    });
+  });
+
+  describe('classe supérieure (promotesToId)', () => {
+    it('désigne une classe supérieure', async () => {
+      const cinquieme = await prisma.class.create({ data: { schoolId: schoolA.id, name: '5e A', level: '5e' } });
+
+      const res = await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: cinquieme.id });
+      expect(res.status).toBe(200);
+      expect(res.body.promotesToId).toBe(cinquieme.id);
+    });
+
+    it('refuse qu’une classe se désigne elle-même', async () => {
+      const res = await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: klass.id });
+      expect(res.status).toBe(400);
+    });
+
+    it("refuse une classe supérieure d'une autre école", async () => {
+      const foreign = await prisma.class.create({ data: { schoolId: schoolB.id, name: '5e A', level: '5e' } });
+
+      const res = await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: foreign.id });
+      expect(res.status).toBe(404);
+    });
+
+    it('refuse la suppression définitive d’une classe encore désignée comme supérieure', async () => {
+      const cinquieme = await prisma.class.create({ data: { schoolId: schoolA.id, name: '5e A', level: '5e' } });
+      await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: cinquieme.id });
+
+      const res = await api(adminToken).delete(`/classes/${cinquieme.id}?permanent=true`);
+      expect(res.status).toBe(409);
+      expect(await prisma.class.count({ where: { id: cinquieme.id } })).toBe(1);
+    });
+  });
+});
+
 describe('copie des coefficients depuis une classe du même niveau', () => {
   it('reprend les coefficients de la classe modèle', async () => {
     await prisma.subjectCoefficient.create({
