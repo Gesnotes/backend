@@ -229,9 +229,12 @@ export async function restoreTeacher(schoolId: number, id: number) {
 }
 
 /**
- * Suppression définitive. Refusée dès qu'une note a été saisie : la relation
- * `Grade.teacherUserId` étant en `SET NULL`, supprimer le compte effacerait
- * l'auteur des notes sans que rien ne le signale.
+ * Suppression définitive. Refusée dès qu'une note ou une présence a été
+ * saisie : les relations `Grade.teacherUserId` et `Attendance.recordedByUserId`
+ * étant en `SET NULL`, supprimer le compte effacerait l'auteur sans que rien
+ * ne le signale. Refusée aussi si l'enseignant est encore référent d'une
+ * classe : `Class.homeroomTeacherId` est en `RESTRICT`, la base refuserait de
+ * toute façon, mais avec un message SQL illisible pour une secrétaire.
  */
 export async function deleteTeacherPermanently(schoolId: number, id: number) {
   await getTeacher(schoolId, id);
@@ -241,6 +244,22 @@ export async function deleteTeacherPermanently(schoolId: number, id: number) {
     throw conflict(
       `Suppression impossible : ${gradeCount} note(s) ont été saisies par cet enseignant. Archivez le compte plutôt.`,
       { gradeCount },
+    );
+  }
+
+  const attendanceCount = await prisma.attendance.count({ where: { recordedByUserId: id } });
+  if (attendanceCount > 0) {
+    throw conflict(
+      `Suppression impossible : ${attendanceCount} présence(s) ont été saisies par cet enseignant. Archivez le compte plutôt.`,
+      { attendanceCount },
+    );
+  }
+
+  const homeroomCount = await prisma.class.count({ where: { homeroomTeacherId: id } });
+  if (homeroomCount > 0) {
+    throw conflict(
+      `Suppression impossible : cet enseignant est référent de ${homeroomCount} classe(s). Retirez-le de ces classes avant de supprimer son compte.`,
+      { homeroomCount },
     );
   }
 

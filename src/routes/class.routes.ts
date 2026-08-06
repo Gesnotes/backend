@@ -32,9 +32,15 @@ const listQuery = z.object({
 
 const detailQuery = z.object({ term_id: z.coerce.number().int().positive() });
 
+const modeField = z.enum(['notes', 'presence'], {
+  message: 'Le mode doit être "notes" ou "presence".',
+});
+
 const createBody = z.object({
   name: z.string({ message: 'Le nom de la classe est obligatoire.' }).trim().min(1, 'Le nom de la classe est obligatoire.').max(50, 'Le nom ne doit pas dépasser 50 caractères.'),
   level: z.string({ message: 'Le niveau est obligatoire.' }).trim().min(1, 'Le niveau est obligatoire.').max(20, 'Le niveau ne doit pas dépasser 20 caractères.'),
+  mode: modeField.optional(),
+  homeroomTeacherId: z.coerce.number().int().positive().optional(),
   copyCoefficientsFromClassId: z.coerce.number().int().positive().optional(),
 });
 
@@ -42,6 +48,8 @@ const updateBody = z
   .object({
     name: z.string().trim().min(1).max(50).optional(),
     level: z.string().trim().min(1).max(20).optional(),
+    mode: modeField.optional(),
+    homeroomTeacherId: z.coerce.number().int().positive().nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 

@@ -65,6 +65,21 @@ function assertBareme(maxValue: number) {
   }
 }
 
+/**
+ * Notes et présence sont mutuellement exclusifs (plan maternelle/garderie) :
+ * une classe en mode présence n'a pas de matières à évaluer, seulement des
+ * jours de présence. `assertCanGrade` a déjà vérifié que la classe existe et
+ * appartient à l'école appelante.
+ */
+async function assertClassAllowsGrading(classId: number) {
+  const klass = await prisma.class.findUnique({ where: { id: classId }, select: { mode: true } });
+  if (klass?.mode === 'presence') {
+    throw badRequest(
+      "Cette classe est en mode présence : elle ne peut pas recevoir d'évaluations notées.",
+    );
+  }
+}
+
 /** Évaluations d'un couple classe × matière pour une période, les plus récentes d'abord. */
 export async function listEvaluations(
   auth: AuthPayload,
@@ -101,6 +116,7 @@ export async function createEvaluation(
   },
 ) {
   await assertCanGrade(auth, data.classId, data.subjectId);
+  await assertClassAllowsGrading(data.classId);
   await assertContext(auth.schoolId, data.gradeTypeId, data.termId);
   await assertTermOpen(auth, data.termId);
 

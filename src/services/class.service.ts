@@ -1,4 +1,5 @@
 import prisma from '../lib/prisma';
+import type { ClassMode } from '../generated/prisma/enums';
 import type { AuthPayload } from '../types/express';
 import { conflict, forbidden, notFound } from '../errors/AppError';
 import { labelKey } from '../lib/normalize';
@@ -138,12 +139,53 @@ async function assertClassNameAvailable(schoolId: number, name: string, exceptId
   }
 }
 
+/**
+ * Vérifie que le référent proposé est bien un enseignant de l'école, en
+ * activité. L'admin n'a pas besoin de figurer ici : il saisit déjà sans
+ * restriction (plan maternelle/garderie).
+ */
+async function assertHomeroomTeacherValid(schoolId: number, homeroomTeacherId: number) {
+  const teacher = await prisma.user.findFirst({
+    where: { id: homeroomTeacherId, schoolId, role: 'teacher', archivedAt: null },
+  });
+  if (!teacher) throw notFound('Enseignant référent introuvable');
+}
+
+/**
+ * Passer une classe en mode présence alors qu'elle porte déjà des évaluations
+ * la laisserait dans un état incohérent avec le garde-fou symétrique de
+ * `createEvaluation` (une classe présence ne peut plus en recevoir de
+ * nouvelles). Refusé plutôt que de laisser les évaluations existantes orphelines
+ * d'un mode qui ne les autorise plus.
+ */
+async function assertModeSwitchAllowed(classId: number, nextMode: ClassMode) {
+  if (nextMode !== 'presence') return;
+
+  const evaluationCount = await prisma.evaluation.count({ where: { classId } });
+  if (evaluationCount > 0) {
+    throw conflict(
+      `Passage en mode présence impossible : ${evaluationCount} évaluation(s) existent déjà sur cette classe.`,
+      { evaluationCount },
+    );
+  }
+}
+
 export async function createClass(
   schoolId: number,
-  data: { name: string; level: string; copyCoefficientsFromClassId?: number },
+  data: {
+    name: string;
+    level: string;
+    mode?: ClassMode;
+    homeroomTeacherId?: number;
+    copyCoefficientsFromClassId?: number;
+  },
 ) {
   data = { ...data, name: data.name.trim() };
   await assertClassNameAvailable(schoolId, data.name);
+
+  if (data.homeroomTeacherId !== undefined) {
+    await assertHomeroomTeacherValid(schoolId, data.homeroomTeacherId);
+  }
 
   const source = data.copyCoefficientsFromClassId
     ? await prisma.class.findFirst({
@@ -158,7 +200,13 @@ export async function createClass(
 
   return prisma.$transaction(async (tx) => {
     const created = await tx.class.create({
-      data: { schoolId, name: data.name, level: data.level },
+      data: {
+        schoolId,
+        name: data.name,
+        level: data.level,
+        mode: data.mode ?? 'notes',
+        homeroomTeacherId: data.homeroomTeacherId ?? null,
+      },
     });
 
     if (source?.coefficients.length) {
@@ -178,11 +226,16 @@ export async function createClass(
 export async function updateClass(
   schoolId: number,
   id: number,
-  data: { name?: string; level?: string },
+  data: { name?: string; level?: string; mode?: ClassMode; homeroomTeacherId?: number | null },
 ) {
   await getClass(schoolId, id);
   const name = data.name?.trim();
   if (name !== undefined) await assertClassNameAvailable(schoolId, name, id);
+  if (data.homeroomTeacherId !== undefined && data.homeroomTeacherId !== null) {
+    await assertHomeroomTeacherValid(schoolId, data.homeroomTeacherId);
+  }
+  if (data.mode !== undefined) await assertModeSwitchAllowed(id, data.mode);
+
   return prisma.class.update({ where: { id }, data: { ...data, ...(name ? { name } : {}) } });
 }
 

@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma';
-import type { GradeEvent } from '../lib/events';
+import type { AttendanceEvent, GradeEvent } from '../lib/events';
 import { logger } from '../lib/logger';
 import { webAppUrl } from '../lib/env';
 import { onEvent } from '../lib/events';
@@ -15,6 +15,7 @@ import { pushSender } from '../lib/push';
 export function registerNotificationHandlers() {
   onEvent('grade.created', (event) => notifyParents(event, 'nouvelle'));
   onEvent('grade.updated', (event) => notifyParents(event, 'modifiee'));
+  onEvent('attendance.marked', (event) => notifyParentsOfAttendance(event));
 }
 
 /** Exporté pour être testable directement, sans dépendre du timing du bus. */
@@ -73,6 +74,60 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
 
   // Un appareil désinstallé garderait sinon une ligne morte pour toujours, et
   // chaque envoi futur repaierait son échec.
+  if (invalidTokens.length > 0) {
+    await prisma.device.deleteMany({ where: { fcmToken: { in: invalidTokens } } });
+    logger.info({ count: invalidTokens.length }, 'Tokens FCM invalides purgés');
+  }
+}
+
+/**
+ * Prévient les parents d'une absence ou d'un retard, jamais d'une présence.
+ * Exportée pour être testable directement, sans dépendre du timing du bus.
+ */
+export async function notifyParentsOfAttendance(event: AttendanceEvent) {
+  const attendance = await prisma.attendance.findUnique({
+    where: { id: event.attendanceId },
+    include: {
+      student: {
+        select: {
+          firstName: true,
+          lastName: true,
+          archivedAt: true,
+          parents: { select: { parentUserId: true } },
+        },
+      },
+    },
+  });
+
+  if (!attendance || attendance.student.archivedAt) return;
+
+  const parentIds = attendance.student.parents.map((p) => p.parentUserId);
+  if (parentIds.length === 0) return;
+
+  const devices = await prisma.device.findMany({
+    where: { userId: { in: parentIds }, user: { archivedAt: null } },
+    select: { fcmToken: true },
+  });
+  if (devices.length === 0) return;
+
+  const title = attendance.status === 'absent' ? 'Absence signalée' : 'Retard signalé';
+
+  const message = {
+    title,
+    body: `${attendance.student.firstName} a été marqué(e) ${attendance.status === 'absent' ? 'absent(e)' : 'en retard'} aujourd'hui.`,
+    data: {
+      attendanceId: String(attendance.id),
+      studentId: String(attendance.studentId),
+      classId: String(attendance.classId),
+    },
+    link: `${webAppUrl}/parent/presence/${attendance.id}`,
+  };
+
+  const { invalidTokens } = await pushSender.send(
+    devices.map((d) => d.fcmToken),
+    message,
+  );
+
   if (invalidTokens.length > 0) {
     await prisma.device.deleteMany({ where: { fcmToken: { in: invalidTokens } } });
     logger.info({ count: invalidTokens.length }, 'Tokens FCM invalides purgés');

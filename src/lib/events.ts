@@ -10,9 +10,19 @@ export interface GradeEvent {
   termId: number;
 }
 
+export interface AttendanceEvent {
+  attendanceId: number;
+  schoolId: number;
+  studentId: number;
+  classId: number;
+  /** Toujours 'absent' ou 'late' : le 'present' ne notifie personne. */
+  status: 'absent' | 'late';
+}
+
 interface Events {
   'grade.created': GradeEvent;
   'grade.updated': GradeEvent;
+  'attendance.marked': AttendanceEvent;
 }
 
 const emitter = new EventEmitter();
