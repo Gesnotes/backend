@@ -17,8 +17,15 @@ const INTERRO = 1;
 const DEVOIR = 2;
 const COMPO = 3;
 
+const CODES: Record<number, string> = {
+  [INTERRO]: 'interrogation',
+  [DEVOIR]: 'devoir',
+  [COMPO]: 'composition',
+};
+
 const grade = (gradeTypeId: number, value: number, maxValue = 20): GradeInput => ({
   gradeTypeId,
+  code: CODES[gradeTypeId] ?? 'interrogation',
   weight: D(gradeTypeId), // l'id vaut le poids dans ces jeux d'essai
   value: D(value),
   maxValue: D(maxValue),
@@ -62,24 +69,31 @@ describe('moyenne par matière', () => {
   });
 
   it('cumule les interrogations en une seule note avant pondération', () => {
-    // Trois interros identiques ne doivent pas peser trois fois plus.
+    // Trois interros identiques ne doivent pas peser trois fois plus. Devoir
+    // et composition ajoutés pour passer le seuil de publication.
     const trois = subjectAverage([
       grade(INTERRO, 10),
       grade(INTERRO, 10),
       grade(INTERRO, 10),
+      grade(DEVOIR, 12),
       grade(COMPO, 20),
     ]);
-    const une = subjectAverage([grade(INTERRO, 10), grade(COMPO, 20)]);
+    const une = subjectAverage([grade(INTERRO, 10), grade(DEVOIR, 12), grade(COMPO, 20)]);
     expect(round(trois)).toBe(round(une));
   });
 
-  it('exclut du diviseur une catégorie absente — le piège de la constante 6', () => {
-    // Interros 12 + devoir 14, pas encore de composition.
-    // Attendu : (12 + 2×14) / 3 = 40/3 = 13.33
-    // Et surtout PAS 40/6 = 6.67, qui afficherait un élève en échec.
-    const average = subjectAverage([grade(INTERRO, 12), grade(DEVOIR, 14)]);
-    expect(round(average)).toBe(13.33);
-    expect(round(average)).not.toBe(6.67);
+  it('ne publie aucune moyenne sans devoir ET composition — choix de l\'établissement', () => {
+    // Interros seules, ou interro + devoir sans composition : quelques
+    // interrogations ne suffisent pas à juger un trimestre.
+    expect(subjectAverage([grade(INTERRO, 12)])).toBeNull();
+    expect(subjectAverage([grade(INTERRO, 12), grade(DEVOIR, 14)])).toBeNull();
+    expect(subjectAverage([grade(COMPO, 16)])).toBeNull();
+  });
+
+  it('publie la moyenne dès que devoir et composition sont tous deux présents', () => {
+    // (2×14 + 3×16) / 5 = (28+48)/5 = 15.2 — l'interrogation n'est pas requise.
+    const average = subjectAverage([grade(DEVOIR, 14), grade(COMPO, 16)]);
+    expect(round(average)).toBe(15.2);
   });
 
   it('gère plusieurs devoirs et plusieurs compositions', () => {
@@ -106,13 +120,16 @@ describe('moyenne par matière', () => {
   });
 
   it('renvoie null si toutes les catégories ont un poids nul', () => {
-    const zeroWeight: GradeInput = { gradeTypeId: 1, weight: D(0), value: D(12), maxValue: D(20) };
-    expect(subjectAverage([zeroWeight])).toBeNull();
+    const zeroDevoir: GradeInput = { gradeTypeId: DEVOIR, code: 'devoir', weight: D(0), value: D(12), maxValue: D(20) };
+    const zeroCompo: GradeInput = { gradeTypeId: COMPO, code: 'composition', weight: D(0), value: D(15), maxValue: D(20) };
+    expect(subjectAverage([zeroDevoir, zeroCompo])).toBeNull();
   });
 
   it('accepte une note de 0 sans la confondre avec une absence de note', () => {
-    const average = subjectAverage([grade(COMPO, 0)]);
-    expect(round(average)).toBe(0);
+    const average = subjectAverage([grade(DEVOIR, 12), grade(COMPO, 0)]);
+    // (2×12 + 3×0) / 5 = 4.8 — la composition à 0 pèse bien dans le calcul,
+    // elle n'est pas traitée comme une absence de note.
+    expect(round(average)).toBe(4.8);
     expect(average).not.toBeNull();
   });
 });
@@ -159,7 +176,7 @@ describe('précision et arrondi', () => {
   });
 
   it('conserve la valeur exacte des demi-points', () => {
-    expect(round(subjectAverage([grade(COMPO, 13.5)]))).toBe(13.5);
+    expect(round(subjectAverage([grade(DEVOIR, 13.5), grade(COMPO, 13.5)]))).toBe(13.5);
   });
 });
 

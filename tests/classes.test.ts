@@ -16,6 +16,7 @@ let klass: { id: number };
 let term: { id: number };
 let maths: { id: number };
 let compoId: number;
+let devoirId: number;
 
 beforeEach(async () => {
   await resetDatabase();
@@ -37,6 +38,10 @@ beforeEach(async () => {
     data: { schoolId: schoolA.id, code: 'composition', label: 'Composition', weight: 3 },
   });
   compoId = compo.id;
+  const devoir = await prisma.gradeType.create({
+    data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
+  });
+  devoirId = devoir.id;
 });
 
 afterAll(async () => {
@@ -54,8 +59,23 @@ const api = (token: string) => ({
 const addStudent = (firstName: string, lastName: string, classId = klass.id) =>
   prisma.student.create({ data: { schoolId: schoolA.id, classId, firstName, lastName } });
 
-const addGrade = (studentId: number, value: number) =>
-  seedGrade({
+/**
+ * Devoir et composition à la même valeur : la moyenne pondérée d'un devoir et
+ * d'une composition identiques vaut cette valeur, quels que soient leurs
+ * poids respectifs — ça permet à ces tests de continuer à raisonner sur "la
+ * note de l'élève" comme une valeur unique, tout en passant le seuil de
+ * publication (devoir + composition requis).
+ */
+const addGrade = async (studentId: number, value: number) => {
+  await seedGrade({
+    schoolId: schoolA.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: devoirId,
+    termId: term.id,
+    value,
+  });
+  return seedGrade({
     schoolId: schoolA.id,
     studentId,
     subjectId: maths.id,
@@ -63,6 +83,7 @@ const addGrade = (studentId: number, value: number) =>
     termId: term.id,
     value,
   });
+};
 
 describe('CRUD /classes', () => {
   it('crée, liste et modifie une classe', async () => {

@@ -134,6 +134,21 @@ describe('cloisonnement entre parents', () => {
 
 describe('GET /parents/me/children', () => {
   it('renvoie la classe et la moyenne sur la période', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition) sans déplacer la
+    // moyenne attendue.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 15,
+    });
+
     const res = await get(tokenParentA, `/parents/me/children?term_id=${term.id}`);
     expect(res.body[0].classe.name).toBe('6e A');
     expect(res.body[0].average).toBe(15);
@@ -156,6 +171,21 @@ describe('GET /parents/me/children', () => {
 
 describe('GET /children/:id', () => {
   it('renvoie la moyenne générale et le détail par matière', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition) sans déplacer la
+    // moyenne attendue, `position` garde Composition en tête du détail.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 15,
+    });
+
     const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
 
     expect(res.status).toBe(200);

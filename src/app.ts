@@ -20,6 +20,7 @@ import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
+import { schoolRoutes } from './routes/school.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
 import { termRoutes } from './routes/term.routes';
@@ -104,6 +105,7 @@ export function createApp() {
   app.use('/auth', authRoutes);
   // Référentiels : sans eux, aucun client ne peut construire les appels qui
   // exigent un `term_id` ou un `gradeTypeId`.
+  app.use('/school', schoolRoutes);
   app.use('/school-years', schoolYearRoutes);
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);

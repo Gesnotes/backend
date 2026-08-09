@@ -75,7 +75,7 @@ export async function computeClassBulletins(
         value: true,
         maxValue: true,
         student: { select: { classId: true } },
-        gradeType: { select: { id: true, label: true, weight: true, position: true } },
+        gradeType: { select: { id: true, code: true, label: true, weight: true, position: true } },
         subject: { select: { id: true, name: true, coefficient: true } },
       },
     }),
@@ -103,7 +103,7 @@ function buildBulletin(
     gradeTypeId: number;
     value: D;
     maxValue: D;
-    gradeType: { id: number; label: string; weight: D; position: number };
+    gradeType: { id: number; code: string; label: string; weight: D; position: number };
     subject: { id: number; name: string; coefficient: D | null };
   }[],
   coefficients: { subjectId: number; coefficient: D }[],
@@ -208,7 +208,7 @@ export async function computeStudentResult(
         gradeTypeId: true,
         value: true,
         maxValue: true,
-        gradeType: { select: { id: true, label: true, weight: true, position: true } },
+        gradeType: { select: { id: true, code: true, label: true, weight: true, position: true } },
         subject: { select: { id: true, name: true, coefficient: true } },
       },
     }),
@@ -293,10 +293,11 @@ function toGradeInput(grade: {
   gradeTypeId: number;
   value: D;
   maxValue: D;
-  gradeType: { weight: D };
+  gradeType: { code: string; weight: D };
 }): GradeInput {
   return {
     gradeTypeId: grade.gradeTypeId,
+    code: grade.gradeType.code,
     weight: grade.gradeType.weight,
     value: grade.value,
     maxValue: grade.maxValue,

@@ -36,9 +36,12 @@ beforeEach(async () => {
   const maths = await prisma.subject.create({
     data: { schoolId: school.id, name: 'Mathématiques', coefficient: 4 },
   });
-  const [interro, compo] = await Promise.all([
+  const [interro, devoir, compo] = await Promise.all([
     prisma.gradeType.create({
       data: { schoolId: school.id, code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
+    }),
+    prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
     }),
     prisma.gradeType.create({
       data: { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
@@ -55,9 +58,12 @@ beforeEach(async () => {
   await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parent.id } });
   await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: autre.id } });
 
+  // Devoir aligné sur la moyenne finale de chaque élève (15 pour Ana, 10 pour
+  // Ben) : ajouter cette catégorie ne fait que passer le seuil de publication
+  // (devoir + composition requis), sans déplacer les moyennes attendues.
   for (const [student, values] of [
-    [ana, { interro: 12, compo: 16 }],
-    [ben, { interro: 10, compo: 10 }],
+    [ana, { interro: 12, devoir: 15, compo: 16 }],
+    [ben, { interro: 10, devoir: 10, compo: 10 }],
   ] as const) {
     await seedGrade({
       schoolId: school.id,
@@ -66,6 +72,14 @@ beforeEach(async () => {
       gradeTypeId: interro.id,
       termId: term.id,
       value: values.interro,
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: student.id,
+      subjectId: maths.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: values.devoir,
     });
     await seedGrade({
       schoolId: school.id,
@@ -200,7 +214,7 @@ describe('cohérence avec le calcul', () => {
   it('les moyennes imprimées sont celles de GET /classes/:id', async () => {
     const json = await get(tokenAdmin, `/classes/${classe.id}?term_id=${term.id}`);
 
-    // (12 + 3×16) / 4 = 15 pour Ana ; (10 + 3×10) / 4 = 10 pour Ben.
+    // (12 + 2×15 + 3×16) / 6 = 15 pour Ana ; (10 + 2×10 + 3×10) / 6 = 10 pour Ben.
     const anaJson = json.body.students.find((s: { firstName: string }) => s.firstName === 'Ana');
     expect(anaJson.average).toBe(15);
     expect(json.body.stats.average).toBe(12.5);
@@ -219,7 +233,7 @@ describe('cohérence avec le calcul', () => {
   it('imprime le détail par catégorie et le coefficient — la promesse d\'auditabilité', async () => {
     const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
 
-    // Un parent doit pouvoir refaire le calcul : (12 + 3×16) / 4 = 15.
+    // Un parent doit pouvoir refaire le calcul : (12 + 2×15 + 3×16) / 6 = 15.
     expect(texte).toContain('Interrogation×1:12,00');
     expect(texte).toContain('Composition×3:16,00');
     expect(texte).toContain('Mathématiques');
@@ -235,8 +249,10 @@ describe('cohérence avec le calcul', () => {
     const histoire = await prisma.subject.create({
       data: { schoolId: school.id, name: 'Histoire', coefficient: 1 },
     });
-    const devoir = await prisma.gradeType.create({
-      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 1, position: 2 },
+    // Le type « devoir » existe déjà pour cette école (seedé dans le
+    // beforeEach) : un type de note est propre à l'école, pas à la matière.
+    const devoir = await prisma.gradeType.findFirstOrThrow({
+      where: { schoolId: school.id, code: 'devoir' },
     });
     const max = await prisma.student.create({
       data: { schoolId: school.id, classId: mixte.id, firstName: 'Max', lastName: 'Mu' },

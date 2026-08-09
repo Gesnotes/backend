@@ -32,6 +32,10 @@ model School {
   /// — voir `staff.service.ts` (suspendSchool/restoreSchool). Distinct d'une
   /// suppression définitive, qui reste soumise au retapage du nom exact.
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  /// Moyenne à partir de laquelle l'école considère un élève admis dans une
+  /// matière. Purement déclaratif : le calcul de la moyenne elle-même
+  /// (compute.ts) ne s'en sert pas, seul l'affichage en tient compte.
+  passingGrade Decimal @default(10) @map("passing_grade") @db.Decimal(4, 2)
 
   users          User[]
   schoolYears    SchoolYear[]

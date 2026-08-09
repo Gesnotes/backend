@@ -18,6 +18,7 @@ let classe5: { id: number };
 let term: { id: number };
 let maths: { id: number };
 let compoId: number;
+let devoirId: number;
 
 beforeEach(async () => {
   await resetDatabase();
@@ -40,6 +41,10 @@ beforeEach(async () => {
     data: { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3 },
   });
   compoId = compo.id;
+  const devoir = await prisma.gradeType.create({
+    data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2 },
+  });
+  devoirId = devoir.id;
 });
 
 afterAll(async () => {
@@ -64,6 +69,24 @@ const addGrade = (studentId: number, value: number) =>
     termId: term.id,
     value,
   });
+
+/**
+ * Devoir et composition à la même valeur : passe le seuil de publication de
+ * la moyenne (devoir + composition requis) sans déplacer la valeur attendue
+ * — à utiliser quand le test porte sur une moyenne, pas sur un simple compte
+ * de notes saisies.
+ */
+const addGradedSubject = async (studentId: number, value: number) => {
+  await seedGrade({
+    schoolId: school.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: devoirId,
+    termId: term.id,
+    value,
+  });
+  return addGrade(studentId, value);
+};
 
 describe('GET /admin/dashboard', () => {
   it('compte les effectifs actifs', async () => {
@@ -134,10 +157,10 @@ describe('GET /admin/dashboard', () => {
     // une classe de 1 élève ne doit pas peser autant qu'une de 3.
     for (const prenom of ['A', 'B', 'C']) {
       const eleve = await addStudent(classe6.id, prenom);
-      await addGrade(eleve.id, 18);
+      await addGradedSubject(eleve.id, 18);
     }
     const seul = await addStudent(classe5.id, 'D');
-    await addGrade(seul.id, 6);
+    await addGradedSubject(seul.id, 6);
 
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
     expect(res.body.moyenneEcole).toBe(15);
@@ -146,9 +169,9 @@ describe('GET /admin/dashboard', () => {
 
   it('donne le détail par classe et les extrêmes', async () => {
     const forte = await addStudent(classe6.id, 'Ana');
-    await addGrade(forte.id, 18);
+    await addGradedSubject(forte.id, 18);
     const faible = await addStudent(classe5.id, 'Ben');
-    await addGrade(faible.id, 8);
+    await addGradedSubject(faible.id, 8);
 
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
     expect(res.body.classes).toHaveLength(2);
@@ -158,7 +181,7 @@ describe('GET /admin/dashboard', () => {
 
   it("expose l'avancement de la saisie et les classes oubliées", async () => {
     const evalue = await addStudent(classe6.id, 'Ana');
-    await addGrade(evalue.id, 15);
+    await addGradedSubject(evalue.id, 15);
     await addStudent(classe6.id, 'Ben'); // sans note
     await addStudent(classe5.id, 'Cid'); // classe entière sans note
 
@@ -238,7 +261,14 @@ describe('GET /admin/dashboard', () => {
       const classe = await prisma.class.create({
         data: { schoolId: school.id, name: `Classe ${c}`, level: '6e' },
       });
-      const evaluation = await seedEvaluation({
+      const evaluationDevoir = await seedEvaluation({
+        schoolId: school.id,
+        classId: classe.id,
+        subjectId: maths.id,
+        gradeTypeId: devoirId,
+        termId: term.id,
+      });
+      const evaluationCompo = await seedEvaluation({
         schoolId: school.id,
         classId: classe.id,
         subjectId: maths.id,
@@ -247,14 +277,26 @@ describe('GET /admin/dashboard', () => {
       });
       for (let e = 0; e < 20; e += 1) {
         const eleve = await addStudent(classe.id, `E${c}-${e}`);
+        // Devoir et composition à la même valeur : passe le seuil de
+        // publication sans changer la moyenne attendue.
+        const value = new Prisma.Decimal(10 + (index % 10));
         gradeRows.push({
           schoolId: school.id,
           studentId: eleve.id,
-          evaluationId: evaluation.id,
+          evaluationId: evaluationDevoir.id,
+          subjectId: maths.id,
+          gradeTypeId: devoirId,
+          termId: term.id,
+          value,
+        });
+        gradeRows.push({
+          schoolId: school.id,
+          studentId: eleve.id,
+          evaluationId: evaluationCompo.id,
           subjectId: maths.id,
           gradeTypeId: compoId,
           termId: term.id,
-          value: new Prisma.Decimal(10 + (index % 10)),
+          value,
         });
         index += 1;
       }

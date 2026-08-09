@@ -56,6 +56,7 @@ const FIELD_LABELS: Record<string, string> = {
   maxValue: 'Barème',
   coefficient: 'Coefficient',
   weight: 'Poids',
+  passingGrade: 'Seuil de passage',
   comment: 'Commentaire',
   startDate: 'Date de début',
   endDate: 'Date de fin',
