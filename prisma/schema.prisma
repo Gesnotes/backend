@@ -27,6 +27,11 @@ model School {
   // existantes n'en ont pas encore, sans que rien ne casse.
   city      String?   @db.VarChar(100)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  /// Suspension par l'équipe Gesnotes (impayé, litige, fermeture...) : les
+  /// comptes de l'école ne peuvent plus se connecter, mais rien n'est détruit
+  /// — voir `staff.service.ts` (suspendSchool/restoreSchool). Distinct d'une
+  /// suppression définitive, qui reste soumise au retapage du nom exact.
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
   users          User[]
   schoolYears    SchoolYear[]
@@ -37,6 +42,7 @@ model School {
   gradeTypes     GradeType[]
   signupRequests SignupRequest[]
 
+  @@index([archivedAt])
   @@map("schools")
 }
 

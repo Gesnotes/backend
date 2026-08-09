@@ -18,6 +18,7 @@ import { enrollmentRoutes } from './routes/enrollment.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
@@ -88,6 +89,11 @@ export function createApp() {
 
   // Équipe Gesnotes : hors périmètre multi-écoles, monté pour la même raison.
   app.use('/staff', staffRoutes);
+
+  // Connexion sans sous-domaine connu (plan §1.2 ter) : aucune école résolue
+  // à ce stade, l'identifiant est cherché à travers toutes les écoles — voir
+  // identify.routes.ts.
+  app.use('/auth', identifyRoutes);
 
   // À partir d'ici, toute requête est rattachée à une école (plan §1.2).
   app.use(schoolContext);

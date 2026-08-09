@@ -32,6 +32,13 @@ export async function schoolContext(req: Request, _res: Response, next: NextFunc
       throw await schoolNotFound(req.headers['x-school-subdomain'] as string | undefined);
     }
 
+    // Suspendue par l'équipe Gesnotes : distinct de « introuvable », pour ne
+    // pas laisser croire à une adresse mal tapée alors que l'école existe
+    // bel et bien, seulement inaccessible pour l'instant.
+    if (school.archivedAt) {
+      throw forbidden("Cet établissement n'est plus accessible. Contactez l'équipe Gesnotes pour en savoir plus.");
+    }
+
     req.schoolId = school.id;
 
     const header = req.headers.authorization;
@@ -129,7 +136,7 @@ async function resolveSchool(req: Request) {
    * corrects.
    */
   const schools = await prisma.school.findMany({
-    select: { id: true, name: true, subdomain: true },
+    select: { id: true, name: true, subdomain: true, archivedAt: true },
     orderBy: { id: 'asc' },
     take: 2,
   });

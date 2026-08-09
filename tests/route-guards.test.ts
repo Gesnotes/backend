@@ -20,13 +20,14 @@ import { createApp } from '../src/app';
 
 /**
  * Nombre de routes volontairement publiques (`publicRoute`) : /health, les
- * cinq routes d'authentification, les deux routes d'avant-inscription
- * (recherche d'école, demande de rappel), et les trois routes de session de
- * l'équipe Gesnotes (login/refresh/logout, hors périmètre multi-écoles). Le
- * compte est figé pour qu'en ouvrir une douzième soit un geste conscient,
- * pas un effet de bord.
+ * cinq routes d'authentification, la connexion par identifiant seul
+ * (/auth/identify, sans sous-domaine connu), les deux routes d'avant-
+ * inscription (recherche d'école, demande de rappel), et les trois routes de
+ * session de l'équipe Gesnotes (login/refresh/logout, hors périmètre
+ * multi-écoles). Le compte est figé pour qu'en ouvrir une treizième soit un
+ * geste conscient, pas un effet de bord.
  */
-const ROUTES_PUBLIQUES_ATTENDUES = 11;
+const ROUTES_PUBLIQUES_ATTENDUES = 12;
 
 interface Route {
   methode: string;

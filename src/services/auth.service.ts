@@ -80,6 +80,90 @@ export async function login(
   };
 }
 
+export interface IdentifyOk {
+  status: 'ok';
+  accessToken: string;
+  refreshToken: string;
+  user: LoginResult['user'];
+  school: { subdomain: string; name: string };
+}
+
+export interface IdentifyAmbiguous {
+  status: 'ambiguous';
+  schools: { subdomain: string; name: string; city: string | null }[];
+}
+
+export type IdentifyResult = IdentifyOk | IdentifyAmbiguous;
+
+/**
+ * Connexion sans sous-domaine connu (plan §1.2 ter) : recherche l'identifiant
+ * à travers toutes les écoles actives, plutôt que dans une seule déjà
+ * résolue par le nom d'hôte ou l'en-tête.
+ *
+ * Un même email peut exister dans deux écoles (un parent avec un enfant dans
+ * chacune) : si le mot de passe saisi est valable dans plus d'une, impossible
+ * de deviner laquelle sans le demander — la réponse liste alors les écoles
+ * concernées, sans jamais émettre de jeton pour l'une plutôt que l'autre. Le
+ * client complète ensuite avec `login()`, sur le sous-domaine choisi.
+ */
+export async function identify(identifier: string, password: string): Promise<IdentifyResult> {
+  const parEmail = identifier.includes('@');
+
+  const candidates = await prisma.user.findMany({
+    where: {
+      archivedAt: null,
+      school: { archivedAt: null },
+      ...(parEmail
+        ? { email: normalizeEmail(identifier) }
+        : { phone: normalizePhone(identifier) }),
+    },
+    include: { school: { select: { subdomain: true, name: true, city: true } } },
+  });
+
+  // Hachage à vide quand l'identifiant n'existe nulle part : sans cela, le
+  // temps de réponse trahit son absence (attaque temporelle).
+  if (candidates.length === 0) {
+    await argon2.hash('mot-de-passe-factice-pour-egaliser-le-temps');
+    throw unauthorized(LOGIN_FAILED);
+  }
+
+  const verified = [];
+  for (const candidate of candidates) {
+    if (await argon2.verify(candidate.passwordHash, password)) verified.push(candidate);
+  }
+
+  if (verified.length === 0) throw unauthorized(LOGIN_FAILED);
+
+  if (verified.length > 1) {
+    return {
+      status: 'ambiguous',
+      schools: verified.map((u) => ({
+        subdomain: u.school.subdomain,
+        name: u.school.name,
+        city: u.school.city,
+      })),
+    };
+  }
+
+  const user = verified[0]!;
+  const accessToken = signAccessToken({ userId: user.id, schoolId: user.schoolId, role: user.role });
+  const refreshToken = await issueRefreshToken(user.id);
+
+  return {
+    status: 'ok',
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    },
+    school: { subdomain: user.school.subdomain, name: user.school.name },
+  };
+}
+
 /**
  * Trace, **en développement uniquement**, le cas « bons identifiants, mauvaise
  * école ».

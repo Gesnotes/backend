@@ -117,3 +117,46 @@ staffRoutes.post(
     res.status(204).send();
   },
 );
+
+const boolFlag = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((value) => value === 'true');
+
+/**
+ * `permanent` supprime l'école et tout ce qu'elle contient ; sans le
+ * drapeau, elle est seulement suspendue. La suppression définitive exige le
+ * nom exact de l'école, comme pour une période ou une année scolaire.
+ */
+const deleteSchoolQuery = z.object({
+  permanent: boolFlag,
+  confirm_label: z.string().optional(),
+});
+
+staffRoutes.delete(
+  '/schools/:id',
+  requireStaffAuth,
+  validate({ params: idParam, query: deleteSchoolQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteSchoolQuery>;
+
+    if (permanent) {
+      await staffService.deleteSchoolPermanently(id, confirm_label ?? '');
+    } else {
+      await staffService.suspendSchool(id);
+    }
+    res.status(204).send();
+  },
+);
+
+staffRoutes.post(
+  '/schools/:id/restore',
+  requireStaffAuth,
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    await staffService.restoreSchool(id);
+    res.status(204).send();
+  },
+);
