@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
-import { conflict, notFound } from '../errors/AppError';
+import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { revokeAllSessions } from './auth.service';
 import { sendInvitation } from './invitation.service';
@@ -229,15 +229,33 @@ export async function restoreTeacher(schoolId: number, id: number) {
 }
 
 /**
- * Suppression définitive. Refusée dès qu'une note ou une présence a été
+ * Suppression définitive, réservée à un compte déjà archivé, avec retapage
+ * du nom exact — même garde-fou que pour une période ou une année scolaire
+ * (voir `term.service.ts`). Refusée dès qu'une note ou une présence a été
  * saisie : les relations `Grade.teacherUserId` et `Attendance.recordedByUserId`
  * étant en `SET NULL`, supprimer le compte effacerait l'auteur sans que rien
  * ne le signale. Refusée aussi si l'enseignant est encore référent d'une
  * classe : `Class.homeroomTeacherId` est en `RESTRICT`, la base refuserait de
  * toute façon, mais avec un message SQL illisible pour une secrétaire.
  */
-export async function deleteTeacherPermanently(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
+export async function deleteTeacherPermanently(
+  schoolId: number,
+  id: number,
+  expectedName = '',
+) {
+  const teacher = await getTeacher(schoolId, id);
+
+  if (!teacher.archivedAt) {
+    throw conflict('Archivez le compte avant de le supprimer définitivement.', { teacherId: id });
+  }
+
+  const actual = `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim().toLowerCase();
+  if (expectedName.trim().toLowerCase() !== actual) {
+    throw badRequest(
+      "La confirmation ne correspond pas au nom de l'enseignant. Cette suppression est définitive.",
+      { attendu: `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim() },
+    );
+  }
 
   const gradeCount = await prisma.grade.count({ where: { teacherUserId: id } });
   if (gradeCount > 0) {

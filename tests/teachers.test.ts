@@ -256,18 +256,47 @@ describe('désactivation', () => {
       value: 15,
     });
 
-    const res = await api(adminToken).delete(`/teachers/${created.body.id}?permanent=true`);
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
     expect(res.status).toBe(409);
     expect(res.body.error.details.gradeCount).toBe(1);
     expect(await prisma.grade.count()).toBe(1);
   });
 
-  it('supprime définitivement un compte sans note', async () => {
+  it('refuse la suppression définitive tant que le compte n’est pas archivé', async () => {
+    const created = await newTeacher('jean@a.test');
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(409);
+    expect(await prisma.user.count({ where: { id: created.body.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    const created = await newTeacher('jean@a.test');
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Mauvais nom`,
+    );
+    expect(res.status).toBe(400);
+    expect(await prisma.user.count({ where: { id: created.body.id } })).toBe(1);
+  });
+
+  it('supprime définitivement un compte archivé et sans note, avec le nom exact', async () => {
     const created = await newTeacher('jean@a.test', [
       { classId: classA.id, subjectId: subjectA.id },
     ]);
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
 
-    expect((await api(adminToken).delete(`/teachers/${created.body.id}?permanent=true`)).status).toBe(204);
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
     expect(await prisma.user.count({ where: { email: 'jean@a.test' } })).toBe(0);
     // Les affectations partent en cascade.
     expect(await prisma.teacherAssignment.count()).toBe(0);

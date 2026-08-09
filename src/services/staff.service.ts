@@ -51,6 +51,18 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
   const { school, admin } = await prisma.$transaction(async (tx) => {
     const school = await tx.school.create({ data: { name, city, subdomain } });
 
+    // Sans ces catégories, aucune évaluation n'est saisissable : `POST
+    // /evaluations` exige un `gradeTypeId` existant pour l'école, et rien ne
+    // permet d'en créer par l'API (référentiel volontairement fermé). Mêmes
+    // valeurs par défaut que le seed de démonstration (prisma/seed.ts).
+    await tx.gradeType.createMany({
+      data: [
+        { schoolId: school.id, code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
+        { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
+        { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
+      ],
+    });
+
     const admin = await tx.user.create({
       data: {
         schoolId: school.id,

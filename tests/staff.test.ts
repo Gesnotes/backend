@@ -86,6 +86,24 @@ describe('session staff (refresh, logout)', () => {
     const res = await request(app).post('/staff/refresh').send({ refreshToken: login.body.refreshToken });
     expect(res.status).toBe(401);
   });
+
+  /**
+   * Sans ça, un access token émis avant la déconnexion resterait valable
+   * jusqu'à son expiration (30 jours par défaut) — le pendant staff de
+   * tests/sessions.test.ts pour les comptes école.
+   */
+  it("déconnecte : l'access token déjà émis ne fonctionne plus non plus", async () => {
+    const login = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+
+    await request(app).post('/staff/logout').send({ refreshToken: login.body.refreshToken });
+
+    const res = await request(app)
+      .get('/staff/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`);
+    expect(res.status).toBe(401);
+  });
 });
 
 describe('GET /staff/me — isolation des deux mondes d’authentification', () => {
@@ -211,6 +229,14 @@ describe('demandes d’inscription', () => {
     const updated = await prisma.signupRequest.findUniqueOrThrow({ where: { id: demand.id } });
     expect(updated.status).toBe('traite');
     expect(updated.schoolId).toBe(res.body.school.id);
+
+    // Sans ça, cette école ne pourrait jamais créer la moindre évaluation :
+    // aucune route ne permet de créer un type de note après coup.
+    const gradeTypes = await prisma.gradeType.findMany({
+      where: { schoolId: res.body.school.id },
+      orderBy: { position: 'asc' },
+    });
+    expect(gradeTypes.map((t) => t.code)).toEqual(['interrogation', 'devoir', 'composition']);
   });
 
   it('accepte avec un sous-domaine et un nom choisis par le staff', async () => {

@@ -364,15 +364,33 @@ export async function duplicateClassForNextYear(
 }
 
 /**
- * Archivage par défaut. La suppression définitive est refusée tant que la
- * classe contient des élèves : la cascade emporterait les élèves et donc
- * leurs notes.
+ * Archivage par défaut. La suppression définitive est réservée à une classe
+ * déjà archivée, avec retapage du nom exact — même garde-fou que pour une
+ * période ou une année scolaire (voir `term.service.ts`), et refusée tant
+ * que la classe contient des élèves : la cascade emporterait les élèves et
+ * donc leurs notes.
  */
-export async function deleteClass(schoolId: number, id: number, permanent: boolean) {
-  await getClass(schoolId, id);
+export async function deleteClass(
+  schoolId: number,
+  id: number,
+  permanent: boolean,
+  expectedName = '',
+) {
+  const klass = await getClass(schoolId, id);
 
   if (!permanent) {
     return prisma.class.update({ where: { id }, data: { archivedAt: new Date() } });
+  }
+
+  if (!klass.archivedAt) {
+    throw conflict('Archivez la classe avant de la supprimer définitivement.', { classId: id });
+  }
+
+  if (expectedName.trim().toLowerCase() !== klass.name.trim().toLowerCase()) {
+    throw badRequest(
+      'La confirmation ne correspond pas au nom de la classe. Cette suppression est définitive.',
+      { attendu: klass.name },
+    );
   }
 
   const studentCount = await prisma.student.count({ where: { classId: id } });

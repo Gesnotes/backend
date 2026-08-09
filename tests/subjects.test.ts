@@ -145,14 +145,35 @@ describe('archivage et suppression', () => {
     expect((await api(adminToken).get('/subjects')).body).toHaveLength(1);
   });
 
-  it('supprime définitivement une matière sans note', async () => {
+  it('refuse la suppression définitive tant que la matière n’est pas archivée', async () => {
     const { body } = await createSubject();
-    expect((await api(adminToken).delete(`/subjects/${body.id}?permanent=true`)).status).toBe(204);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
+    expect(res.status).toBe(409);
+    expect(await prisma.subject.count({ where: { id: body.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Autre`);
+    expect(res.status).toBe(400);
+    expect(await prisma.subject.count({ where: { id: body.id } })).toBe(1);
+  });
+
+  it('supprime définitivement une matière archivée et sans note, avec le nom exact', async () => {
+    const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
+    expect(res.status).toBe(204);
     expect(await prisma.subject.count()).toBe(0);
   });
 
   it('refuse la suppression définitive si des notes existent', async () => {
     const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
 
     const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
     const gradeType = await prisma.gradeType.create({
@@ -170,7 +191,7 @@ describe('archivage et suppression', () => {
       value: 15,
     });
 
-    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true`);
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
     expect(res.status).toBe(409);
     expect(res.body.error.details.gradeCount).toBe(1);
 

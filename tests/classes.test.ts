@@ -336,8 +336,11 @@ describe('classes rattachées à une année scolaire et classe supérieure', () 
     it('refuse la suppression définitive d’une classe encore désignée comme supérieure', async () => {
       const cinquieme = await prisma.class.create({ data: { schoolId: schoolA.id, name: '5e A', level: '5e' } });
       await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: cinquieme.id });
+      await api(adminToken).delete(`/classes/${cinquieme.id}`);
 
-      const res = await api(adminToken).delete(`/classes/${cinquieme.id}?permanent=true`);
+      const res = await api(adminToken).delete(
+        `/classes/${cinquieme.id}?permanent=true&confirm_label=5e A`,
+      );
       expect(res.status).toBe(409);
       expect(await prisma.class.count({ where: { id: cinquieme.id } })).toBe(1);
     });
@@ -498,17 +501,35 @@ describe('archivage et suppression', () => {
     expect((await api(adminToken).get('/classes')).body).toHaveLength(1);
   });
 
+  it('refuse la suppression définitive tant que la classe n’est pas archivée', async () => {
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
+    expect(res.status).toBe(409);
+    expect(await prisma.class.count({ where: { id: klass.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    await api(adminToken).delete(`/classes/${klass.id}`);
+
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=Mauvais nom`);
+    expect(res.status).toBe(400);
+    expect(await prisma.class.count({ where: { id: klass.id } })).toBe(1);
+  });
+
   it('refuse la suppression définitive si la classe contient des élèves', async () => {
     await addStudent('Ana', 'Alpha');
+    await api(adminToken).delete(`/classes/${klass.id}`);
 
-    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true`);
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
     expect(res.status).toBe(409);
     expect(res.body.error.details.studentCount).toBe(1);
     expect(await prisma.student.count()).toBe(1);
   });
 
-  it('supprime définitivement une classe vide', async () => {
-    expect((await api(adminToken).delete(`/classes/${klass.id}?permanent=true`)).status).toBe(204);
+  it('supprime définitivement une classe archivée et vide, avec le nom exact', async () => {
+    await api(adminToken).delete(`/classes/${klass.id}`);
+
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
+    expect(res.status).toBe(204);
     expect(await prisma.class.count({ where: { schoolId: schoolA.id } })).toBe(0);
   });
 });

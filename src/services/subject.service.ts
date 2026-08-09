@@ -1,7 +1,7 @@
 import { Prisma } from '../generated/prisma/client';
 
 import prisma from '../lib/prisma';
-import { conflict, notFound } from '../errors/AppError';
+import { badRequest, conflict, notFound } from '../errors/AppError';
 import { labelKey } from '../lib/normalize';
 import { identityFields } from './userFields';
 
@@ -115,14 +115,33 @@ export async function updateSubject(
  * Archivage par défaut : les notes déjà saisies dans cette matière restent
  * lisibles et continuent de compter dans les bulletins passés.
  *
- * `permanent` supprime physiquement, et seulement si aucune note n'existe :
- * une suppression en cascade effacerait silencieusement des notes d'élèves.
+ * `permanent` supprime physiquement, réservé à une matière déjà archivée
+ * avec retapage du nom exact — même garde-fou que pour une période ou une
+ * année scolaire (voir `term.service.ts`) — et seulement si aucune note
+ * n'existe : une suppression en cascade effacerait silencieusement des
+ * notes d'élèves.
  */
-export async function deleteSubject(schoolId: number, id: number, permanent: boolean) {
-  await getSubject(schoolId, id);
+export async function deleteSubject(
+  schoolId: number,
+  id: number,
+  permanent: boolean,
+  expectedName = '',
+) {
+  const subject = await getSubject(schoolId, id);
 
   if (!permanent) {
     return prisma.subject.update({ where: { id }, data: { archivedAt: new Date() } });
+  }
+
+  if (!subject.archivedAt) {
+    throw conflict('Archivez la matière avant de la supprimer définitivement.', { subjectId: id });
+  }
+
+  if (expectedName.trim().toLowerCase() !== subject.name.trim().toLowerCase()) {
+    throw badRequest(
+      'La confirmation ne correspond pas au nom de la matière. Cette suppression est définitive.',
+      { attendu: subject.name },
+    );
   }
 
   const gradeCount = await prisma.grade.count({ where: { subjectId: id } });
