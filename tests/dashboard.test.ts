@@ -82,6 +82,11 @@ describe('GET /admin/dashboard', () => {
     });
   });
 
+  it("expose le nom de l'école, toujours, même sans période", async () => {
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.school).toEqual({ name: 'École ecole-a' });
+  });
+
   it('ne compte jamais les données des autres écoles', async () => {
     const autreClasse = await prisma.class.create({
       data: { schoolId: autreEcole.id, name: '6e B', level: '6e' },

@@ -27,8 +27,9 @@ export async function getDashboard(schoolId: number, termId?: number) {
       : await prisma.term.findFirst({ where: { id: termId, schoolId } });
   const periodeValide = term ? term.id : undefined;
 
-  const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
+  const [school, eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
     await Promise.all([
+      prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } }),
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
       prisma.class.count({ where: { schoolId, archivedAt: null } }),
       prisma.user.count({ where: { schoolId, role: 'teacher', archivedAt: null } }),
@@ -53,6 +54,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
    * même sans période sélectionnée.
    */
   const vide = {
+    school,
     effectifs,
     activite,
     presence,
@@ -115,6 +117,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
     .sort((a, b) => b.average - a.average);
 
   return {
+    school,
     effectifs,
     activite,
     presence,
