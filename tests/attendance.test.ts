@@ -311,7 +311,7 @@ describe('notification des parents en cas d’absence ou de retard', () => {
     });
 
     expect(spy).toHaveBeenCalledOnce();
-    expect(spy.mock.calls[0]![1].title).toMatch(/absence/i);
+    expect(spy.mock.calls[0]![1].title).toMatch(/absent/i);
   });
 
   it('notifie les parents en cas de retard', async () => {

@@ -48,16 +48,16 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
   });
   if (devices.length === 0) return;
 
+  // Le nom de l'enfant en tête : un parent qui suit plusieurs enfants doit
+  // le reconnaître sans ouvrir la notification.
   const title =
     kind === 'nouvelle'
-      ? `Nouvelle note en ${grade.subject.name}`
-      : `Note modifiée en ${grade.subject.name}`;
+      ? `${grade.student.firstName} a une nouvelle note`
+      : `${grade.student.firstName} a une note modifiée`;
 
   const message = {
     title,
-    // L'intitulé de l'évaluation (« Interro du 12/09 ») est plus parlant pour
-    // la famille que le seul type ; on garde le type entre parenthèses.
-    body: `${grade.student.firstName} · ${grade.evaluation.label} : ${Number(grade.value)}/${Number(grade.maxValue)} (${grade.gradeType.label})`,
+    body: `${grade.subject.name} · ${grade.evaluation.label} : ${Number(grade.value)}/${Number(grade.maxValue)}`,
     data: {
       gradeId: String(grade.id),
       studentId: String(grade.studentId),
@@ -96,6 +96,7 @@ export async function notifyParentsOfAttendance(event: AttendanceEvent) {
           parents: { select: { parentUserId: true } },
         },
       },
+      class: { select: { name: true } },
     },
   });
 
@@ -110,11 +111,16 @@ export async function notifyParentsOfAttendance(event: AttendanceEvent) {
   });
   if (devices.length === 0) return;
 
-  const title = attendance.status === 'absent' ? 'Absence signalée' : 'Retard signalé';
+  // Le nom de l'enfant en tête, un ton neutre plutôt qu'une alerte : une
+  // absence est une information pour la famille, pas une urgence.
+  const title =
+    attendance.status === 'absent'
+      ? `${attendance.student.firstName} était absent(e) aujourd'hui`
+      : `${attendance.student.firstName} est arrivé(e) en retard aujourd'hui`;
 
   const message = {
     title,
-    body: `${attendance.student.firstName} a été marqué(e) ${attendance.status === 'absent' ? 'absent(e)' : 'en retard'} aujourd'hui.`,
+    body: `${attendance.class.name} · ${attendance.date.toLocaleDateString('fr-FR')}`,
     data: {
       attendanceId: String(attendance.id),
       studentId: String(attendance.studentId),

@@ -147,14 +147,14 @@ describe('envoi des notifications', () => {
     expect(spy).toHaveBeenCalledOnce();
     const [tokens, message] = spy.mock.calls[0]!;
     expect(tokens).toHaveLength(2);
-    expect(message.title).toContain('Maths');
-    expect(message.body).toContain('Ana');
+    expect(message.title).toContain('Ana');
+    expect(message.body).toContain('Maths');
     expect(message.body).toContain('15/20');
     expect(message.data).toMatchObject({ gradeId: String(note.id) });
   });
 
   /**
-   * Sans lien, le parent reçoit « Nouvelle note en Maths » et atterrit sur
+   * Sans lien, le parent reçoit « Ana a une nouvelle note » et atterrit sur
    * l'accueil, à charge pour lui de retrouver la note.
    */
   it('pointe la notification sur la note concernée', async () => {
