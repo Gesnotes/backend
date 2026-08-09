@@ -27,7 +27,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
       : await prisma.term.findFirst({ where: { id: termId, schoolId } });
   const periodeValide = term ? term.id : undefined;
 
-  const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes] =
+  const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
     await Promise.all([
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
       prisma.class.count({ where: { schoolId, archivedAt: null } }),
@@ -38,6 +38,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
       prisma.grade.count({
         where: { schoolId, ...(periodeValide ? { termId: periodeValide } : {}) },
       }),
+      getAttendanceSummary(schoolId),
     ]);
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
@@ -47,11 +48,14 @@ export async function getDashboard(schoolId: number, termId?: number) {
    * Forme de réponse unique quelle que soit la requête : toutes les clés sont
    * toujours présentes, à `null` ou vides. Faire disparaître `extremes` selon
    * les paramètres obligerait le front-end à tester son existence, et le ferait
-   * planter le jour où il oublie.
+   * planter le jour où il oublie. `presence` ne dépend d'aucune période — la
+   * présence se prend au jour le jour — elle vaut donc toujours ce chiffre,
+   * même sans période sélectionnée.
    */
   const vide = {
     effectifs,
     activite,
+    presence,
     periode: null,
     moyenneEcole: null,
     classes: [],
@@ -113,6 +117,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
   return {
     effectifs,
     activite,
+    presence,
     periode: { id: term.id, label: term.label },
     moyenneEcole,
     classes: parClasse,
@@ -128,6 +133,40 @@ export async function getDashboard(schoolId: number, termId?: number) {
       meilleureClasse: triees[0] ?? null,
       plusFaibleClasse: triees[triees.length - 1] ?? null,
     },
+  };
+}
+
+/**
+ * Présence du jour, toute l'école : combien de classes ont fait l'appel,
+ * combien d'absents et de retards, et lesquelles n'ont encore rien saisi.
+ * La présence n'est pas réservée aux classes en mode présence — n'importe
+ * quelle classe peut y être suivie — donc aucun filtre sur `mode` ici.
+ */
+async function getAttendanceSummary(schoolId: number) {
+  const today = new Date(new Date().toISOString().slice(0, 10));
+
+  const classes = await prisma.class.findMany({
+    where: { schoolId, archivedAt: null },
+    select: { id: true, name: true },
+    orderBy: [{ level: 'asc' }, { name: 'asc' }],
+  });
+  const classIds = classes.map((klass) => klass.id);
+
+  const records = await prisma.attendance.findMany({
+    where: { schoolId, classId: { in: classIds }, date: today },
+    select: { classId: true, status: true },
+  });
+
+  const classesAvecAppel = new Set(records.map((record) => record.classId));
+
+  return {
+    classesAvecAppel: classesAvecAppel.size,
+    classesTotal: classes.length,
+    absents: records.filter((record) => record.status === 'absent').length,
+    retards: records.filter((record) => record.status === 'late').length,
+    classesSansAppel: classes
+      .filter((klass) => !classesAvecAppel.has(klass.id))
+      .map((klass) => klass.name),
   };
 }
 
