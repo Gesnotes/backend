@@ -306,49 +306,46 @@ describe('GET /teachers/me/classes', () => {
 });
 
 /**
- * L'admin n'a pas d'affectation : ce qu'il voit vient du rattachement matière
- * × classe (`SubjectCoefficient`), pas de `teacher_assignments` — sinon la
- * saisie par l'administration serait toujours vide.
+ * L'admin n'a pas d'affectation propre : ce qu'il voit est l'union de celles
+ * de toute l'école, pas seulement les siennes — sinon la saisie par
+ * l'administration serait toujours vide.
  */
 describe('GET /teachers/me/classes — administration (école entière)', () => {
-  it('ne montre rien sans rattachement, même avec des affectations enseignantes', async () => {
-    const res = await api(tokenAdmin).get('/teachers/me/classes');
-    expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(0);
-  });
-
-  it("liste l'école entière par rattachement, indépendamment des affectations", async () => {
-    await prisma.subjectCoefficient.create({
-      data: { classId: classe6.id, subjectId: maths.id, coefficient: 1 },
-    });
-    await prisma.subjectCoefficient.create({
-      data: { classId: classe5.id, subjectId: francais.id, coefficient: 1 },
-    });
-
+  it("liste toutes les affectations de l'école, pas seulement celles d'un enseignant", async () => {
     const res = await api(tokenAdmin).get('/teachers/me/classes');
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     const bySubject = Object.fromEntries(
-      (res.body as { subjectName: string }[]).map((row) => [row.subjectName, row]),
+      (res.body as { subjectName: string; className: string }[]).map((row) => [row.subjectName, row]),
     );
-    expect(bySubject.Maths).toMatchObject({ className: '6e A', effectif: 1 });
-    expect(bySubject.Français).toMatchObject({ className: '5e A', effectif: 0 });
+    expect(bySubject.Maths).toMatchObject({ className: '6e A' });
+    expect(bySubject.Français).toMatchObject({ className: '5e A' });
+  });
+
+  it("ne compte un couple classe × matière qu'une fois même si plusieurs enseignants le partagent", async () => {
+    const profC = await createUser({ schoolId: school.id, email: 'profc@a.test', role: 'teacher' });
+    await prisma.teacherAssignment.create({
+      data: { schoolId: school.id, teacherUserId: profC.id, classId: classe6.id, subjectId: maths.id },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    const maths6e = (res.body as { subjectName: string; className: string }[]).filter(
+      (row) => row.subjectName === 'Maths' && row.className === '6e A',
+    );
+    expect(maths6e).toHaveLength(1);
   });
 
   it('ne propose jamais une classe en mode présence', async () => {
     const garderie = await prisma.class.create({
       data: { schoolId: school.id, name: 'Garderie', level: 'PS', mode: 'presence' },
     });
-    await prisma.subjectCoefficient.create({
-      data: { classId: classe6.id, subjectId: maths.id, coefficient: 1 },
-    });
-    await prisma.subjectCoefficient.create({
-      data: { classId: garderie.id, subjectId: maths.id, coefficient: 1 },
+    const profGarderie = await createUser({ schoolId: school.id, email: 'profg@a.test', role: 'teacher' });
+    await prisma.teacherAssignment.create({
+      data: { schoolId: school.id, teacherUserId: profGarderie.id, classId: garderie.id, subjectId: maths.id },
     });
 
     const res = await api(tokenAdmin).get('/teachers/me/classes');
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].className).toBe('6e A');
+    expect((res.body as { className: string }[]).some((row) => row.className === 'Garderie')).toBe(false);
   });
 });
 

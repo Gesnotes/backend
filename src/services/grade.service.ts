@@ -56,9 +56,11 @@ type ClassSubjectPair = {
  * Mes classes et matières, avec l'avancement de la saisie.
  *
  * Pour un enseignant, ce sont ses `teacher_assignments`. L'admin n'en a pas :
- * il voit l'école entière, un couple classe × matière par rattachement
- * (`SubjectCoefficient`) — c'est ce rattachement qui dit ce qui se note dans
- * une classe, pas qui l'enseigne.
+ * il voit l'école entière, un couple classe × matière par affectation —
+ * toutes celles de l'école, pas seulement les siennes. `SubjectCoefficient`
+ * ne convient pas ici : c'est une surcharge facultative du coefficient de
+ * calcul de moyenne (le coefficient par défaut de la matière s'applique déjà
+ * sans elle), pas une déclaration de ce qui se note dans une classe.
  */
 export async function listMyClasses(auth: AuthPayload, termId?: number) {
   const pairs =
@@ -98,11 +100,8 @@ async function listMyPairs(auth: AuthPayload): Promise<ClassSubjectPair[]> {
 // `assertClassAllowsGrading` côté évaluations) : les exclure ici évite de
 // proposer un couple que la création d'évaluation refuserait ensuite.
 async function listSchoolPairs(schoolId: number): Promise<ClassSubjectPair[]> {
-  const coefficients = await prisma.subjectCoefficient.findMany({
-    where: {
-      class: { schoolId, archivedAt: null, mode: 'notes' },
-      subject: { schoolId, archivedAt: null },
-    },
+  const assignments = await prisma.teacherAssignment.findMany({
+    where: { schoolId, class: { archivedAt: null, mode: 'notes' } },
     include: {
       class: { select: { id: true, name: true, level: true } },
       subject: { select: { id: true, name: true } },
@@ -110,16 +109,25 @@ async function listSchoolPairs(schoolId: number): Promise<ClassSubjectPair[]> {
     orderBy: [{ class: { level: 'asc' } }, { class: { name: 'asc' } }],
   });
 
-  return coefficients.map((coefficient) => ({
-    // Pas d'affectation dont hériter un id : celui-ci n'a besoin que d'être
-    // stable et unique pour cette paire, jamais réutilisé ailleurs.
-    id: coefficient.classId * 1_000_000 + coefficient.subjectId,
-    classId: coefficient.classId,
-    className: coefficient.class.name,
-    level: coefficient.class.level,
-    subjectId: coefficient.subjectId,
-    subjectName: coefficient.subject.name,
-  }));
+  // Plusieurs enseignants peuvent partager un même couple classe × matière
+  // (co-intervention) : une seule ligne par couple, pas une par affectation.
+  const seen = new Map<string, ClassSubjectPair>();
+  for (const assignment of assignments) {
+    const key = `${assignment.classId}:${assignment.subjectId}`;
+    if (seen.has(key)) continue;
+    seen.set(key, {
+      // Pas d'affectation unique dont hériter un id : celui-ci n'a besoin
+      // que d'être stable et unique pour ce couple, jamais réutilisé ailleurs.
+      id: assignment.classId * 1_000_000 + assignment.subjectId,
+      classId: assignment.classId,
+      className: assignment.class.name,
+      level: assignment.class.level,
+      subjectId: assignment.subjectId,
+      subjectName: assignment.subject.name,
+    });
+  }
+
+  return [...seen.values()];
 }
 
 async function buildGradingProgress(schoolId: number, pairs: ClassSubjectPair[], termId?: number) {
