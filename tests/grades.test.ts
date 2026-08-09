@@ -305,6 +305,53 @@ describe('GET /teachers/me/classes', () => {
   });
 });
 
+/**
+ * L'admin n'a pas d'affectation : ce qu'il voit vient du rattachement matière
+ * × classe (`SubjectCoefficient`), pas de `teacher_assignments` — sinon la
+ * saisie par l'administration serait toujours vide.
+ */
+describe('GET /teachers/me/classes — administration (école entière)', () => {
+  it('ne montre rien sans rattachement, même avec des affectations enseignantes', async () => {
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it("liste l'école entière par rattachement, indépendamment des affectations", async () => {
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe6.id, subjectId: maths.id, coefficient: 1 },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe5.id, subjectId: francais.id, coefficient: 1 },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const bySubject = Object.fromEntries(
+      (res.body as { subjectName: string }[]).map((row) => [row.subjectName, row]),
+    );
+    expect(bySubject.Maths).toMatchObject({ className: '6e A', effectif: 1 });
+    expect(bySubject.Français).toMatchObject({ className: '5e A', effectif: 0 });
+  });
+
+  it('ne propose jamais une classe en mode présence', async () => {
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'PS', mode: 'presence' },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe6.id, subjectId: maths.id, coefficient: 1 },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { classId: garderie.id, subjectId: maths.id, coefficient: 1 },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].className).toBe('6e A');
+  });
+});
+
 describe('grille de saisie et historique', () => {
   it('renvoie tous les élèves, même sans note', async () => {
     await prisma.student.create({

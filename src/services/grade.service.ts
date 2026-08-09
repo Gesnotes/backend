@@ -43,11 +43,34 @@ export async function assertCanGrade(auth: AuthPayload, classId: number, subject
   }
 }
 
-/** Mes classes et matières, avec l'avancement de la saisie. */
+type ClassSubjectPair = {
+  id: number;
+  classId: number;
+  className: string;
+  level: string;
+  subjectId: number;
+  subjectName: string;
+};
+
+/**
+ * Mes classes et matières, avec l'avancement de la saisie.
+ *
+ * Pour un enseignant, ce sont ses `teacher_assignments`. L'admin n'en a pas :
+ * il voit l'école entière, un couple classe × matière par rattachement
+ * (`SubjectCoefficient`) — c'est ce rattachement qui dit ce qui se note dans
+ * une classe, pas qui l'enseigne.
+ */
 export async function listMyClasses(auth: AuthPayload, termId?: number) {
-  // `schoolId` explicite sur chaque requête : l'isolation ne doit pas reposer
-  // sur la propriété transitive « les affectations d'un utilisateur sont dans
-  // son école », même si la base la garantit désormais.
+  const pairs =
+    auth.role === 'admin' ? await listSchoolPairs(auth.schoolId) : await listMyPairs(auth);
+
+  return buildGradingProgress(auth.schoolId, pairs, termId);
+}
+
+// `schoolId` explicite sur chaque requête : l'isolation ne doit pas reposer
+// sur la propriété transitive « les affectations d'un utilisateur sont dans
+// son école », même si la base la garantit désormais.
+async function listMyPairs(auth: AuthPayload): Promise<ClassSubjectPair[]> {
   const assignments = await prisma.teacherAssignment.findMany({
     where: {
       schoolId: auth.schoolId,
@@ -61,16 +84,55 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
     orderBy: { id: 'asc' },
   });
 
-  const classIds = [...new Set(assignments.map((a) => a.classId))];
-  const subjectIds = [...new Set(assignments.map((a) => a.subjectId))];
+  return assignments.map((assignment) => ({
+    id: assignment.id,
+    classId: assignment.classId,
+    className: assignment.class.name,
+    level: assignment.class.level,
+    subjectId: assignment.subjectId,
+    subjectName: assignment.subject.name,
+  }));
+}
 
-  // Trois requêtes au total (celle-ci comprise), quel que soit le nombre
-  // d'affectations. En boucle, un professeur enseignant dans douze classes
-  // paierait vingt-quatre allers-retours à chaque ouverture de son accueil.
+// Les classes en mode présence n'ont pas de matières à noter (voir
+// `assertClassAllowsGrading` côté évaluations) : les exclure ici évite de
+// proposer un couple que la création d'évaluation refuserait ensuite.
+async function listSchoolPairs(schoolId: number): Promise<ClassSubjectPair[]> {
+  const coefficients = await prisma.subjectCoefficient.findMany({
+    where: {
+      class: { schoolId, archivedAt: null, mode: 'notes' },
+      subject: { schoolId, archivedAt: null },
+    },
+    include: {
+      class: { select: { id: true, name: true, level: true } },
+      subject: { select: { id: true, name: true } },
+    },
+    orderBy: [{ class: { level: 'asc' } }, { class: { name: 'asc' } }],
+  });
+
+  return coefficients.map((coefficient) => ({
+    // Pas d'affectation dont hériter un id : celui-ci n'a besoin que d'être
+    // stable et unique pour cette paire, jamais réutilisé ailleurs.
+    id: coefficient.classId * 1_000_000 + coefficient.subjectId,
+    classId: coefficient.classId,
+    className: coefficient.class.name,
+    level: coefficient.class.level,
+    subjectId: coefficient.subjectId,
+    subjectName: coefficient.subject.name,
+  }));
+}
+
+async function buildGradingProgress(schoolId: number, pairs: ClassSubjectPair[], termId?: number) {
+  const classIds = [...new Set(pairs.map((p) => p.classId))];
+  const subjectIds = [...new Set(pairs.map((p) => p.subjectId))];
+
+  // Trois requêtes au total (celle-ci comprise), quel que soit le nombre de
+  // couples. En boucle, une école de douze classes paierait vingt-quatre
+  // allers-retours à chaque ouverture de la saisie.
   const [effectifs, notes] = await Promise.all([
     prisma.student.groupBy({
       by: ['classId'],
-      where: { schoolId: auth.schoolId, classId: { in: classIds }, archivedAt: null },
+      where: { schoolId, classId: { in: classIds }, archivedAt: null },
       _count: { _all: true },
     }),
     // `distinct` porte la règle métier : un élève évalué compte une fois par
@@ -78,7 +140,7 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
     // lecture, ce qui évite une requête supplémentaire sur les élèves.
     prisma.grade.findMany({
       where: {
-        schoolId: auth.schoolId,
+        schoolId,
         subjectId: { in: subjectIds },
         student: { classId: { in: classIds }, archivedAt: null },
         ...(termId ? { termId } : {}),
@@ -96,15 +158,15 @@ export async function listMyClasses(auth: AuthPayload, termId?: number) {
     evalues.set(cle, (evalues.get(cle) ?? 0) + 1);
   }
 
-  return assignments.map((assignment) => ({
-    assignmentId: assignment.id,
-    classId: assignment.classId,
-    className: assignment.class.name,
-    level: assignment.class.level,
-    subjectId: assignment.subjectId,
-    subjectName: assignment.subject.name,
-    effectif: effectifParClasse.get(assignment.classId) ?? 0,
-    evalues: evalues.get(`${assignment.classId}:${assignment.subjectId}`) ?? 0,
+  return pairs.map((pair) => ({
+    assignmentId: pair.id,
+    classId: pair.classId,
+    className: pair.className,
+    level: pair.level,
+    subjectId: pair.subjectId,
+    subjectName: pair.subjectName,
+    effectif: effectifParClasse.get(pair.classId) ?? 0,
+    evalues: evalues.get(`${pair.classId}:${pair.subjectId}`) ?? 0,
   }));
 }
 
