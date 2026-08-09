@@ -185,6 +185,42 @@ describe('GET /admin/dashboard', () => {
     expect((await get(tokenProf, '/admin/dashboard')).status).toBe(403);
   });
 
+  it("expose la présence du jour, sans dépendre d'une période", async () => {
+    const present = await addStudent(classe6.id, 'Ana');
+    const absent = await addStudent(classe6.id, 'Ben');
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: present.id, classId: classe6.id, date: today, status: 'present' },
+    });
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: absent.id, classId: classe6.id, date: today, status: 'absent' },
+    });
+    await addStudent(classe5.id, 'Cid'); // 5e A : aucun appel aujourd'hui
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.presence).toMatchObject({
+      classesAvecAppel: 1,
+      classesTotal: 2,
+      absents: 1,
+      retards: 0,
+    });
+    expect(res.body.presence.classesSansAppel).toEqual(['5e A']);
+  });
+
+  it("ignore la présence d'un autre jour que celui du jour", async () => {
+    const eleve = await addStudent(classe6.id, 'Ana');
+    const hier = new Date();
+    hier.setDate(hier.getDate() - 1);
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: eleve.id, classId: classe6.id, date: hier, status: 'absent' },
+    });
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.presence.classesAvecAppel).toBe(0);
+    expect(res.body.presence.absents).toBe(0);
+    expect(res.body.presence.classesSansAppel).toEqual(['5e A', '6e A']);
+  });
+
   it('tient la charge sur 30 classes sans exploser en requêtes', async () => {
     // Taille visée par le plan : un collège de 30 classes. En boucle sur
     // computeClassBulletin, ce dashboard ferait 150 requêtes SQL par
