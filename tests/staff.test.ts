@@ -28,6 +28,7 @@ const staffApi = (token = staffToken) => ({
   get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
   post: (p: string, body?: object) =>
     request(app).post(p).set('Authorization', `Bearer ${token}`).send(body ?? {}),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 describe('POST /staff/login', () => {
@@ -265,5 +266,152 @@ describe('demandes d’inscription', () => {
 
     const res = await staffApi().post(`/staff/signup-requests/${demand.id}/decline`);
     expect(res.status).toBe(409);
+  });
+});
+
+describe('suspendre / restaurer / supprimer une école', () => {
+  it('DELETE /staff/schools/:id suspend sans rien détruire', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+
+    const res = await staffApi().delete(`/staff/schools/${school.id}`);
+
+    expect(res.status).toBe(204);
+    const updated = await prisma.school.findUniqueOrThrow({ where: { id: school.id } });
+    expect(updated.archivedAt).not.toBeNull();
+    expect(await prisma.user.count({ where: { schoolId: school.id } })).toBe(1);
+  });
+
+  it('révoque les sessions en cours à la suspension', async () => {
+    const school = await createSchool('ecole-a');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const login = await request(app)
+      .post('/auth/login')
+      .set('X-School-Subdomain', 'ecole-a')
+      .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
+    expect(login.status).toBe(200);
+
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    // La suspension bloque déjà tout au niveau de schoolContext (403, testé
+    // séparément) : la révocation se vérifie donc directement en base, plutôt
+    // que via /auth/refresh qui n'est de toute façon plus atteignable.
+    const token = await prisma.refreshToken.findFirstOrThrow({ where: { userId: admin.id } });
+    expect(token.revokedAt).not.toBeNull();
+    const updatedAdmin = await prisma.user.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(updatedAdmin.sessionsRevokedAt).not.toBeNull();
+  });
+
+  it('refuse la connexion sur une école suspendue (sous-domaine)', async () => {
+    const school = await createSchool('ecole-a');
+    await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    const res = await request(app)
+      .post('/auth/login')
+      .set('X-School-Subdomain', 'ecole-a')
+      .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
+    expect(res.status).toBe(403);
+  });
+
+  it('refuse de suspendre deux fois la même école', async () => {
+    const school = await createSchool('ecole-a');
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    const res = await staffApi().delete(`/staff/schools/${school.id}`);
+    expect(res.status).toBe(409);
+  });
+
+  it('refuse une école inconnue', async () => {
+    const res = await staffApi().delete('/staff/schools/999999');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST .../restore réactive une école suspendue', async () => {
+    const school = await createSchool('ecole-a');
+    await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    const res = await staffApi().post(`/staff/schools/${school.id}/restore`);
+    expect(res.status).toBe(204);
+
+    const updated = await prisma.school.findUniqueOrThrow({ where: { id: school.id } });
+    expect(updated.archivedAt).toBeNull();
+
+    const login = await request(app)
+      .post('/auth/login')
+      .set('X-School-Subdomain', 'ecole-a')
+      .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
+    expect(login.status).toBe(200);
+  });
+
+  it('refuse de restaurer une école qui ne l’est pas', async () => {
+    const school = await createSchool('ecole-a');
+    const res = await staffApi().post(`/staff/schools/${school.id}/restore`);
+    expect(res.status).toBe(409);
+  });
+
+  it('DELETE ?permanent=true supprime l’école et tout ce qu’elle contient', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const klass = await prisma.class.create({ data: { schoolId: school.id, name: '6e A', level: '6e' } });
+    const student = await prisma.student.create({
+      data: { schoolId: school.id, classId: klass.id, firstName: 'Ana', lastName: 'Alpha' },
+    });
+    const subject = await prisma.subject.create({ data: { schoolId: school.id, name: 'Maths' } });
+    const gradeType = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2 },
+    });
+    const term = await prisma.term.create({ data: { schoolId: school.id, label: 'Trimestre 1' } });
+    await prisma.evaluation.create({
+      data: {
+        schoolId: school.id, classId: klass.id, subjectId: subject.id, gradeTypeId: gradeType.id,
+        termId: term.id, label: 'Éval', maxValue: 20,
+      },
+    });
+    void admin;
+    void student;
+
+    await staffApi().delete(`/staff/schools/${school.id}`);
+    const res = await staffApi().delete(
+      `/staff/schools/${school.id}?permanent=true&confirm_label=${encodeURIComponent('École Alpha')}`,
+    );
+
+    expect(res.status).toBe(204);
+    expect(await prisma.school.count({ where: { id: school.id } })).toBe(0);
+    expect(await prisma.user.count({ where: { schoolId: school.id } })).toBe(0);
+    expect(await prisma.student.count({ where: { schoolId: school.id } })).toBe(0);
+    expect(await prisma.class.count({ where: { schoolId: school.id } })).toBe(0);
+    expect(await prisma.term.count({ where: { schoolId: school.id } })).toBe(0);
+    expect(await prisma.evaluation.count({ where: { schoolId: school.id } })).toBe(0);
+  });
+
+  it('refuse la suppression définitive sans suspension préalable', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    const res = await staffApi().delete(
+      `/staff/schools/${school.id}?permanent=true&confirm_label=${encodeURIComponent('École Alpha')}`,
+    );
+    expect(res.status).toBe(409);
+    expect(await prisma.school.count({ where: { id: school.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si le nom retapé ne correspond pas', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    const res = await staffApi().delete(
+      `/staff/schools/${school.id}?permanent=true&confirm_label=${encodeURIComponent('Mauvais nom')}`,
+    );
+    expect(res.status).toBe(400);
+    expect(await prisma.school.count({ where: { id: school.id } })).toBe(1);
+  });
+
+  it('refuse un token client sur les routes de gestion des écoles', async () => {
+    const school = await createSchool('ecole-a');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const clientToken = signAccessToken({ userId: admin.id, schoolId: school.id, role: 'admin' });
+
+    expect((await staffApi(clientToken).delete(`/staff/schools/${school.id}`)).status).toBe(401);
+    expect((await staffApi(clientToken).post(`/staff/schools/${school.id}/restore`)).status).toBe(401);
   });
 });

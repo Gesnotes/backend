@@ -86,6 +86,80 @@ describe('POST /auth/login', () => {
   });
 });
 
+describe('POST /auth/identify — connexion sans sous-domaine connu', () => {
+  const identify = (identifier: string, password: string) =>
+    request(app).post('/auth/identify').send({ identifier, password });
+
+  it('connecte directement quand un seul compte correspond', async () => {
+    const res = await identify('parent@a.test', TEST_PASSWORD);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.accessToken).toBeTruthy();
+    expect(res.body.refreshToken).toBeTruthy();
+    expect(res.body.user.email).toBe('parent@a.test');
+    expect(res.body.school.subdomain).toBe('ecole-a');
+  });
+
+  it('connecte par téléphone', async () => {
+    const res = await identify('97000000', TEST_PASSWORD);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+  });
+
+  it('renvoie la liste des écoles quand le même identifiant et mot de passe valent dans deux écoles', async () => {
+    const other = await createSchool('ecole-b', 'École B');
+    await createUser({ schoolId: other.id, email: 'parent@a.test', role: 'parent' });
+
+    const res = await identify('parent@a.test', TEST_PASSWORD);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ambiguous');
+    expect(res.body.schools).toHaveLength(2);
+    const subdomains = res.body.schools.map((s: { subdomain: string }) => s.subdomain).sort();
+    expect(subdomains).toEqual(['ecole-a', 'ecole-b']);
+  });
+
+  it("ne liste que les écoles où le mot de passe saisi est le bon", async () => {
+    const other = await createSchool('ecole-b');
+    await createUser({ schoolId: other.id, email: 'parent@a.test', role: 'parent', password: 'autremotdepasse' });
+
+    const res = await identify('parent@a.test', TEST_PASSWORD);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ok');
+    expect(res.body.school.subdomain).toBe('ecole-a');
+  });
+
+  it('refuse un mauvais mot de passe', async () => {
+    const res = await identify('parent@a.test', 'mauvais');
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse un identifiant inconnu, avec le même statut qu’un mauvais mot de passe', async () => {
+    const res = await identify('personne@inconnu.test', TEST_PASSWORD);
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse un compte archivé', async () => {
+    await createUser({ schoolId: school.id, email: 'archive@a.test', role: 'parent', archived: true });
+    const res = await identify('archive@a.test', TEST_PASSWORD);
+    expect(res.status).toBe(401);
+  });
+
+  it('exclut les écoles suspendues', async () => {
+    await prisma.school.update({ where: { id: school.id }, data: { archivedAt: new Date() } });
+    const res = await identify('parent@a.test', TEST_PASSWORD);
+    expect(res.status).toBe(401);
+  });
+
+  it('valide les entrées', async () => {
+    const res = await identify('', '');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('BAD_REQUEST');
+  });
+});
+
 describe('cycle refresh / logout', () => {
   const login = () => api().send({ identifier: 'parent@a.test', password: TEST_PASSWORD });
 
