@@ -49,12 +49,13 @@ export async function listClasses(
     include: { _count: { select: { students: { where: { archivedAt: null } } } } },
   });
 
-  // Sans période, la moyenne n'a pas de sens : ne rien afficher plutôt que
-  // d'agréger toutes les périodes confondues.
+  // Sans période, ni la moyenne ni le taux de saisie n'ont de sens : ne rien
+  // afficher plutôt que d'agréger toutes les périodes confondues.
   if (termId === undefined) {
     return classes.map(({ _count, ...klass }) => ({
       ...klass,
       effectif: _count.students,
+      evalues: null,
       average: null,
     }));
   }
@@ -67,10 +68,16 @@ export async function listClasses(
     termId,
   );
   const moyenneParClasse = new Map(bulletins.map((b) => [b.classId, b.classAverage]));
+  // Élève « évalué » : au moins une moyenne générale publiée sur la période —
+  // le même critère que le tableau de bord, pas un simple compte de notes.
+  const evaluesParClasse = new Map(
+    bulletins.map((b) => [b.classId, b.students.filter((s) => s.average !== null).length]),
+  );
 
   return classes.map(({ _count, ...klass }) => ({
     ...klass,
     effectif: _count.students,
+    evalues: evaluesParClasse.get(klass.id) ?? 0,
     average: moyenneParClasse.get(klass.id) ?? null,
   }));
 }

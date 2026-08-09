@@ -126,6 +126,19 @@ describe('CRUD /classes', () => {
     const withTerm = await api(adminToken).get(`/classes?term_id=${term.id}`);
     expect(withTerm.body[0].average).toBe(15);
   });
+
+  it("renvoie le nombre d'élèves évalués, seulement avec une période", async () => {
+    const ana = await addStudent('Ana', 'Alpha');
+    await addStudent('Ben', 'Beta'); // pas noté
+    await addGrade(ana.id, 15);
+
+    const list = await api(adminToken).get('/classes');
+    expect(list.body[0].evalues).toBeNull();
+
+    const withTerm = await api(adminToken).get(`/classes?term_id=${term.id}`);
+    expect(withTerm.body[0].evalues).toBe(1);
+    expect(withTerm.body[0].effectif).toBe(2);
+  });
 });
 
 describe('mode par classe et enseignant référent', () => {
