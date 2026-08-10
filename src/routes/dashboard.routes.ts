@@ -13,6 +13,13 @@ dashboardRoutes.use(requireAuth, requireRole('admin'));
 
 const dashboardQuery = z.object({
   term_id: z.coerce.number().int().positive().optional(),
+  /**
+   * Jour local du navigateur, pour la présence du jour. Sans lui, « aujourd'hui »
+   * serait calculé sur le fuseau du serveur (UTC) : une école à l'est de Greenwich
+   * verrait la présence fraîchement prise datée « demain » jusqu'à minuit UTC, et
+   * le tableau de bord annoncerait à tort qu'aucun appel n'a été fait.
+   */
+  date: z.iso.date().optional(),
 });
 
 const recentQuery = z.object({
@@ -20,8 +27,8 @@ const recentQuery = z.object({
 });
 
 dashboardRoutes.get('/', validate({ query: dashboardQuery }), async (req, res) => {
-  const { term_id } = req.query as unknown as z.infer<typeof dashboardQuery>;
-  res.json(await dashboardService.getDashboard(schoolIdOf(req), term_id));
+  const { term_id, date } = req.query as unknown as z.infer<typeof dashboardQuery>;
+  res.json(await dashboardService.getDashboard(schoolIdOf(req), term_id, date));
 });
 
 dashboardRoutes.get('/recent-grades', validate({ query: recentQuery }), async (req, res) => {

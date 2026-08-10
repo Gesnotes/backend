@@ -135,6 +135,13 @@ function buildBulletin(
     gradesByStudent.set(grade.studentId, list);
   }
 
+  // Moyenne générale en pleine précision, gardée à part de `results` (qui ne
+  // porte que la version arrondie, seule destinée au JSON) : moyenner des
+  // moyennes déjà arrondies à 2 décimales dériverait jusqu'à ±0,005 par
+  // élève avant l'arrondi final de `classAverage` — exactement ce que la
+  // discipline « Decimal de bout en bout » du module cherche à éviter.
+  const rawAverages: (D | null)[] = [];
+
   const results: StudentResult[] = students.map((student) => {
     const studentGrades = gradesByStudent.get(student.id) ?? [];
 
@@ -165,11 +172,14 @@ function buildBulletin(
 
     subjects.sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'fr'));
 
+    const generalAvg = generalAverage(forGeneral);
+    rawAverages.push(generalAvg);
+
     return {
       studentId: student.id,
       firstName: student.firstName,
       lastName: student.lastName,
-      average: serializeAverage(generalAverage(forGeneral)),
+      average: serializeAverage(generalAvg),
       subjects,
     };
   });
@@ -181,9 +191,14 @@ function buildBulletin(
     termId,
     termLabel: term.label,
     students: results,
-    classAverage: serializeAverage(
-      averageOfNullable(results.map((r) => r.average)),
-    ),
+    classAverage: serializeAverage(averageOfDecimals(rawAverages)),
+    /**
+     * Moyennes générales en pleine précision, dans l'ordre de `students` —
+     * réservé au calcul de la moyenne d'école sur plusieurs classes
+     * (`dashboard.service.ts`). Jamais renvoyé tel quel en JSON : tout appelant
+     * qui étale ce bulletin dans une réponse HTTP doit l'exclure explicitement.
+     */
+    studentRawAverages: rawAverages,
   };
 }
 
@@ -338,15 +353,13 @@ function categoriesOf(
 }
 
 /**
- * Moyenne de classe : moyenne des moyennes générales des élèves qui ont au
- * moins une note. Un élève sans note n'est ni exclu de la classe ni compté 0,
- * il est simplement absent du calcul.
+ * Moyenne de classe : moyenne des moyennes générales (pleine précision) des
+ * élèves qui ont au moins une note. Un élève sans note n'est ni exclu de la
+ * classe ni compté 0, il est simplement absent du calcul.
  */
-function averageOfNullable(values: (number | null)[]): D | null {
-  const present = values.filter((v): v is number => v !== null);
+function averageOfDecimals(values: (D | null)[]): D | null {
+  const present = values.filter((v): v is D => v !== null);
   if (present.length === 0) return null;
 
-  return present
-    .reduce((sum, v) => sum.add(new Decimal(v)), new Decimal(0))
-    .div(present.length);
+  return present.reduce((sum, v) => sum.add(v), new Decimal(0)).div(present.length);
 }

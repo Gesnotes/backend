@@ -200,16 +200,23 @@ export async function removeSubjectCoefficient(
  * Résolution du coefficient effectif (plan §2.4) : surcharge de classe, sinon
  * défaut de l'école, sinon 1. Exposé ici pour que le lot 6 s'appuie sur une
  * seule implémentation.
+ *
+ * `schoolId` scope les deux requêtes explicitement — sans lui, un appelant
+ * pourrait lire le coefficient/la matière d'une autre école en devinant un
+ * identifiant, la relation `subjectId`/`classId` seule ne suffisant pas à
+ * garantir l'isolation entre écoles (voir CLAUDE.md).
  */
 export async function resolveSubjectCoefficient(
+  schoolId: number,
   subjectId: number,
   classId: number,
 ): Promise<Prisma.Decimal> {
-  const override = await prisma.subjectCoefficient.findUnique({
-    where: { subjectId_classId: { subjectId, classId } },
+  const override = await prisma.subjectCoefficient.findFirst({
+    where: { subjectId, classId, subject: { schoolId } },
   });
   if (override) return override.coefficient;
 
-  const subject = await prisma.subject.findUniqueOrThrow({ where: { id: subjectId } });
+  const subject = await prisma.subject.findFirst({ where: { id: subjectId, schoolId } });
+  if (!subject) throw notFound('Matière introuvable');
   return subject.coefficient ?? new Prisma.Decimal(1);
 }

@@ -65,6 +65,33 @@ describe('CRUD /students', () => {
     expect(res.body.classe.id).toBe(autre.id);
   });
 
+  it('refuse d’inscrire un élève dans une classe archivée', async () => {
+    const archived = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '5e A', level: '5e', archivedAt: new Date() },
+    });
+
+    const res = await api(adminToken)
+      .post('/students')
+      .send({ firstName: 'Ana', lastName: 'Alpha', classId: archived.id });
+
+    expect(res.status).toBe(409);
+    expect(await prisma.student.count()).toBe(0);
+  });
+
+  it('refuse de déplacer un élève vers une classe archivée', async () => {
+    const created = await newStudent();
+    const archived = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '5e A', level: '5e', archivedAt: new Date() },
+    });
+
+    const res = await api(adminToken).patch(`/students/${created.body.id}`).send({ classId: archived.id });
+
+    expect(res.status).toBe(409);
+    expect((await prisma.student.findUniqueOrThrow({ where: { id: created.body.id } })).classId).toBe(
+      klass.id,
+    );
+  });
+
   it('filtre par classe', async () => {
     await newStudent();
     const autre = await prisma.class.create({

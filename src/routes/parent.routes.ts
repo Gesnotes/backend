@@ -38,7 +38,7 @@ parentMeRoutes.get('/children', validate({ query: optionalTermQuery }), async (r
 });
 
 const deviceBody = z.object({ fcmToken: z.string().trim().min(10).max(255) });
-const deviceParams = z.object({ token: z.string().trim().min(10).max(255) });
+const deviceParams = z.object({ deviceToken: z.string().trim().min(10).max(255) });
 
 /** Enregistre un appareil pour recevoir les notifications push. */
 parentMeRoutes.post('/devices', validate({ body: deviceBody }), async (req, res) => {
@@ -52,9 +52,9 @@ parentMeRoutes.get('/devices', async (req, res) => {
 });
 
 /** Retire un appareil (déconnexion, changement de téléphone). */
-parentMeRoutes.delete('/devices/:token', validate({ params: deviceParams }), async (req, res) => {
-  const { token } = req.params as unknown as z.infer<typeof deviceParams>;
-  const removed = await notificationService.removeDevice(authOf(req).userId, token);
+parentMeRoutes.delete('/devices/:deviceToken', validate({ params: deviceParams }), async (req, res) => {
+  const { deviceToken } = req.params as unknown as z.infer<typeof deviceParams>;
+  const removed = await notificationService.removeDevice(authOf(req).userId, deviceToken);
   if (!removed) throw notFound('Appareil introuvable');
   res.status(204).send();
 });

@@ -167,6 +167,44 @@ describe('GET /admin/dashboard', () => {
     expect(res.body.moyenneEcole).not.toBe(12);
   });
 
+  it("garde la pleine précision jusqu'à l'arrondi final (pas de double-arrondi)", async () => {
+    // Devoir 1/3 + composition 2/3 (sur 20) : moyenne exacte 32/3 = 10,6666...,
+    // une décimale qui ne s'arrête jamais. Trois élèves identiques : la
+    // moyenne d'école correcte reste 32/3 → 10,67. Un double-arrondi (chaque
+    // élève arrondi à 10,67 individuellement) donnerait ici le même résultat
+    // par coïncidence — la valeur du test est de vérifier que le calcul ne
+    // passe jamais par un `Number` intermédiaire qui tronquerait cette
+    // décimale périodique avant l'arrondi final.
+    for (const prenom of ['A', 'B', 'C']) {
+      const eleve = await addStudent(classe6.id, prenom);
+      await seedGrade({
+        schoolId: school.id,
+        studentId: eleve.id,
+        subjectId: maths.id,
+        gradeTypeId: devoirId,
+        termId: term.id,
+        value: 1,
+        maxValue: 3,
+      });
+      await seedGrade({
+        schoolId: school.id,
+        studentId: eleve.id,
+        subjectId: maths.id,
+        gradeTypeId: compoId,
+        termId: term.id,
+        value: 2,
+        maxValue: 3,
+      });
+    }
+
+    const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
+    expect(res.body.moyenneEcole).toBe(10.67);
+
+    // Même précision attendue sur la moyenne de la classe elle-même.
+    const classe6Row = res.body.classes.find((c: { className: string }) => c.className === '6e A');
+    expect(classe6Row.average).toBe(10.67);
+  });
+
   it('donne le détail par classe et les extrêmes', async () => {
     const forte = await addStudent(classe6.id, 'Ana');
     await addGradedSubject(forte.id, 18);
@@ -233,6 +271,32 @@ describe('GET /admin/dashboard', () => {
       retards: 0,
     });
     expect(res.body.presence.classesSansAppel).toEqual(['5e A']);
+  });
+
+  it("utilise le jour transmis par le client plutôt que le jour UTC du serveur", async () => {
+    // Une école à l'est de Greenwich peut avoir un jour local en avance sur
+    // le jour UTC du serveur : le dashboard doit alors suivre le jour transmis
+    // par le navigateur, pas recalculer « aujourd'hui » lui-même.
+    const eleve = await addStudent(classe6.id, 'Ana');
+    const demainUtc = new Date();
+    demainUtc.setUTCDate(demainUtc.getUTCDate() + 1);
+    const demainIso = demainUtc.toISOString().slice(0, 10);
+
+    await prisma.attendance.create({
+      data: {
+        schoolId: school.id,
+        studentId: eleve.id,
+        classId: classe6.id,
+        date: new Date(demainIso),
+        status: 'present',
+      },
+    });
+
+    const sansDate = await get(tokenAdmin, '/admin/dashboard');
+    expect(sansDate.body.presence.classesAvecAppel).toBe(0);
+
+    const avecDate = await get(tokenAdmin, `/admin/dashboard?date=${demainIso}`);
+    expect(avecDate.body.presence.classesAvecAppel).toBe(1);
   });
 
   it("ignore la présence d'un autre jour que celui du jour", async () => {

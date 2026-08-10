@@ -109,8 +109,12 @@ export async function getClassDetail(auth: AuthPayload, id: number, termId: numb
 
   const noted = ranked.filter((s) => s.average !== null);
 
+  // `studentRawAverages` est un détail interne au calcul (pleine précision,
+  // réservé au tableau de bord) : jamais renvoyé tel quel dans une réponse.
+  const { studentRawAverages: _studentRawAverages, ...bulletinPublic } = bulletin;
+
   return {
-    ...bulletin,
+    ...bulletinPublic,
     students: ranked.map((student, index) => ({
       ...student,
       rang: student.average === null ? null : index + 1,

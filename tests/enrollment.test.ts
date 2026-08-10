@@ -128,6 +128,20 @@ describe('POST /classes/:id/enrollment-decisions', () => {
     expect(await prisma.enrollmentDecision.count()).toBe(0);
   });
 
+  it('refuse une classe de destination archivée', async () => {
+    await prisma.class.update({ where: { id: classTarget.id }, data: { archivedAt: new Date() } });
+
+    const res = await api(adminToken)
+      .post(`/classes/${classSource.id}/enrollment-decisions`)
+      .send(batch([{ studentId: students[0]!.id, toClassId: classTarget.id, decision: 'promotion' }]));
+
+    expect(res.status).toBe(409);
+    expect(await prisma.enrollmentDecision.count()).toBe(0);
+    expect((await prisma.student.findUniqueOrThrow({ where: { id: students[0]!.id } })).classId).toBe(
+      classSource.id,
+    );
+  });
+
   it("refuse une classe de destination d'une autre école", async () => {
     const foreign = await prisma.class.create({ data: { schoolId: schoolB.id, name: 'CE1', level: 'CE1' } });
 

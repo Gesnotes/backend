@@ -210,14 +210,19 @@ describe('coefficients par classe (plan §2.4)', () => {
     // Idempotent : un second appel remplace au lieu de créer un doublon.
     await api(adminToken).put(`/subjects/${body.id}/coefficients/${classA.id}`).send({ coefficient: 5 });
     expect(await prisma.subjectCoefficient.count()).toBe(1);
-    expect(Number(await resolveSubjectCoefficient(body.id, classA.id))).toBe(5);
+    expect(Number(await resolveSubjectCoefficient(schoolA.id, body.id, classA.id))).toBe(5);
 
     expect((await api(adminToken).delete(`/subjects/${body.id}/coefficients/${classA.id}`)).status).toBe(204);
   });
 
   it('retombe sur le coefficient de l\'école sans surcharge', async () => {
     const { body } = await createSubject('Maths', 3);
-    expect(Number(await resolveSubjectCoefficient(body.id, classA.id))).toBe(3);
+    expect(Number(await resolveSubjectCoefficient(schoolA.id, body.id, classA.id))).toBe(3);
+  });
+
+  it("refuse de résoudre le coefficient d'une matière d'une autre école", async () => {
+    const { body } = await createSubject('Maths', 3);
+    await expect(resolveSubjectCoefficient(schoolB.id, body.id, classA.id)).rejects.toThrow();
   });
 
   it("refuse de poser un coefficient sur la classe d'une autre école", async () => {
