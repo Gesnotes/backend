@@ -12,7 +12,7 @@ const JOURS_ACTIVITE = 7;
  * un dashboard qui compterait les élèves de toutes les écoles serait une fuite
  * silencieuse, invisible à la lecture du chiffre affiché.
  */
-export async function getDashboard(schoolId: number, termId?: number) {
+export async function getDashboard(schoolId: number, termId?: number, date?: string) {
   const depuis = new Date();
   depuis.setDate(depuis.getDate() - JOURS_ACTIVITE);
 
@@ -27,8 +27,9 @@ export async function getDashboard(schoolId: number, termId?: number) {
       : await prisma.term.findFirst({ where: { id: termId, schoolId } });
   const periodeValide = term ? term.id : undefined;
 
-  const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
+  const [school, eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
     await Promise.all([
+      prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } }),
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
       prisma.class.count({ where: { schoolId, archivedAt: null } }),
       prisma.user.count({ where: { schoolId, role: 'teacher', archivedAt: null } }),
@@ -38,7 +39,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
       prisma.grade.count({
         where: { schoolId, ...(periodeValide ? { termId: periodeValide } : {}) },
       }),
-      getAttendanceSummary(schoolId),
+      getAttendanceSummary(schoolId, date),
     ]);
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
@@ -53,6 +54,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
    * même sans période sélectionnée.
    */
   const vide = {
+    school,
     effectifs,
     activite,
     presence,
@@ -91,17 +93,20 @@ export async function getDashboard(schoolId: number, termId?: number) {
   // Moyenne de l'école : moyenne des moyennes d'élèves, pas moyenne des
   // moyennes de classes. Une classe de 10 élèves ne doit pas peser autant
   // qu'une classe de 40.
+  //
+  // `studentRawAverages` (pleine précision), pas `student.average` (déjà
+  // arrondi à 2 décimales) : moyenner des valeurs déjà arrondies dériverait
+  // jusqu'à ±0,005 par élève avant l'arrondi final ci-dessous.
   const moyennesEleves = bulletins
-    .flatMap((bulletin) => bulletin.students)
-    .map((student) => student.average)
-    .filter((average): average is number => average !== null);
+    .flatMap((bulletin) => bulletin.studentRawAverages)
+    .filter((average): average is Prisma.Decimal => average !== null);
 
   const moyenneEcole =
     moyennesEleves.length === 0
       ? null
       : serializeAverage(
           moyennesEleves
-            .reduce((sum, v) => sum.add(new Prisma.Decimal(v)), new Prisma.Decimal(0))
+            .reduce((sum, v) => sum.add(v), new Prisma.Decimal(0))
             .div(moyennesEleves.length),
         );
 
@@ -115,6 +120,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
     .sort((a, b) => b.average - a.average);
 
   return {
+    school,
     effectifs,
     activite,
     presence,
@@ -141,9 +147,15 @@ export async function getDashboard(schoolId: number, termId?: number) {
  * combien d'absents et de retards, et lesquelles n'ont encore rien saisi.
  * La présence n'est pas réservée aux classes en mode présence — n'importe
  * quelle classe peut y être suivie — donc aucun filtre sur `mode` ici.
+ *
+ * `date` vient du navigateur (son jour local), comme pour la saisie de
+ * présence elle-même (`getAttendanceSheet`/`saveAttendanceBatch`). Sans
+ * elle — vieux client, appel serveur direct — on retombe sur le jour UTC du
+ * serveur, par défaut correct la plupart du temps mais pas pour une école à
+ * l'est de Greenwich dans la fenêtre entre minuit local et minuit UTC.
  */
-async function getAttendanceSummary(schoolId: number) {
-  const today = new Date(new Date().toISOString().slice(0, 10));
+async function getAttendanceSummary(schoolId: number, date?: string) {
+  const today = date ? new Date(date) : new Date(new Date().toISOString().slice(0, 10));
 
   const classes = await prisma.class.findMany({
     where: { schoolId, archivedAt: null },

@@ -16,6 +16,7 @@ let klass: { id: number };
 let term: { id: number };
 let maths: { id: number };
 let compoId: number;
+let devoirId: number;
 
 beforeEach(async () => {
   await resetDatabase();
@@ -37,6 +38,10 @@ beforeEach(async () => {
     data: { schoolId: schoolA.id, code: 'composition', label: 'Composition', weight: 3 },
   });
   compoId = compo.id;
+  const devoir = await prisma.gradeType.create({
+    data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
+  });
+  devoirId = devoir.id;
 });
 
 afterAll(async () => {
@@ -45,17 +50,32 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const addStudent = (firstName: string, lastName: string, classId = klass.id) =>
   prisma.student.create({ data: { schoolId: schoolA.id, classId, firstName, lastName } });
 
-const addGrade = (studentId: number, value: number) =>
-  seedGrade({
+/**
+ * Devoir et composition à la même valeur : la moyenne pondérée d'un devoir et
+ * d'une composition identiques vaut cette valeur, quels que soient leurs
+ * poids respectifs — ça permet à ces tests de continuer à raisonner sur "la
+ * note de l'élève" comme une valeur unique, tout en passant le seuil de
+ * publication (devoir + composition requis).
+ */
+const addGrade = async (studentId: number, value: number) => {
+  await seedGrade({
+    schoolId: schoolA.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: devoirId,
+    termId: term.id,
+    value,
+  });
+  return seedGrade({
     schoolId: schoolA.id,
     studentId,
     subjectId: maths.id,
@@ -63,6 +83,7 @@ const addGrade = (studentId: number, value: number) =>
     termId: term.id,
     value,
   });
+};
 
 describe('CRUD /classes', () => {
   it('crée, liste et modifie une classe', async () => {
@@ -104,6 +125,19 @@ describe('CRUD /classes', () => {
 
     const withTerm = await api(adminToken).get(`/classes?term_id=${term.id}`);
     expect(withTerm.body[0].average).toBe(15);
+  });
+
+  it("renvoie le nombre d'élèves évalués, seulement avec une période", async () => {
+    const ana = await addStudent('Ana', 'Alpha');
+    await addStudent('Ben', 'Beta'); // pas noté
+    await addGrade(ana.id, 15);
+
+    const list = await api(adminToken).get('/classes');
+    expect(list.body[0].evalues).toBeNull();
+
+    const withTerm = await api(adminToken).get(`/classes?term_id=${term.id}`);
+    expect(withTerm.body[0].evalues).toBe(1);
+    expect(withTerm.body[0].effectif).toBe(2);
   });
 });
 
@@ -299,13 +333,19 @@ describe('classes rattachées à une année scolaire et classe supérieure', () 
       expect(res.status).toBe(404);
     });
 
-    it('refuse la suppression définitive d’une classe encore désignée comme supérieure', async () => {
+    it('détache promotesToId des classes qui la désignaient comme supérieure, plutôt que de refuser', async () => {
       const cinquieme = await prisma.class.create({ data: { schoolId: schoolA.id, name: '5e A', level: '5e' } });
       await api(adminToken).patch(`/classes/${klass.id}`).send({ promotesToId: cinquieme.id });
+      await api(adminToken).delete(`/classes/${cinquieme.id}`);
 
-      const res = await api(adminToken).delete(`/classes/${cinquieme.id}?permanent=true`);
-      expect(res.status).toBe(409);
-      expect(await prisma.class.count({ where: { id: cinquieme.id } })).toBe(1);
+      const res = await api(adminToken).delete(
+        `/classes/${cinquieme.id}?permanent=true&confirm_label=5e A`,
+      );
+      expect(res.status).toBe(204);
+      expect(await prisma.class.count({ where: { id: cinquieme.id } })).toBe(0);
+
+      const source = await prisma.class.findUniqueOrThrow({ where: { id: klass.id } });
+      expect(source.promotesToId).toBeNull();
     });
   });
 });
@@ -464,17 +504,70 @@ describe('archivage et suppression', () => {
     expect((await api(adminToken).get('/classes')).body).toHaveLength(1);
   });
 
-  it('refuse la suppression définitive si la classe contient des élèves', async () => {
-    await addStudent('Ana', 'Alpha');
-
-    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true`);
+  it('refuse la suppression définitive tant que la classe n’est pas archivée', async () => {
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
     expect(res.status).toBe(409);
-    expect(res.body.error.details.studentCount).toBe(1);
-    expect(await prisma.student.count()).toBe(1);
+    expect(await prisma.class.count({ where: { id: klass.id } })).toBe(1);
   });
 
-  it('supprime définitivement une classe vide', async () => {
-    expect((await api(adminToken).delete(`/classes/${klass.id}?permanent=true`)).status).toBe(204);
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    await api(adminToken).delete(`/classes/${klass.id}`);
+
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=Mauvais nom`);
+    expect(res.status).toBe(400);
+    expect(await prisma.class.count({ where: { id: klass.id } })).toBe(1);
+  });
+
+  it('supprime définitivement une classe archivée et vide, avec le nom exact', async () => {
+    await api(adminToken).delete(`/classes/${klass.id}`);
+
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
+    expect(res.status).toBe(204);
     expect(await prisma.class.count({ where: { schoolId: schoolA.id } })).toBe(0);
+  });
+
+  it('emporte en cascade les élèves de la classe, avec leurs notes, présences et liens parents', async () => {
+    const ana = await addStudent('Ana', 'Alpha');
+    await addGrade(ana.id, 14);
+    const parent = await createUser({ schoolId: schoolA.id, email: 'parent@a.test', role: 'parent' });
+    await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parent.id } });
+    await prisma.attendance.create({
+      data: { schoolId: schoolA.id, studentId: ana.id, classId: klass.id, date: new Date(), status: 'present' },
+    });
+
+    await api(adminToken).delete(`/classes/${klass.id}`);
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
+
+    expect(res.status).toBe(204);
+    expect(await prisma.student.count({ where: { id: ana.id } })).toBe(0);
+    expect(await prisma.grade.count()).toBe(0);
+    expect(await prisma.attendance.count()).toBe(0);
+    expect(await prisma.studentParent.count()).toBe(0);
+    // Le compte parent lui-même survit : seul le lien vers l'élève disparaît.
+    expect(await prisma.user.count({ where: { id: parent.id } })).toBe(1);
+  });
+
+  it('emporte en cascade les évaluations, les affectations et les coefficients, même sans élève', async () => {
+    const teacher = await prisma.user.findFirstOrThrow({ where: { email: 'prof@a.test' } });
+    await prisma.teacherAssignment.create({
+      data: { schoolId: schoolA.id, teacherUserId: teacher.id, classId: klass.id, subjectId: maths.id },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { subjectId: maths.id, classId: klass.id, coefficient: 3 },
+    });
+    const evaluation = await prisma.evaluation.create({
+      data: {
+        schoolId: schoolA.id, classId: klass.id, subjectId: maths.id,
+        gradeTypeId: compoId, termId: term.id, label: 'Composition',
+      },
+    });
+
+    await api(adminToken).delete(`/classes/${klass.id}`);
+    const res = await api(adminToken).delete(`/classes/${klass.id}?permanent=true&confirm_label=6e A`);
+
+    expect(res.status).toBe(204);
+    expect(await prisma.evaluation.count({ where: { id: evaluation.id } })).toBe(0);
+    expect(await prisma.teacherAssignment.count()).toBe(0);
+    expect(await prisma.subjectCoefficient.count()).toBe(0);
   });
 });

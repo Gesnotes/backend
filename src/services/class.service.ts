@@ -49,12 +49,13 @@ export async function listClasses(
     include: { _count: { select: { students: { where: { archivedAt: null } } } } },
   });
 
-  // Sans période, la moyenne n'a pas de sens : ne rien afficher plutôt que
-  // d'agréger toutes les périodes confondues.
+  // Sans période, ni la moyenne ni le taux de saisie n'ont de sens : ne rien
+  // afficher plutôt que d'agréger toutes les périodes confondues.
   if (termId === undefined) {
     return classes.map(({ _count, ...klass }) => ({
       ...klass,
       effectif: _count.students,
+      evalues: null,
       average: null,
     }));
   }
@@ -67,10 +68,16 @@ export async function listClasses(
     termId,
   );
   const moyenneParClasse = new Map(bulletins.map((b) => [b.classId, b.classAverage]));
+  // Élève « évalué » : au moins une moyenne générale publiée sur la période —
+  // le même critère que le tableau de bord, pas un simple compte de notes.
+  const evaluesParClasse = new Map(
+    bulletins.map((b) => [b.classId, b.students.filter((s) => s.average !== null).length]),
+  );
 
   return classes.map(({ _count, ...klass }) => ({
     ...klass,
     effectif: _count.students,
+    evalues: evaluesParClasse.get(klass.id) ?? 0,
     average: moyenneParClasse.get(klass.id) ?? null,
   }));
 }
@@ -102,8 +109,12 @@ export async function getClassDetail(auth: AuthPayload, id: number, termId: numb
 
   const noted = ranked.filter((s) => s.average !== null);
 
+  // `studentRawAverages` est un détail interne au calcul (pleine précision,
+  // réservé au tableau de bord) : jamais renvoyé tel quel dans une réponse.
+  const { studentRawAverages: _studentRawAverages, ...bulletinPublic } = bulletin;
+
   return {
-    ...bulletin,
+    ...bulletinPublic,
     students: ranked.map((student, index) => ({
       ...student,
       rang: student.average === null ? null : index + 1,
@@ -357,34 +368,43 @@ export async function duplicateClassForNextYear(
 }
 
 /**
- * Archivage par défaut. La suppression définitive est refusée tant que la
- * classe contient des élèves : la cascade emporterait les élèves et donc
- * leurs notes.
+ * Archivage par défaut. La suppression définitive est réservée à une classe
+ * déjà archivée, avec retapage du nom exact — même garde-fou que pour une
+ * période ou une année scolaire (voir `term.service.ts`). Elle emporte en
+ * cascade tout ce qui s'y rattache : élèves (et donc leurs notes, présences
+ * et liens parents, cascade déjà portée par `Student`), évaluations, notes,
+ * affectations d'enseignants, coefficients, présences et historique de
+ * réinscription. `promotesToId` est détaché (mis à `null`) sur les classes
+ * qui désignaient celle-ci comme classe supérieure plutôt que d'être emporté
+ * : ce sont des classes indépendantes, pas des données de celle-ci.
  */
-export async function deleteClass(schoolId: number, id: number, permanent: boolean) {
-  await getClass(schoolId, id);
+export async function deleteClass(
+  schoolId: number,
+  id: number,
+  permanent: boolean,
+  expectedName = '',
+) {
+  const klass = await getClass(schoolId, id);
 
   if (!permanent) {
     return prisma.class.update({ where: { id }, data: { archivedAt: new Date() } });
   }
 
-  const studentCount = await prisma.student.count({ where: { classId: id } });
-  if (studentCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${studentCount} élève(s) sont rattachés à cette classe. Archivez-la plutôt.`,
-      { studentCount },
+  if (!klass.archivedAt) {
+    throw conflict('Archivez la classe avant de la supprimer définitivement.', { classId: id });
+  }
+
+  if (expectedName.trim().toLowerCase() !== klass.name.trim().toLowerCase()) {
+    throw badRequest(
+      'La confirmation ne correspond pas au nom de la classe. Cette suppression est définitive.',
+      { attendu: klass.name },
     );
   }
 
-  const promotedFromCount = await prisma.class.count({ where: { promotesToId: id } });
-  if (promotedFromCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${promotedFromCount} classe(s) désignent celle-ci comme classe supérieure. Modifiez-les d'abord.`,
-      { promotedFromCount },
-    );
-  }
-
-  return prisma.class.delete({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    await tx.class.updateMany({ where: { promotesToId: id }, data: { promotesToId: null } });
+    return tx.class.delete({ where: { id } });
+  });
 }
 
 export async function restoreClass(schoolId: number, id: number) {

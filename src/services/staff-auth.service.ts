@@ -85,11 +85,30 @@ export async function refresh(rawToken: string): Promise<StaffLoginResult> {
   };
 }
 
+/**
+ * Coupe aussi les access tokens déjà émis : sans `sessionsRevokedAt`, un
+ * token de 30 jours (par défaut) resterait valable 30 jours après le
+ * logout — voir `requireStaffAuth`, qui le vérifie à chaque requête. Le
+ * `staffUserId` vient du refresh token lui-même, pas d'un access token
+ * décodé : cette route reste utilisable même avec un access token déjà
+ * expiré, tant que le refresh token est encore valable.
+ */
 export async function logout(rawToken: string): Promise<void> {
-  await prisma.staffRefreshToken.updateMany({
-    where: { tokenHash: hashToken(rawToken), revokedAt: null },
-    data: { revokedAt: new Date() },
+  const stored = await prisma.staffRefreshToken.findUnique({
+    where: { tokenHash: hashToken(rawToken) },
   });
+  if (!stored) return;
+
+  await prisma.$transaction([
+    prisma.staffRefreshToken.updateMany({
+      where: { id: stored.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+    prisma.staffUser.update({
+      where: { id: stored.staffUserId },
+      data: { sessionsRevokedAt: new Date() },
+    }),
+  ]);
 }
 
 async function revokeAllRefreshTokens(staffUserId: number): Promise<void> {

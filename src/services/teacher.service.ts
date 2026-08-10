@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
-import { conflict, notFound } from '../errors/AppError';
+import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { revokeAllSessions } from './auth.service';
 import { sendInvitation } from './invitation.service';
@@ -229,41 +229,42 @@ export async function restoreTeacher(schoolId: number, id: number) {
 }
 
 /**
- * Suppression définitive. Refusée dès qu'une note ou une présence a été
- * saisie : les relations `Grade.teacherUserId` et `Attendance.recordedByUserId`
- * étant en `SET NULL`, supprimer le compte effacerait l'auteur sans que rien
- * ne le signale. Refusée aussi si l'enseignant est encore référent d'une
- * classe : `Class.homeroomTeacherId` est en `RESTRICT`, la base refuserait de
- * toute façon, mais avec un message SQL illisible pour une secrétaire.
+ * Suppression définitive, réservée à un compte déjà archivé, avec retapage
+ * du nom exact — même garde-fou que pour une période ou une année scolaire
+ * (voir `term.service.ts`). Les notes et présences déjà saisies par cet
+ * enseignant sont conservées : `Grade.teacherUserId` et
+ * `Attendance.recordedByUserId` sont en `SET NULL`, seul l'auteur se
+ * désolidarise. `Class.homeroomTeacherId` est en `RESTRICT` (`school_id`
+ * n'est pas nullable, un `SET NULL` par défaut échouerait à l'exécution) :
+ * on détache donc explicitement les classes dont il est référent avant de
+ * supprimer le compte.
  */
-export async function deleteTeacherPermanently(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
+export async function deleteTeacherPermanently(
+  schoolId: number,
+  id: number,
+  expectedName = '',
+) {
+  const teacher = await getTeacher(schoolId, id);
 
-  const gradeCount = await prisma.grade.count({ where: { teacherUserId: id } });
-  if (gradeCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${gradeCount} note(s) ont été saisies par cet enseignant. Archivez le compte plutôt.`,
-      { gradeCount },
+  if (!teacher.archivedAt) {
+    throw conflict('Archivez le compte avant de le supprimer définitivement.', { teacherId: id });
+  }
+
+  const actual = `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim().toLowerCase();
+  if (expectedName.trim().toLowerCase() !== actual) {
+    throw badRequest(
+      "La confirmation ne correspond pas au nom de l'enseignant. Cette suppression est définitive.",
+      { attendu: `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim() },
     );
   }
 
-  const attendanceCount = await prisma.attendance.count({ where: { recordedByUserId: id } });
-  if (attendanceCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${attendanceCount} présence(s) ont été saisies par cet enseignant. Archivez le compte plutôt.`,
-      { attendanceCount },
-    );
-  }
-
-  const homeroomCount = await prisma.class.count({ where: { homeroomTeacherId: id } });
-  if (homeroomCount > 0) {
-    throw conflict(
-      `Suppression impossible : cet enseignant est référent de ${homeroomCount} classe(s). Retirez-le de ces classes avant de supprimer son compte.`,
-      { homeroomCount },
-    );
-  }
-
-  await prisma.user.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.class.updateMany({
+      where: { homeroomTeacherId: id, schoolId },
+      data: { homeroomTeacherId: null },
+    });
+    await tx.user.delete({ where: { id } });
+  });
 }
 
 async function getTeacherWithAssignments(schoolId: number, id: number) {

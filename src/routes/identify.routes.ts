@@ -7,16 +7,17 @@ import { publicRoute } from '../middlewares/publicRoute';
 import { validate } from '../middlewares/validate';
 
 /**
- * Connexion sans sous-domaine connu (plan §1.2 ter) : aucune école n'est
- * encore résolue à ce stade, donc montée avant `schoolContext` dans
- * `app.ts` — comme `/onboarding` et `/staff`. `authRoutes` (après
- * `schoolContext`) reste inchangé pour les visites sur un vrai sous-domaine.
+ * Connexion : seule porte d'entrée, aucune école n'a besoin d'être résolue au
+ * préalable (ni sous-domaine, ni en-tête). Montée avant `schoolContext` dans
+ * `app.ts` — comme `/onboarding` et `/staff`.
  */
 export const identifyRoutes = Router();
 
 const identifyBody = z.object({
   identifier: z.string().min(1, 'Email ou téléphone requis'),
   password: z.string().min(1, 'Mot de passe requis'),
+  /** École choisie dans la liste ambiguë renvoyée par un appel précédent. */
+  schoolId: z.coerce.number().int().positive().optional(),
 });
 
 identifyRoutes.post(
@@ -25,7 +26,7 @@ identifyRoutes.post(
   credentialsLimiter,
   validate({ body: identifyBody }),
   async (req, res) => {
-    const { identifier, password } = req.body as z.infer<typeof identifyBody>;
-    res.json(await authService.identify(identifier, password));
+    const { identifier, password, schoolId } = req.body as z.infer<typeof identifyBody>;
+    res.json(await authService.identify(identifier, password, schoolId));
   },
 );

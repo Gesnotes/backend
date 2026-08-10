@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
 import { createApp } from '../src/app';
-import { createSchool, createUser, resetDatabase } from './helpers';
+import { createSchool, createUser, resetDatabase, seedGrade } from './helpers';
 import { signAccessToken } from '../src/lib/jwt';
 
 const app = createApp();
@@ -43,18 +43,18 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') => ({
+const api = (token: string) => ({
   get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).get(p).set('Authorization', `Bearer ${token}`),
 });
 
-const write = (token: string, subdomain = 'ecole-a') => ({
+const write = (token: string) => ({
   post: (p: string) =>
-    request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).post(p).set('Authorization', `Bearer ${token}`),
   patch: (p: string) =>
-    request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).patch(p).set('Authorization', `Bearer ${token}`),
   delete: (p: string) =>
-    request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 describe('GET /school-years', () => {
@@ -112,14 +112,14 @@ describe('GET /school-years', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    const res = await request(app).get('/school-years').set('X-School-Subdomain', 'ecole-a');
+    const res = await request(app).get('/school-years');
     expect(res.status).toBe(401);
   });
 
   it('ne laisse jamais fuir les années d’une autre école', async () => {
     await prisma.schoolYear.create({ data: { schoolId: schoolA.id, label: '2025-2026' } });
 
-    const res = await api(adminBToken, 'ecole-b').get('/school-years');
+    const res = await api(adminBToken).get('/school-years');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -181,7 +181,7 @@ describe('Écriture des années scolaires', () => {
   it('ne laisse pas modifier l’année d’une autre école', async () => {
     const created = await write(adminToken).post('/school-years').send(year);
 
-    const res = await write(adminBToken, 'ecole-b')
+    const res = await write(adminBToken)
       .patch(`/school-years/${created.body.id}`)
       .send({ label: 'Pirate' });
 
@@ -241,11 +241,11 @@ describe('Archivage et suppression définitive d’une année scolaire', () => {
   });
 
   /**
-   * Contrairement à une période, une année n'emporte pas ses dépendances :
-   * les trimestres ont leur propre cycle de vie (et leurs propres notes). La
-   * suppression définitive les détache plutôt que de les détruire.
+   * Comme pour une période, l'année emporte désormais en cascade tout ce
+   * qu'elle contient : ses trimestres, ses classes, et donc les évaluations,
+   * notes, élèves, présences et affectations rattachés à ces classes.
    */
-  it('détache les périodes plutôt que de les détruire à la suppression définitive', async () => {
+  it('emporte les périodes en cascade à la suppression définitive', async () => {
     const created = await write(adminToken).post('/school-years').send(year);
     const term = await prisma.term.create({
       data: { schoolId: schoolA.id, schoolYearId: created.body.id, label: 'Trimestre 1' },
@@ -259,11 +259,10 @@ describe('Archivage et suppression définitive d’une année scolaire', () => {
     expect(res.status).toBe(204);
     expect(await prisma.schoolYear.count({ where: { id: created.body.id } })).toBe(0);
     const survivor = await prisma.term.findUnique({ where: { id: term.id } });
-    expect(survivor).not.toBeNull();
-    expect(survivor?.schoolYearId).toBeNull();
+    expect(survivor).toBeNull();
   });
 
-  it('détache aussi les classes plutôt que de les détruire à la suppression définitive', async () => {
+  it('emporte les classes en cascade à la suppression définitive', async () => {
     const created = await write(adminToken).post('/school-years').send(year);
     const klass = await prisma.class.create({
       data: { schoolId: schoolA.id, name: '6e A', level: '6e', schoolYearId: created.body.id },
@@ -276,8 +275,61 @@ describe('Archivage et suppression définitive d’une année scolaire', () => {
 
     expect(res.status).toBe(204);
     const survivor = await prisma.class.findUnique({ where: { id: klass.id } });
+    expect(survivor).toBeNull();
+  });
+
+  it('emporte élèves et notes en cascade, via la classe, à la suppression définitive', async () => {
+    const created = await write(adminToken).post('/school-years').send(year);
+    const klass = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '6e A', level: '6e', schoolYearId: created.body.id },
+    });
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: klass.id, firstName: 'Ana', lastName: 'Traoré' },
+    });
+    const subject = await prisma.subject.create({ data: { schoolId: schoolA.id, name: 'Maths' } });
+    const gradeType = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 1 },
+    });
+    const term = await prisma.term.create({
+      data: { schoolId: schoolA.id, schoolYearId: created.body.id, label: 'Trimestre 1' },
+    });
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subject.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      value: 15,
+    });
+
+    await write(adminToken).delete(`/school-years/${created.body.id}`);
+    const res = await write(adminToken).delete(
+      `/school-years/${created.body.id}?permanent=true&confirm_label=${encodeURIComponent(year.label)}`,
+    );
+
+    expect(res.status).toBe(204);
+    expect(await prisma.student.count({ where: { id: student.id } })).toBe(0);
+    expect(await prisma.grade.count({ where: { studentId: student.id } })).toBe(0);
+  });
+
+  it('détache promotesToId sur une classe extérieure qui visait une classe de l’année supprimée', async () => {
+    const created = await write(adminToken).post('/school-years').send(year);
+    const targetClass = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: 'CE1', level: 'CE1', schoolYearId: created.body.id },
+    });
+    const outsideClass = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: 'CP', level: 'CP', promotesToId: targetClass.id },
+    });
+
+    await write(adminToken).delete(`/school-years/${created.body.id}`);
+    const res = await write(adminToken).delete(
+      `/school-years/${created.body.id}?permanent=true&confirm_label=${encodeURIComponent(year.label)}`,
+    );
+
+    expect(res.status).toBe(204);
+    const survivor = await prisma.class.findUnique({ where: { id: outsideClass.id } });
     expect(survivor).not.toBeNull();
-    expect(survivor?.schoolYearId).toBeNull();
+    expect(survivor?.promotesToId).toBeNull();
   });
 
   it('réserve l’archivage et la restauration à l’administration', async () => {

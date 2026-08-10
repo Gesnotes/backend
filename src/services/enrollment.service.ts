@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma';
 import type { EnrollmentDecisionType } from '../generated/prisma/enums';
 import type { AuthPayload } from '../types/express';
-import { badRequest, notFound } from '../errors/AppError';
+import { badRequest, conflict, notFound } from '../errors/AppError';
 
 /**
  * Réinscription : déplacer en un lot les élèves d'une classe vers la classe
@@ -49,15 +49,24 @@ export async function reinscrireEleves(
     seen.add(entry.studentId);
   }
 
+  // Cible archivée distinguée d'une cible inexistante : une classe qu'on
+  // vient de ranger n'est pas « introuvable », mais y inscrire des élèves les
+  // ferait disparaître des listes courantes sans que personne ne le sache.
   const toClassIds = [...new Set(entries.map((entry) => entry.toClassId))];
   const targets = await prisma.class.findMany({
     where: { id: { in: toClassIds }, schoolId: auth.schoolId },
-    select: { id: true },
+    select: { id: true, name: true, archivedAt: true },
   });
-  const validTargetIds = new Set(targets.map((target) => target.id));
-  const unknownTarget = entries.find((entry) => !validTargetIds.has(entry.toClassId));
-  if (unknownTarget) {
-    throw notFound('Classe de destination introuvable');
+  const targetsById = new Map(targets.map((target) => [target.id, target]));
+  for (const classId of toClassIds) {
+    const target = targetsById.get(classId);
+    if (!target) throw notFound('Classe de destination introuvable');
+    if (target.archivedAt) {
+      throw conflict(
+        `« ${target.name} » est archivée : restaurez-la avant d'y inscrire des élèves.`,
+        { classId: target.id },
+      );
+    }
   }
 
   // Seuls les élèves actuellement dans la classe source peuvent en partir :

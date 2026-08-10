@@ -87,7 +87,7 @@ afterAll(async () => {
 });
 
 const get = (token: string, path: string) =>
-  request(app).get(path).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`);
+  request(app).get(path).set('Authorization', `Bearer ${token}`);
 
 /**
  * Garde-fou symétrique de celui des enseignants : un parent ne voit que ses
@@ -126,14 +126,28 @@ describe('cloisonnement entre parents', () => {
 
     const res = await request(app)
       .get(`/children/${ana.id}?term_id=${term.id}`)
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(403); // sous-domaine incohérent avec le token
+    expect(res.status).toBe(404); // l'élève n'existe pas dans l'école du token
   });
 });
 
 describe('GET /parents/me/children', () => {
   it('renvoie la classe et la moyenne sur la période', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition) sans déplacer la
+    // moyenne attendue.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 15,
+    });
+
     const res = await get(tokenParentA, `/parents/me/children?term_id=${term.id}`);
     expect(res.body[0].classe.name).toBe('6e A');
     expect(res.body[0].average).toBe(15);
@@ -156,6 +170,21 @@ describe('GET /parents/me/children', () => {
 
 describe('GET /children/:id', () => {
   it('renvoie la moyenne générale et le détail par matière', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition) sans déplacer la
+    // moyenne attendue, `position` garde Composition en tête du détail.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 15,
+    });
+
     const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
 
     expect(res.status).toBe(200);
@@ -242,7 +271,6 @@ describe('GET /grades/:id', () => {
     // restent réservés aux enseignants.
     const res = await request(app)
       .post('/grades')
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${tokenParentA}`)
       .send({
         studentId: ana.id,

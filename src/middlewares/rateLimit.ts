@@ -7,7 +7,7 @@ const isTest = env.NODE_ENV === 'test';
 
 /**
  * Budget anti-bruteforce, réservé aux routes qui vérifient un secret :
- * /auth/login, /auth/forgot-password et /auth/reset-password.
+ * /auth/identify, /auth/forgot-password et /auth/reset-password.
  *
  * Ne jamais l'appliquer aux routes de session (/refresh, /logout) : un client
  * actif rafraîchit son token toutes les 15 minutes, et plusieurs familles

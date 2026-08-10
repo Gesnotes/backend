@@ -7,7 +7,7 @@ import helmet from 'helmet';
 import './lib/validationLocale';
 
 import prisma from './lib/prisma';
-import { env } from './lib/env';
+import { corsRootDomain, env, isProduction } from './lib/env';
 import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
 import { attendanceMeRoutes } from './routes/attendance.routes';
@@ -20,6 +20,7 @@ import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
+import { schoolRoutes } from './routes/school.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
 import { termRoutes } from './routes/term.routes';
@@ -41,6 +42,43 @@ import { teacherRoutes } from './routes/teacher.routes';
 // Abonne les notifications aux événements de saisie (lot 9 → lot 11).
 registerNotificationHandlers();
 
+/**
+ * Liste blanche CORS.
+ *
+ * `cors()` sans options reflète n'importe quelle origine : l'authentification
+ * se fait par jeton porteur (pas de cookie), donc pas la faille classique
+ * « wildcard + credentials », mais ça laisse n'importe quel site fabriquer des
+ * appels vers l'API et lire du JSON, dès qu'il obtient un jeton par un autre
+ * moyen. Chaque école ayant son propre sous-domaine, une origine fixe unique
+ * ne suffirait pas : on autorise le domaine racine et tous ses sous-domaines.
+ *
+ * Sans en-tête `Origin` (health check, appel serveur-à-serveur, tests) :
+ * toujours autorisé — cet en-tête n'existe que pour les requêtes navigateur
+ * réellement cross-origin.
+ */
+function isAllowedOrigin(
+  requestOrigin: string | undefined,
+  callback: (err: Error | null, allow?: boolean) => void,
+): void {
+  if (!requestOrigin) return callback(null, true);
+
+  try {
+    const { hostname } = new URL(requestOrigin);
+
+    if (!isProduction && (hostname === 'localhost' || hostname === '127.0.0.1')) {
+      return callback(null, true);
+    }
+
+    if (corsRootDomain && (hostname === corsRootDomain || hostname.endsWith(`.${corsRootDomain}`))) {
+      return callback(null, true);
+    }
+
+    return callback(null, false);
+  } catch {
+    return callback(null, false);
+  }
+}
+
 export function createApp() {
   const app = express();
 
@@ -50,7 +88,7 @@ export function createApp() {
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   app.use(helmet());
-  app.use(cors());
+  app.use(cors({ origin: isAllowedOrigin }));
   app.use(express.json());
   app.use(httpLogger);
 
@@ -104,6 +142,7 @@ export function createApp() {
   app.use('/auth', authRoutes);
   // Référentiels : sans eux, aucun client ne peut construire les appels qui
   // exigent un `term_id` ou un `gradeTypeId`.
+  app.use('/school', schoolRoutes);
   app.use('/school-years', schoolYearRoutes);
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);

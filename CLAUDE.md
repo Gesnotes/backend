@@ -7,9 +7,14 @@ Git indépendants, pas un monorepo.
 ## Architecture en un coup d'œil
 
 - **Isolation multi-écoles** : chaque table métier porte `school_id`.
-  `schoolContext` (middleware) le résout depuis le sous-domaine, le JWT fait
-  autorité une fois authentifié. Toute nouvelle requête/service doit filtrer
-  par `schoolId` explicitement, jamais par transitivité de relation.
+  `schoolContext` (middleware) dérive `req.schoolId` uniquement du JWT décodé
+  (`Authorization: Bearer <token>`) — plus aucune résolution par sous-domaine,
+  en-tête ou nom d'hôte. La connexion se fait via `POST /auth/identify`
+  (identifiant + mot de passe cherchés à travers toutes les écoles ;
+  `schoolId` optionnel pour trancher un cas ambigu où le même
+  identifiant/mot de passe correspond à plusieurs écoles). Toute nouvelle
+  requête/service doit filtrer par `schoolId` explicitement, jamais par
+  transitivité de relation.
 - **Trois rôles** : `admin`, `teacher`, `parent` (`requireRole`). Un
   enseignant n'agit que sur ses `teacher_assignments` ; un admin n'est
   restreint que par son école.

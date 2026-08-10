@@ -64,7 +64,7 @@ const duplicateBody = z.object({
   level: z.string().trim().min(1).max(20).optional(),
 });
 
-const deleteQuery = z.object({ permanent: boolFlag });
+const deleteQuery = z.object({ permanent: boolFlag, confirm_label: z.string().optional() });
 
 classRoutes.get('/', validate({ query: listQuery }), async (req, res) => {
   const { term_id, school_year_id, include_archived } = req.query as unknown as z.infer<
@@ -167,8 +167,8 @@ classRoutes.delete(
   validate({ params: idParam, query: deleteQuery }),
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
-    const { permanent } = req.query as unknown as z.infer<typeof deleteQuery>;
-    await classService.deleteClass(schoolIdOf(req), id, permanent);
+    const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteQuery>;
+    await classService.deleteClass(schoolIdOf(req), id, permanent, confirm_label ?? '');
     res.status(204).send();
   },
 );

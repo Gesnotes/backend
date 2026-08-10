@@ -23,12 +23,11 @@ afterAll(async () => {
 
 const login = () =>
   request(app)
-    .post('/auth/login')
-    .set('X-School-Subdomain', 'ecole-a')
+    .post('/auth/identify')
     .send({ identifier: 'p@a.test', password: TEST_PASSWORD });
 
 const me = (accessToken: string) =>
-  request(app).get('/me').set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${accessToken}`);
+  request(app).get('/me').set('Authorization', `Bearer ${accessToken}`);
 
 /**
  * Avec un access token longue durée (30 jours), l'expiration ne protège plus
@@ -42,7 +41,6 @@ describe('révocation des access tokens longue durée', () => {
 
     await request(app)
       .post('/auth/logout')
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${body.accessToken}`)
       .send({ refreshToken: body.refreshToken });
 
@@ -74,7 +72,6 @@ describe('révocation des access tokens longue durée', () => {
 
     await request(app)
       .post('/auth/forgot-password')
-      .set('X-School-Subdomain', 'ecole-a')
       .send({ email: 'p@a.test' });
 
     const raw = 'token-reset-sessions';
@@ -83,7 +80,6 @@ describe('révocation des access tokens longue durée', () => {
     });
     await request(app)
       .post('/auth/reset-password')
-      .set('X-School-Subdomain', 'ecole-a')
       .send({ token: raw, password: 'nouveaumotdepasse' });
 
     expect((await me(body.accessToken)).status).toBe(401);
@@ -91,13 +87,12 @@ describe('révocation des access tokens longue durée', () => {
 
   it('applique un changement de rôle sans attendre l\'expiration du token', async () => {
     const { body } = await login();
-    expect((await request(app).get('/teachers').set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${body.accessToken}`)).status).toBe(403);
+    expect((await request(app).get('/teachers').set('Authorization', `Bearer ${body.accessToken}`)).status).toBe(403);
 
     await prisma.user.updateMany({ where: { email: 'p@a.test' }, data: { role: 'admin' } });
 
     const promoted = await request(app)
       .get('/teachers')
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${body.accessToken}`);
     expect(promoted.status).toBe(200);
   });

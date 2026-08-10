@@ -139,8 +139,8 @@ export function seedAttendance(data: {
   });
 }
 
-export function createSchool(subdomain: string, name = `École ${subdomain}`) {
-  return prisma.school.create({ data: { name, subdomain } });
+export function createSchool(identifier: string, name = `École ${identifier}`) {
+  return prisma.school.create({ data: { name } });
 }
 
 export async function createUser(options: {

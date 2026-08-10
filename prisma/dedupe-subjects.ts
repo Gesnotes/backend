@@ -20,7 +20,7 @@ import { labelKey } from '../src/lib/normalize';
  * Idempotent : une base déjà propre n'est pas touchée.
  */
 async function main() {
-  const schools = await prisma.school.findMany({ select: { id: true, subdomain: true } });
+  const schools = await prisma.school.findMany({ select: { id: true, name: true } });
   let merged = 0;
 
   for (const school of schools) {
@@ -89,7 +89,7 @@ async function main() {
 
         merged += 1;
         console.log(
-          `[${school.subdomain}] « ${dupe.name} » (#${dupe.id}) fusionnée dans « ${keeper.name} » (#${keeper.id})`,
+          `[${school.name}] « ${dupe.name} » (#${dupe.id}) fusionnée dans « ${keeper.name} » (#${keeper.id})`,
         );
       }
     }

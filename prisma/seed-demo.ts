@@ -24,7 +24,7 @@ import { normalizeEmail, normalizePhone } from '../src/lib/normalize';
  *   npm run prisma:seed:demo
  */
 
-const SUBDOMAIN = 'ecole-lumiere';
+const SCHOOL_NAME = 'École de la Lumière';
 const PASSWORD = process.env.SEED_DEMO_PASSWORD ?? 'demo1234';
 
 /** Générateur déterministe : mêmes notes à chaque exécution. */
@@ -85,11 +85,9 @@ const LAST_NAMES = [
 ];
 
 async function main() {
-  const school = await prisma.school.upsert({
-    where: { subdomain: SUBDOMAIN },
-    update: {},
-    create: { name: 'École de la Lumière', subdomain: SUBDOMAIN },
-  });
+  const school =
+    (await prisma.school.findFirst({ where: { name: SCHOOL_NAME } })) ??
+    (await prisma.school.create({ data: { name: SCHOOL_NAME } }));
 
   const passwordHash = await argon2.hash(PASSWORD);
 
@@ -376,7 +374,7 @@ async function main() {
   }
 
   console.log('');
-  console.log(`École        : ${school.name} (${school.subdomain})`);
+  console.log(`École        : ${school.name} (#${school.id})`);
   console.log(`Admin        : ${admin.email} / ${PASSWORD}`);
   console.log(`Enseignant   : ${teacherUsers[0]?.user.email} / ${PASSWORD}`);
   console.log(`Parent       : voir la liste ci-dessous / ${PASSWORD}`);
@@ -395,9 +393,6 @@ async function main() {
     select: { email: true },
   });
   console.log(`Exemple parent : ${sampleParent?.email}`);
-  console.log('');
-  console.log(`⚠️  Pointez le frontend sur ce sous-domaine :`);
-  console.log(`    VITE_SCHOOL_SUBDOMAIN=${SUBDOMAIN}`);
 }
 
 /** `upsert` par critère non unique : Prisma l'exige sur un index. */

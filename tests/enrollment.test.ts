@@ -51,8 +51,8 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
 });
 
 const batch = (
@@ -126,6 +126,20 @@ describe('POST /classes/:id/enrollment-decisions', () => {
       .send(batch([{ studentId: students[0]!.id, toClassId: 999999, decision: 'promotion' }]));
     expect(res.status).toBe(404);
     expect(await prisma.enrollmentDecision.count()).toBe(0);
+  });
+
+  it('refuse une classe de destination archivée', async () => {
+    await prisma.class.update({ where: { id: classTarget.id }, data: { archivedAt: new Date() } });
+
+    const res = await api(adminToken)
+      .post(`/classes/${classSource.id}/enrollment-decisions`)
+      .send(batch([{ studentId: students[0]!.id, toClassId: classTarget.id, decision: 'promotion' }]));
+
+    expect(res.status).toBe(409);
+    expect(await prisma.enrollmentDecision.count()).toBe(0);
+    expect((await prisma.student.findUniqueOrThrow({ where: { id: students[0]!.id } })).classId).toBe(
+      classSource.id,
+    );
   });
 
   it("refuse une classe de destination d'une autre école", async () => {

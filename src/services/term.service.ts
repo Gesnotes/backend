@@ -386,17 +386,13 @@ export async function closeTermEntry(schoolId: number, id: number): Promise<Term
 }
 
 /**
- * Suppression définitive, en cascade sur les évaluations et les notes.
+ * Suppression définitive, en cascade sur les évaluations et les notes
+ * (`evaluations.term_id` et `grades.term_id` sont en CASCADE).
  *
  * Réservée aux périodes déjà archivées : effacer un trimestre détruit le
  * travail de saisie d'une équipe entière, et rien ne permet de revenir en
  * arrière. Comme pour la suppression d'un élève, le libellé exact doit être
  * retapé — c'est le seul garde-fou contre le clic sur la mauvaise ligne.
- *
- * L'ordre compte : les notes d'abord (elles référencent la période *et* les
- * évaluations), puis les évaluations, puis la période. Le tout dans une
- * transaction, faute de quoi un échec en cours de route laisserait une période
- * à moitié vidée.
  */
 export async function deleteTermPermanently(
   schoolId: number,
@@ -419,9 +415,5 @@ export async function deleteTermPermanently(
     );
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.grade.deleteMany({ where: { termId: id } });
-    await tx.evaluation.deleteMany({ where: { termId: id } });
-    await tx.term.delete({ where: { id } });
-  });
+  await prisma.term.delete({ where: { id } });
 }

@@ -14,21 +14,6 @@ import { validate } from '../middlewares/validate';
  */
 export const onboardingRoutes = Router();
 
-const searchQuery = z.object({
-  q: z.string().trim().min(2, 'Tapez au moins deux caractères.').max(100),
-});
-
-onboardingRoutes.get(
-  '/schools/search',
-  publicRoute,
-  publicLimiter,
-  validate({ query: searchQuery }),
-  async (req, res) => {
-    const { q } = req.query as unknown as z.infer<typeof searchQuery>;
-    res.json(await onboardingService.searchSchools(q));
-  },
-);
-
 const signupBody = z.object({
   schoolName: z.string().trim().min(1, "Le nom de l'école est obligatoire.").max(150),
   contactName: z.string().trim().min(1, 'Votre nom est obligatoire.').max(150),

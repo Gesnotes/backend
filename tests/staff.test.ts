@@ -86,6 +86,24 @@ describe('session staff (refresh, logout)', () => {
     const res = await request(app).post('/staff/refresh').send({ refreshToken: login.body.refreshToken });
     expect(res.status).toBe(401);
   });
+
+  /**
+   * Sans ça, un access token émis avant la déconnexion resterait valable
+   * jusqu'à son expiration (30 jours par défaut) — le pendant staff de
+   * tests/sessions.test.ts pour les comptes école.
+   */
+  it("déconnecte : l'access token déjà émis ne fonctionne plus non plus", async () => {
+    const login = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+
+    await request(app).post('/staff/logout').send({ refreshToken: login.body.refreshToken });
+
+    const res = await request(app)
+      .get('/staff/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`);
+    expect(res.status).toBe(401);
+  });
 });
 
 describe('GET /staff/me — isolation des deux mondes d’authentification', () => {
@@ -102,7 +120,7 @@ describe('GET /staff/me — isolation des deux mondes d’authentification', () 
     expect(res.status).toBe(401);
   });
 
-  it('ne nécessite aucun X-School-Subdomain', async () => {
+  it('accepte un token staff valable', async () => {
     const res = await request(app).get('/staff/me').set('Authorization', `Bearer ${staffToken}`);
     expect(res.status).toBe(200);
   });
@@ -149,7 +167,7 @@ describe('supervision de la plateforme', () => {
     const res = await staffApi().get('/staff/schools');
 
     expect(res.status).toBe(200);
-    const row = res.body.find((s: { subdomain: string }) => s.subdomain === 'ecole-a');
+    const row = res.body.find((s: { id: number }) => s.id === school.id);
     expect(row).toMatchObject({ name: 'École Alpha', students: 1, classes: 1, admins: 1, teachers: 0 });
   });
 
@@ -197,7 +215,6 @@ describe('demandes d’inscription', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.school.name).toBe('École La Colombe');
-    expect(res.body.school.subdomain).toBe('ecole-la-colombe');
 
     const admin = await prisma.user.findFirstOrThrow({ where: { schoolId: res.body.school.id } });
     expect(admin.role).toBe('admin');
@@ -211,28 +228,24 @@ describe('demandes d’inscription', () => {
     const updated = await prisma.signupRequest.findUniqueOrThrow({ where: { id: demand.id } });
     expect(updated.status).toBe('traite');
     expect(updated.schoolId).toBe(res.body.school.id);
+
+    // Sans ça, cette école ne pourrait jamais créer la moindre évaluation :
+    // aucune route ne permet de créer un type de note après coup.
+    const gradeTypes = await prisma.gradeType.findMany({
+      where: { schoolId: res.body.school.id },
+      orderBy: { position: 'asc' },
+    });
+    expect(gradeTypes.map((t) => t.code)).toEqual(['interrogation', 'devoir', 'composition']);
   });
 
-  it('accepte avec un sous-domaine et un nom choisis par le staff', async () => {
+  it('accepte avec un nom choisi par le staff', async () => {
     const demand = await seedRequest();
 
     const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`, {
-      subdomain: 'la-colombe-cotonou',
       schoolName: 'École La Colombe (Cotonou)',
     });
 
-    expect(res.body.school.subdomain).toBe('la-colombe-cotonou');
     expect(res.body.school.name).toBe('École La Colombe (Cotonou)');
-  });
-
-  it('ajoute un suffixe si le sous-domaine par défaut est déjà pris', async () => {
-    await createSchool('ecole-la-colombe');
-    const demand = await seedRequest();
-
-    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
-
-    expect(res.status).toBe(201);
-    expect(res.body.school.subdomain).toBe('ecole-la-colombe-2');
   });
 
   it('refuse d’accepter deux fois la même demande', async () => {
@@ -286,8 +299,7 @@ describe('suspendre / restaurer / supprimer une école', () => {
     const school = await createSchool('ecole-a');
     const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
     const login = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
     expect(login.status).toBe(200);
 
@@ -302,16 +314,27 @@ describe('suspendre / restaurer / supprimer une école', () => {
     expect(updatedAdmin.sessionsRevokedAt).not.toBeNull();
   });
 
-  it('refuse la connexion sur une école suspendue (sous-domaine)', async () => {
+  it('refuse la connexion sur une école suspendue, sans le distinguer d’un identifiant inconnu', async () => {
     const school = await createSchool('ecole-a');
     await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
     await staffApi().delete(`/staff/schools/${school.id}`);
 
     const res = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
+    expect(res.status).toBe(401);
+  });
+
+  it('coupe une session déjà ouverte quand son école est suspendue entre-temps (schoolContext)', async () => {
+    const school = await createSchool('ecole-a');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const token = signAccessToken({ userId: admin.id, schoolId: school.id, role: 'admin' });
+
+    await staffApi().delete(`/staff/schools/${school.id}`);
+
+    const res = await request(app).get('/me').set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(403);
+    expect(res.body.error.message).toMatch(/établissement/i);
   });
 
   it('refuse de suspendre deux fois la même école', async () => {
@@ -339,8 +362,7 @@ describe('suspendre / restaurer / supprimer une école', () => {
     expect(updated.archivedAt).toBeNull();
 
     const login = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'admin@a.test', password: TEST_PASSWORD });
     expect(login.status).toBe(200);
   });
