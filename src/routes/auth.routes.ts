@@ -2,17 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import * as authService from '../services/auth.service';
-import { badRequest } from '../errors/AppError';
 import { credentialsLimiter, sessionLimiter } from '../middlewares/rateLimit';
 import { publicRoute } from '../middlewares/publicRoute';
 import { validate } from '../middlewares/validate';
 
 export const authRoutes = Router();
-
-const loginSchema = z.object({
-  identifier: z.string().min(1, 'Email ou téléphone requis'),
-  password: z.string().min(1, 'Mot de passe requis'),
-});
 
 const refreshSchema = z.object({ refreshToken: z.string().min(1) });
 
@@ -21,17 +15,6 @@ const forgotSchema = z.object({ email: z.email() });
 const resetSchema = z.object({
   token: z.string().min(1),
   password: z.string().min(8, 'Le mot de passe doit faire au moins 8 caractères'),
-});
-
-authRoutes.post(
-  '/login',
-  publicRoute,
-  credentialsLimiter, validate({ body: loginSchema }), async (req, res) => {
-  if (!req.schoolId) throw badRequest(
-      "Établissement introuvable. Vérifiez l'adresse du site, ou prévenez votre administration.",
-    );
-  const { identifier, password } = req.body as z.infer<typeof loginSchema>;
-  res.json(await authService.login(req.schoolId, identifier, password));
 });
 
 authRoutes.post('/refresh', publicRoute,
@@ -53,11 +36,8 @@ authRoutes.post(
   credentialsLimiter,
   validate({ body: forgotSchema }),
   async (req, res) => {
-    if (!req.schoolId) throw badRequest(
-      "Établissement introuvable. Vérifiez l'adresse du site, ou prévenez votre administration.",
-    );
     const { email } = req.body as z.infer<typeof forgotSchema>;
-    await authService.requestPasswordReset(req.schoolId, email);
+    await authService.requestPasswordReset(email);
 
     // Réponse identique que le compte existe ou non : pas d'énumération.
     res.json({ message: 'Si un compte existe, un email de réinitialisation a été envoyé.' });

@@ -96,8 +96,8 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') =>
-  request(app).put('/teachers/me/grades').set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`);
+const api = (token: string) =>
+  request(app).put('/teachers/me/grades').set('Authorization', `Bearer ${token}`);
 
 const batch = (
   entries: { studentId: number; value: number | null; comment?: string | null }[],

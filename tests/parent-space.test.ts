@@ -87,7 +87,7 @@ afterAll(async () => {
 });
 
 const get = (token: string, path: string) =>
-  request(app).get(path).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`);
+  request(app).get(path).set('Authorization', `Bearer ${token}`);
 
 /**
  * Garde-fou symétrique de celui des enseignants : un parent ne voit que ses
@@ -126,9 +126,8 @@ describe('cloisonnement entre parents', () => {
 
     const res = await request(app)
       .get(`/children/${ana.id}?term_id=${term.id}`)
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${token}`);
-    expect(res.status).toBe(403); // sous-domaine incohérent avec le token
+    expect(res.status).toBe(404); // l'élève n'existe pas dans l'école du token
   });
 });
 
@@ -272,7 +271,6 @@ describe('GET /grades/:id', () => {
     // restent réservés aux enseignants.
     const res = await request(app)
       .post('/grades')
-      .set('X-School-Subdomain', 'ecole-a')
       .set('Authorization', `Bearer ${tokenParentA}`)
       .send({
         studentId: ana.id,

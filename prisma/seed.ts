@@ -16,11 +16,9 @@ import { normalizeEmail } from '../src/lib/normalize';
  * Idempotent : relançable sans dupliquer de données.
  */
 async function main() {
-  const school = await prisma.school.upsert({
-    where: { subdomain: 'ecole-demo' },
-    update: {},
-    create: { name: 'École de démonstration', subdomain: 'ecole-demo' },
-  });
+  const school =
+    (await prisma.school.findFirst({ where: { name: 'École de démonstration' } })) ??
+    (await prisma.school.create({ data: { name: 'École de démonstration' } }));
 
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234';
   const passwordHash = await argon2.hash(adminPassword);
@@ -171,7 +169,7 @@ async function main() {
   });
 
   console.log('');
-  console.log(`École        : ${school.name} (${school.subdomain})`);
+  console.log(`École        : ${school.name} (#${school.id})`);
   console.log(`Admin        : ${admin.email} / ${adminPassword}`);
   console.log(`Enseignant   : ${teacher.email} / ${adminPassword}`);
   console.log(`Parent       : ${parent.email} / ${adminPassword}`);

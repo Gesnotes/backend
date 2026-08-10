@@ -53,7 +53,7 @@ afterAll(async () => {
 });
 
 const get = (token: string, path: string) =>
-  request(app).get(path).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`);
+  request(app).get(path).set('Authorization', `Bearer ${token}`);
 
 const addStudent = (classId: number, firstName: string) =>
   prisma.student.create({

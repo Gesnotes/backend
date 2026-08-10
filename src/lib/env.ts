@@ -67,10 +67,6 @@ const envSchema = z.object({
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 
-  // Repli de sous-domaine hors production : en local, req.hostname vaut
-  // "localhost" et ne résout aucune école (cf. plan §6.5).
-  DEFAULT_SCHOOL_SUBDOMAIN: z.string().optional(),
-
   /**
    * Suivi des erreurs (GlitchTip, ou tout serveur compatible Sentry).
    *

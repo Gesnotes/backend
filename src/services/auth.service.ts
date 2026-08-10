@@ -2,8 +2,7 @@ import argon2 from 'argon2';
 import crypto from 'node:crypto';
 
 import prisma from '../lib/prisma';
-import { env, isProduction, webAppUrl } from '../lib/env';
-import { logger } from '../lib/logger';
+import { env, webAppUrl } from '../lib/env';
 import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
@@ -25,88 +24,37 @@ export interface LoginResult {
   user: { id: number; email: string; role: string; firstName: string | null; lastName: string | null };
 }
 
-/**
- * Connexion par email OU téléphone, dans l'école du sous-domaine.
- *
- * Le rejet des comptes archivés se fait ici, dans le service d'auth : le
- * middleware s'exécute après émission du token, c'est trop tard (plan §8.1).
- */
-export async function login(
-  schoolId: number,
-  identifier: string,
-  password: string,
-): Promise<LoginResult> {
-  // Email ou téléphone, décidé sur la forme de l'identifiant plutôt qu'en
-  // interrogeant les deux colonnes : passer une adresse à `normalizePhone`
-  // en retirait les points et comparait une adresse mutilée à une colonne
-  // téléphone, ce qui ne peut jamais être pertinent.
-  const parEmail = identifier.includes('@');
-  const user = await prisma.user.findFirst({
-    where: parEmail
-      ? { schoolId, email: normalizeEmail(identifier) }
-      : { schoolId, phone: normalizePhone(identifier) },
-  });
-
-  // Hachage à vide quand le compte n'existe pas : sans cela, le temps de
-  // réponse trahit l'existence d'un compte (attaque temporelle).
-  if (!user) {
-    await argon2.hash('mot-de-passe-factice-pour-egaliser-le-temps');
-    await warnIfWrongSchool(schoolId, identifier, parEmail);
-    throw unauthorized(LOGIN_FAILED);
-  }
-
-  const valid = await argon2.verify(user.passwordHash, password);
-  if (!valid) throw unauthorized(LOGIN_FAILED);
-
-  if (user.archivedAt) throw unauthorized(LOGIN_FAILED);
-
-  const accessToken = signAccessToken({
-    userId: user.id,
-    schoolId: user.schoolId,
-    role: user.role,
-  });
-  const refreshToken = await issueRefreshToken(user.id);
-
-  return {
-    accessToken,
-    refreshToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    },
-  };
-}
-
 export interface IdentifyOk {
   status: 'ok';
   accessToken: string;
   refreshToken: string;
   user: LoginResult['user'];
-  school: { subdomain: string; name: string };
+  school: { id: number; name: string };
 }
 
 export interface IdentifyAmbiguous {
   status: 'ambiguous';
-  schools: { subdomain: string; name: string; city: string | null }[];
+  schools: { id: number; name: string; city: string | null }[];
 }
 
 export type IdentifyResult = IdentifyOk | IdentifyAmbiguous;
 
 /**
- * Connexion sans sous-domaine connu (plan §1.2 ter) : recherche l'identifiant
- * à travers toutes les écoles actives, plutôt que dans une seule déjà
- * résolue par le nom d'hôte ou l'en-tête.
+ * Connexion par identifiant (email ou téléphone) + mot de passe, recherchée
+ * à travers toutes les écoles actives — aucun sous-domaine ni en-tête
+ * n'intervient plus dans la résolution de l'établissement.
  *
- * Un même email peut exister dans deux écoles (un parent avec un enfant dans
- * chacune) : si le mot de passe saisi est valable dans plus d'une, impossible
- * de deviner laquelle sans le demander — la réponse liste alors les écoles
- * concernées, sans jamais émettre de jeton pour l'une plutôt que l'autre. Le
- * client complète ensuite avec `login()`, sur le sous-domaine choisi.
+ * Un même identifiant peut exister dans deux écoles (un parent avec un enfant
+ * dans chacune) : si le mot de passe saisi est valable dans plus d'une,
+ * impossible de deviner laquelle sans le demander — la réponse liste alors
+ * les écoles concernées, sans jamais émettre de jeton pour l'une plutôt que
+ * l'autre. Le client rappelle ensuite avec le `schoolId` choisi.
  */
-export async function identify(identifier: string, password: string): Promise<IdentifyResult> {
+export async function identify(
+  identifier: string,
+  password: string,
+  schoolId?: number,
+): Promise<IdentifyResult> {
   const parEmail = identifier.includes('@');
 
   const candidates = await prisma.user.findMany({
@@ -117,7 +65,7 @@ export async function identify(identifier: string, password: string): Promise<Id
         ? { email: normalizeEmail(identifier) }
         : { phone: normalizePhone(identifier) }),
     },
-    include: { school: { select: { subdomain: true, name: true, city: true } } },
+    include: { school: { select: { id: true, name: true, city: true } } },
   });
 
   // Hachage à vide quand l'identifiant n'existe nulle part : sans cela, le
@@ -127,18 +75,25 @@ export async function identify(identifier: string, password: string): Promise<Id
     throw unauthorized(LOGIN_FAILED);
   }
 
-  const verified = [];
+  let verified = [];
   for (const candidate of candidates) {
     if (await argon2.verify(candidate.passwordHash, password)) verified.push(candidate);
   }
 
   if (verified.length === 0) throw unauthorized(LOGIN_FAILED);
 
+  // École choisie dans la liste ambiguë d'un appel précédent : on referme le
+  // choix plutôt que de le redemander.
+  if (schoolId !== undefined) {
+    verified = verified.filter((u) => u.schoolId === schoolId);
+    if (verified.length === 0) throw unauthorized(LOGIN_FAILED);
+  }
+
   if (verified.length > 1) {
     return {
       status: 'ambiguous',
       schools: verified.map((u) => ({
-        subdomain: u.school.subdomain,
+        id: u.school.id,
         name: u.school.name,
         city: u.school.city,
       })),
@@ -160,42 +115,8 @@ export async function identify(identifier: string, password: string): Promise<Id
       firstName: user.firstName,
       lastName: user.lastName,
     },
-    school: { subdomain: user.school.subdomain, name: user.school.name },
+    school: { id: user.school.id, name: user.school.name },
   };
-}
-
-/**
- * Trace, **en développement uniquement**, le cas « bons identifiants, mauvaise
- * école ».
- *
- * C'est la confusion la plus coûteuse du travail en local : le compte existe,
- * le mot de passe est bon, et l'API répond « Identifiants invalides » parce
- * que le sous-domaine désigne un autre établissement. Rien dans la réponse ne
- * peut le dire — l'y écrire permettrait d'énumérer les comptes d'une instance.
- * Le message part donc dans les logs du serveur, que seul le développeur voit.
- */
-async function warnIfWrongSchool(schoolId: number, identifier: string, parEmail: boolean) {
-  if (isProduction) return;
-
-  const elsewhere = await prisma.user.findFirst({
-    where: parEmail
-      ? { email: normalizeEmail(identifier), schoolId: { not: schoolId } }
-      : { phone: normalizePhone(identifier), schoolId: { not: schoolId } },
-    select: { school: { select: { subdomain: true } } },
-  });
-
-  if (!elsewhere) return;
-
-  const current = await prisma.school.findUnique({
-    where: { id: schoolId },
-    select: { subdomain: true },
-  });
-
-  logger.warn(
-    { identifier, ecoleInterrogee: current?.subdomain, ecoleDuCompte: elsewhere.school.subdomain },
-    `Ce compte existe dans l'école « ${elsewhere.school.subdomain} », pas dans « ${current?.subdomain} ». ` +
-      'Alignez DEFAULT_SCHOOL_SUBDOMAIN (backend) et VITE_SCHOOL_SUBDOMAIN (frontend).',
-  );
 }
 
 /** Rotation : l'ancien refresh token est révoqué, un nouveau est émis. */
@@ -302,36 +223,44 @@ export async function revokeAllSessions(userId: number): Promise<void> {
 }
 
 /**
- * Demande de réinitialisation.
+ * Demande de réinitialisation, recherchée à travers toutes les écoles (plus
+ * de sous-domaine pour la scoper à une seule).
  *
  * Ne révèle jamais si le compte existe : la réponse du contrôleur est
- * identique dans tous les cas.
+ * identique dans tous les cas. Un même email peut être rattaché à un compte
+ * dans plusieurs écoles (un parent avec un enfant dans chacune) : chacun
+ * reçoit alors son propre lien, dans un email qui nomme son établissement —
+ * jamais un seul lien ambigu qui réinitialiserait le mauvais compte.
  */
-export async function requestPasswordReset(schoolId: number, email: string): Promise<void> {
-  const user = await prisma.user.findFirst({
-    where: { schoolId, email: normalizeEmail(email), archivedAt: null },
+export async function requestPasswordReset(email: string): Promise<void> {
+  const users = await prisma.user.findMany({
+    where: { email: normalizeEmail(email), archivedAt: null, school: { archivedAt: null } },
+    select: { id: true, email: true, school: { select: { name: true } } },
   });
-  if (!user) return;
+  if (users.length === 0) return;
 
-  const rawToken = crypto.randomBytes(32).toString('hex');
+  for (const user of users) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
 
-  await prisma.passwordResetToken.create({
-    data: {
-      userId: user.id,
-      tokenHash: hashToken(rawToken),
-      expiresAt: new Date(Date.now() + env.RESET_TOKEN_TTL_MINUTES * 60_000),
-    },
-  });
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: hashToken(rawToken),
+        expiresAt: new Date(Date.now() + env.RESET_TOKEN_TTL_MINUTES * 60_000),
+      },
+    });
 
-  const link = `${webAppUrl}/reset-password?token=${rawToken}`;
-  await mailer.send(
-    user.email,
-    'Réinitialisation de votre mot de passe Gesnotes',
-    `<p>Bonjour,</p>
-     <p>Vous avez demandé la réinitialisation de votre mot de passe.</p>
-     <p><a href="${link}">Définir un nouveau mot de passe</a></p>
-     <p>Ce lien expire dans ${env.RESET_TOKEN_TTL_MINUTES} minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>`,
-  );
+    const link = `${webAppUrl}/reset-password?token=${rawToken}`;
+    const contexteEcole = users.length > 1 ? ` pour votre compte à ${user.school.name}` : '';
+    await mailer.send(
+      user.email,
+      'Réinitialisation de votre mot de passe Gesnotes',
+      `<p>Bonjour,</p>
+       <p>Vous avez demandé la réinitialisation de votre mot de passe${contexteEcole}.</p>
+       <p><a href="${link}">Définir un nouveau mot de passe</a></p>
+       <p>Ce lien expire dans ${env.RESET_TOKEN_TTL_MINUTES} minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>`,
+    );
+  }
 }
 
 /** Valide le token du lien et change le mot de passe. Token à usage unique. */

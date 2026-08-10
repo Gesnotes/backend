@@ -43,18 +43,18 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') => ({
+const api = (token: string) => ({
   get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).get(p).set('Authorization', `Bearer ${token}`),
 });
 
-const write = (token: string, subdomain = 'ecole-a') => ({
+const write = (token: string) => ({
   post: (p: string) =>
-    request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).post(p).set('Authorization', `Bearer ${token}`),
   patch: (p: string) =>
-    request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).patch(p).set('Authorization', `Bearer ${token}`),
   delete: (p: string) =>
-    request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 describe('GET /school-years', () => {
@@ -112,14 +112,14 @@ describe('GET /school-years', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    const res = await request(app).get('/school-years').set('X-School-Subdomain', 'ecole-a');
+    const res = await request(app).get('/school-years');
     expect(res.status).toBe(401);
   });
 
   it('ne laisse jamais fuir les années d’une autre école', async () => {
     await prisma.schoolYear.create({ data: { schoolId: schoolA.id, label: '2025-2026' } });
 
-    const res = await api(adminBToken, 'ecole-b').get('/school-years');
+    const res = await api(adminBToken).get('/school-years');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -181,7 +181,7 @@ describe('Écriture des années scolaires', () => {
   it('ne laisse pas modifier l’année d’une autre école', async () => {
     const created = await write(adminToken).post('/school-years').send(year);
 
-    const res = await write(adminBToken, 'ecole-b')
+    const res = await write(adminBToken)
       .patch(`/school-years/${created.body.id}`)
       .send({ label: 'Pirate' });
 

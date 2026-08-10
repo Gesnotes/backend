@@ -34,10 +34,10 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const newStudent = (firstName = 'Ana', lastName = 'Alpha') =>
@@ -366,8 +366,7 @@ describe('association parent ↔ élève', () => {
     expect(await prisma.passwordResetToken.count({ where: { userId: parent.id } })).toBe(1);
 
     const login = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'nouveau.parent@a.test', password: TEST_PASSWORD });
     expect(login.status).toBe(401);
   });

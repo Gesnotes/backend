@@ -86,12 +86,6 @@ staffRoutes.get(
 );
 
 const acceptBody = z.object({
-  subdomain: z
-    .string()
-    .trim()
-    .regex(/^[a-z0-9-]+$/, 'Le sous-domaine ne peut contenir que des lettres minuscules, des chiffres et des tirets.')
-    .max(63)
-    .optional(),
   schoolName: z.string().trim().min(1).max(150).optional(),
   city: z.string().trim().min(1).max(100).optional(),
 });

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import prisma from '../lib/prisma';
 import type { SignupRequestStatus } from '../generated/prisma/enums';
 import { badRequest, conflict, notFound } from '../errors/AppError';
-import { normalizeEmail, slugify } from '../lib/normalize';
+import { normalizeEmail } from '../lib/normalize';
 import { sendInvitation } from './invitation.service';
 
 /**
@@ -22,8 +22,6 @@ export async function listSignupRequests(status?: SignupRequestStatus) {
 }
 
 export interface AcceptSignupRequestInput {
-  /** Par défaut, dérivé du nom de l'école. Ajusté si déjà pris. */
-  subdomain?: string;
   schoolName?: string;
   city?: string;
 }
@@ -43,13 +41,12 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
 
   const name = (input.schoolName ?? request.schoolName).trim();
   const city = (input.city ?? request.city).trim();
-  const subdomain = await resolveUniqueSubdomain(input.subdomain?.trim() || slugify(name));
 
   const [firstName, ...rest] = request.contactName.trim().split(/\s+/);
   const lastName = rest.join(' ');
 
   const { school, admin } = await prisma.$transaction(async (tx) => {
-    const school = await tx.school.create({ data: { name, city, subdomain } });
+    const school = await tx.school.create({ data: { name, city } });
 
     // Sans ces catégories, aucune évaluation n'est saisissable : `POST
     // /evaluations` exige un `gradeTypeId` existant pour l'école, et rien ne
@@ -99,20 +96,6 @@ export async function declineSignupRequest(id: number): Promise<void> {
   await prisma.signupRequest.update({ where: { id }, data: { status: 'traite' } });
 }
 
-/** Essaie le sous-domaine proposé, puis lui ajoute un suffixe numérique tant qu'il est pris. */
-async function resolveUniqueSubdomain(base: string): Promise<string> {
-  const cleaned = base || 'ecole';
-  let candidate = cleaned;
-  let suffix = 2;
-
-  while (await prisma.school.findUnique({ where: { subdomain: candidate } })) {
-    candidate = `${cleaned}-${suffix}`.slice(0, 63);
-    suffix += 1;
-  }
-
-  return candidate;
-}
-
 export interface PlatformOverview {
   schools: number;
   students: number;
@@ -146,7 +129,6 @@ export async function getOverview(): Promise<PlatformOverview> {
 export interface SchoolWithMetrics {
   id: number;
   name: string;
-  subdomain: string;
   city: string | null;
   createdAt: Date | null;
   archivedAt: Date | null;
@@ -190,7 +172,6 @@ export async function listSchoolsWithMetrics(): Promise<SchoolWithMetrics[]> {
     return {
       id: school.id,
       name: school.name,
-      subdomain: school.subdomain,
       city: school.city,
       createdAt: school.createdAt,
       archivedAt: school.archivedAt,

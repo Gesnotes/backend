@@ -40,12 +40,12 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  put: (p: string) => request(app).put(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+const api = (token: string) => ({
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  put: (p: string) => request(app).put(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const createSubject = (name = 'Maths', coefficient = 2) =>
@@ -94,7 +94,7 @@ describe('CRUD /subjects', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    expect((await request(app).get('/subjects').set('X-School-Subdomain', 'ecole-a')).status).toBe(401);
+    expect((await request(app).get('/subjects')).status).toBe(401);
   });
 });
 
@@ -117,10 +117,6 @@ describe('isolation par école', () => {
     // La matière est intacte.
     const untouched = await prisma.subject.findUniqueOrThrow({ where: { id: secret.id } });
     expect(untouched.name).toBe('Secret B');
-  });
-
-  it('refuse un token émis pour une autre école', async () => {
-    expect((await api(adminBToken).get('/subjects')).status).toBe(403);
   });
 });
 
@@ -291,7 +287,7 @@ describe('unicité du nom de matière', () => {
 
   it('laisse deux écoles utiliser le même nom', async () => {
     await createSubject('Mathématiques');
-    const res = await api(adminBToken, 'ecole-b').post('/subjects').send({ name: 'Mathématiques' });
+    const res = await api(adminBToken).post('/subjects').send({ name: 'Mathématiques' });
     expect(res.status).toBe(201);
   });
 

@@ -34,9 +34,9 @@ afterAll(async () => {
 
 const api = (token: string) => ({
   get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+    request(app).get(p).set('Authorization', `Bearer ${token}`),
   patch: (p: string) =>
-    request(app).patch(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+    request(app).patch(p).set('Authorization', `Bearer ${token}`),
 });
 
 describe('GET /school', () => {

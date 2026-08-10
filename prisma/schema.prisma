@@ -21,10 +21,9 @@ enum Role {
 model School {
   id        Int       @id @default(autoincrement())
   name      String    @db.VarChar(150)
-  subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
-  // Sert à désambiguïser deux écoles de même nom dans la recherche « Quelle
-  // est votre école ? » (connexion sans sous-domaine). Nullable : les écoles
-  // existantes n'en ont pas encore, sans que rien ne casse.
+  // Sert à désambiguïser deux écoles de même nom à la connexion (identifiant
+  // valable dans plusieurs écoles à la fois) : la liste de choix affiche la
+  // ville. Nullable : les écoles existantes n'en ont pas encore.
   city      String?   @db.VarChar(100)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
   /// Suspension par l'équipe Gesnotes (impayé, litige, fermeture...) : les
