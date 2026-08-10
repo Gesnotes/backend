@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as notificationService from '../services/notification.service';
 import * as parentService from '../services/parent.service';
@@ -37,7 +38,7 @@ parentMeRoutes.get('/children', validate({ query: optionalTermQuery }), async (r
 });
 
 const deviceBody = z.object({ fcmToken: z.string().trim().min(10).max(255) });
-const deviceParams = z.object({ token: z.string().trim().min(10).max(255) });
+const deviceParams = z.object({ deviceToken: z.string().trim().min(10).max(255) });
 
 /** Enregistre un appareil pour recevoir les notifications push. */
 parentMeRoutes.post('/devices', validate({ body: deviceBody }), async (req, res) => {
@@ -51,9 +52,9 @@ parentMeRoutes.get('/devices', async (req, res) => {
 });
 
 /** Retire un appareil (déconnexion, changement de téléphone). */
-parentMeRoutes.delete('/devices/:token', validate({ params: deviceParams }), async (req, res) => {
-  const { token } = req.params as unknown as z.infer<typeof deviceParams>;
-  const removed = await notificationService.removeDevice(authOf(req).userId, token);
+parentMeRoutes.delete('/devices/:deviceToken', validate({ params: deviceParams }), async (req, res) => {
+  const { deviceToken } = req.params as unknown as z.infer<typeof deviceParams>;
+  const removed = await notificationService.removeDevice(authOf(req).userId, deviceToken);
   if (!removed) throw notFound('Appareil introuvable');
   res.status(204).send();
 });
@@ -110,3 +111,18 @@ gradeDetailRoutes.get('/:id', validate({ params: idParam }), async (req, res) =>
   const { id } = req.params as unknown as z.infer<typeof idParam>;
   res.json(await parentService.getGradeDetail(authOf(req), id));
 });
+
+const attendanceHistoryQuery = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+});
+
+childrenRoutes.get(
+  '/:id/attendance',
+  validate({ params: idParam, query: attendanceHistoryQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { from, to } = req.query as unknown as z.infer<typeof attendanceHistoryQuery>;
+    res.json(await attendanceService.listChildAttendance(authOf(req), id, { from, to }));
+  },
+);

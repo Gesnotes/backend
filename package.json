@@ -16,6 +16,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "prisma db seed",
     "prisma:seed:demo": "tsx prisma/seed-demo.ts",
+    "prisma:seed:staff": "tsx prisma/seed-staff.ts",
     "prisma:dedupe-subjects": "tsx prisma/dedupe-subjects.ts"
   },
   "repository": {

@@ -61,6 +61,7 @@ const deleteQuery = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  confirm_label: z.string().optional(),
 });
 
 teacherRoutes.get('/', validate({ query: listQuery }), async (req, res) => {
@@ -85,17 +86,18 @@ teacherRoutes.patch(
 
 /**
  * Désactivation par défaut (les notes saisies sont conservées).
- * `?permanent=true` supprime réellement, et échoue si des notes existent.
+ * `?permanent=true&confirm_label=` supprime réellement un compte déjà
+ * archivé, en retapant son nom exact, et échoue si des notes existent.
  */
 teacherRoutes.delete(
   '/:id',
   validate({ params: idParam, query: deleteQuery }),
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
-    const { permanent } = req.query as unknown as z.infer<typeof deleteQuery>;
+    const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteQuery>;
 
     if (permanent) {
-      await teacherService.deleteTeacherPermanently(schoolIdOf(req), id);
+      await teacherService.deleteTeacherPermanently(schoolIdOf(req), id, confirm_label ?? '');
     } else {
       await teacherService.archiveTeacher(schoolIdOf(req), id);
     }

@@ -23,8 +23,7 @@ afterAll(async () => {
 
 const login = (identifier: string, password = TEST_PASSWORD) =>
   request(app)
-    .post('/auth/login')
-    .set('X-School-Subdomain', 'ecole-a')
+    .post('/auth/identify')
     .send({ identifier, password });
 
 describe('normalisation des identifiants', () => {
@@ -75,7 +74,6 @@ describe('rotation des refresh tokens', () => {
   const refresh = (refreshToken: string) =>
     request(app)
       .post('/auth/refresh')
-      .set('X-School-Subdomain', 'ecole-a')
       .send({ refreshToken });
 
   it('ne délivre qu\'une seule chaîne quand deux rafraîchissements courent en parallèle', async () => {

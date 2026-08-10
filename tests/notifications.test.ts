@@ -71,9 +71,9 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const TOKEN_1 = 'fcm-token-appareil-1';
@@ -147,14 +147,14 @@ describe('envoi des notifications', () => {
     expect(spy).toHaveBeenCalledOnce();
     const [tokens, message] = spy.mock.calls[0]!;
     expect(tokens).toHaveLength(2);
-    expect(message.title).toContain('Maths');
-    expect(message.body).toContain('Ana');
+    expect(message.title).toContain('Ana');
+    expect(message.body).toContain('Maths');
     expect(message.body).toContain('15/20');
     expect(message.data).toMatchObject({ gradeId: String(note.id) });
   });
 
   /**
-   * Sans lien, le parent reçoit « Nouvelle note en Maths » et atterrit sur
+   * Sans lien, le parent reçoit « Ana a une nouvelle note » et atterrit sur
    * l'accueil, à charge pour lui de retrouver la note.
    */
   it('pointe la notification sur la note concernée', async () => {

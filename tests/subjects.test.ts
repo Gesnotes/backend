@@ -40,12 +40,12 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  put: (p: string) => request(app).put(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+const api = (token: string) => ({
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  put: (p: string) => request(app).put(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const createSubject = (name = 'Maths', coefficient = 2) =>
@@ -94,7 +94,7 @@ describe('CRUD /subjects', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    expect((await request(app).get('/subjects').set('X-School-Subdomain', 'ecole-a')).status).toBe(401);
+    expect((await request(app).get('/subjects')).status).toBe(401);
   });
 });
 
@@ -117,10 +117,6 @@ describe('isolation par école', () => {
     // La matière est intacte.
     const untouched = await prisma.subject.findUniqueOrThrow({ where: { id: secret.id } });
     expect(untouched.name).toBe('Secret B');
-  });
-
-  it('refuse un token émis pour une autre école', async () => {
-    expect((await api(adminBToken).get('/subjects')).status).toBe(403);
   });
 });
 
@@ -145,14 +141,35 @@ describe('archivage et suppression', () => {
     expect((await api(adminToken).get('/subjects')).body).toHaveLength(1);
   });
 
-  it('supprime définitivement une matière sans note', async () => {
+  it('refuse la suppression définitive tant que la matière n’est pas archivée', async () => {
     const { body } = await createSubject();
-    expect((await api(adminToken).delete(`/subjects/${body.id}?permanent=true`)).status).toBe(204);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
+    expect(res.status).toBe(409);
+    expect(await prisma.subject.count({ where: { id: body.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Autre`);
+    expect(res.status).toBe(400);
+    expect(await prisma.subject.count({ where: { id: body.id } })).toBe(1);
+  });
+
+  it('supprime définitivement une matière archivée et sans note, avec le nom exact', async () => {
+    const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
+
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
+    expect(res.status).toBe(204);
     expect(await prisma.subject.count()).toBe(0);
   });
 
-  it('refuse la suppression définitive si des notes existent', async () => {
+  it('emporte en cascade les évaluations et les notes', async () => {
     const { body } = await createSubject();
+    await api(adminToken).delete(`/subjects/${body.id}`);
 
     const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
     const gradeType = await prisma.gradeType.create({
@@ -170,12 +187,12 @@ describe('archivage et suppression', () => {
       value: 15,
     });
 
-    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true`);
-    expect(res.status).toBe(409);
-    expect(res.body.error.details.gradeCount).toBe(1);
+    const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
+    expect(res.status).toBe(204);
 
-    // La note n'a pas été effacée au passage.
-    expect(await prisma.grade.count()).toBe(1);
+    // La note et l'évaluation qui la portait ont été emportées avec la matière.
+    expect(await prisma.grade.count()).toBe(0);
+    expect(await prisma.evaluation.count()).toBe(0);
   });
 });
 
@@ -189,14 +206,19 @@ describe('coefficients par classe (plan §2.4)', () => {
     // Idempotent : un second appel remplace au lieu de créer un doublon.
     await api(adminToken).put(`/subjects/${body.id}/coefficients/${classA.id}`).send({ coefficient: 5 });
     expect(await prisma.subjectCoefficient.count()).toBe(1);
-    expect(Number(await resolveSubjectCoefficient(body.id, classA.id))).toBe(5);
+    expect(Number(await resolveSubjectCoefficient(schoolA.id, body.id, classA.id))).toBe(5);
 
     expect((await api(adminToken).delete(`/subjects/${body.id}/coefficients/${classA.id}`)).status).toBe(204);
   });
 
   it('retombe sur le coefficient de l\'école sans surcharge', async () => {
     const { body } = await createSubject('Maths', 3);
-    expect(Number(await resolveSubjectCoefficient(body.id, classA.id))).toBe(3);
+    expect(Number(await resolveSubjectCoefficient(schoolA.id, body.id, classA.id))).toBe(3);
+  });
+
+  it("refuse de résoudre le coefficient d'une matière d'une autre école", async () => {
+    const { body } = await createSubject('Maths', 3);
+    await expect(resolveSubjectCoefficient(schoolB.id, body.id, classA.id)).rejects.toThrow();
   });
 
   it("refuse de poser un coefficient sur la classe d'une autre école", async () => {
@@ -265,7 +287,7 @@ describe('unicité du nom de matière', () => {
 
   it('laisse deux écoles utiliser le même nom', async () => {
     await createSubject('Mathématiques');
-    const res = await api(adminBToken, 'ecole-b').post('/subjects').send({ name: 'Mathématiques' });
+    const res = await api(adminBToken).post('/subjects').send({ name: 'Mathématiques' });
     expect(res.status).toBe(201);
   });
 

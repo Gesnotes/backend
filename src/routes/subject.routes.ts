@@ -45,6 +45,7 @@ const deleteQuery = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  confirm_label: z.string().optional(),
 });
 
 subjectRoutes.get('/', requireRole('admin', 'teacher'), validate({ query: listQuery }), async (req, res) => {
@@ -79,8 +80,8 @@ subjectRoutes.delete(
   validate({ params: idParam, query: deleteQuery }),
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
-    const { permanent } = req.query as unknown as z.infer<typeof deleteQuery>;
-    await subjectService.deleteSubject(schoolIdOf(req), id, permanent);
+    const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteQuery>;
+    await subjectService.deleteSubject(schoolIdOf(req), id, permanent, confirm_label ?? '');
     res.status(204).send();
   },
 );

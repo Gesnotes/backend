@@ -44,9 +44,9 @@ afterAll(async () => {
 
 const api = (token: string) => ({
   get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+    request(app).get(p).set('Authorization', `Bearer ${token}`),
   post: (p: string) =>
-    request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+    request(app).post(p).set('Authorization', `Bearer ${token}`),
 });
 
 const importCsv = (csv: string, dryRun = true) =>
@@ -249,6 +249,9 @@ describe('GET /classes/:id/bulletin/csv', () => {
     const devoir = await prisma.gradeType.create({
       data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 1, position: 1 },
     });
+    const composition = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'composition', label: 'Composition', weight: 1, position: 2 },
+    });
     const ana = await prisma.student.create({
       data: { schoolId: school.id, classId: sixieme.id, firstName: 'Ana', lastName: 'ALPHA' },
     });
@@ -256,11 +259,21 @@ describe('GET /classes/:id/bulletin/csv', () => {
       data: { schoolId: school.id, classId: sixieme.id, firstName: 'Zoé', lastName: 'ZETA' },
     });
 
+    // Devoir et composition à la même valeur : passe le seuil de publication
+    // (devoir + composition requis) sans déplacer la moyenne attendue.
     await seedGrade({
       schoolId: school.id,
       studentId: ana.id,
       subjectId: maths.id,
       gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 13.5,
+    });
+    await seedGrade({
+      schoolId: school.id,
+      studentId: ana.id,
+      subjectId: maths.id,
+      gradeTypeId: composition.id,
       termId: term.id,
       value: 13.5,
     });

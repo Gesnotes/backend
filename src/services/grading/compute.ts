@@ -15,6 +15,8 @@ type D = Prisma.Decimal;
 /** Une note, réduite à ce dont le calcul a besoin. */
 export interface GradeInput {
   gradeTypeId: number;
+  /** Code stable de la catégorie ("interrogation" | "devoir" | "composition"). */
+  code: string;
   /** Poids de la catégorie : interrogation 1, devoir 2, composition 3. */
   weight: D;
   value: D;
@@ -58,12 +60,17 @@ export function averageOf(values: D[]): D | null {
  * Deux étapes : chaque catégorie donne d'abord sa moyenne interne (plusieurs
  * interrogations, plusieurs devoirs), puis les catégories sont pondérées.
  *
- * Le diviseur n'est jamais la constante 6 : en milieu de trimestre, sans
- * composition saisie, diviser par 6 afficherait un élève en échec. Seules les
- * catégories réellement notées entrent au dénominateur.
+ * Choix délibéré de l'établissement : une moyenne n'est publiée que si
+ * l'élève a au moins un devoir ET une composition sur la période. Quelques
+ * interrogations seules ne suffisent pas à juger un trimestre — les afficher
+ * comme moyenne donnerait un chiffre prématuré, avant même le premier vrai
+ * devoir noté.
  */
 export function subjectAverage(grades: GradeInput[]): D | null {
   if (grades.length === 0) return null;
+
+  const codes = new Set(grades.map((g) => g.code));
+  if (!codes.has('devoir') || !codes.has('composition')) return null;
 
   const byType = new Map<number, { weight: D; values: D[] }>();
 

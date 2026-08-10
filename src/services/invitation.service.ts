@@ -5,9 +5,13 @@ import { env, webAppUrl } from '../lib/env';
 import { hashToken } from '../lib/tokens';
 import { mailer } from '../lib/mailer';
 
-type InvitedRole = 'teacher' | 'parent';
+type InvitedRole = 'admin' | 'teacher' | 'parent';
 
 const WORDING: Record<InvitedRole, { subject: string; intro: string }> = {
+  admin: {
+    subject: 'Votre espace Gesnotes est prêt',
+    intro: "L'équipe Gesnotes a créé l'espace de votre établissement.",
+  },
   teacher: {
     subject: 'Votre compte enseignant Gesnotes',
     intro: 'Un compte enseignant a été créé pour vous sur Gesnotes.',

@@ -1,5 +1,5 @@
 import prisma from '../lib/prisma';
-import type { GradeEvent } from '../lib/events';
+import type { AttendanceEvent, GradeEvent } from '../lib/events';
 import { logger } from '../lib/logger';
 import { webAppUrl } from '../lib/env';
 import { onEvent } from '../lib/events';
@@ -15,6 +15,7 @@ import { pushSender } from '../lib/push';
 export function registerNotificationHandlers() {
   onEvent('grade.created', (event) => notifyParents(event, 'nouvelle'));
   onEvent('grade.updated', (event) => notifyParents(event, 'modifiee'));
+  onEvent('attendance.marked', (event) => notifyParentsOfAttendance(event));
 }
 
 /** Exporté pour être testable directement, sans dépendre du timing du bus. */
@@ -47,16 +48,16 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
   });
   if (devices.length === 0) return;
 
+  // Le nom de l'enfant en tête : un parent qui suit plusieurs enfants doit
+  // le reconnaître sans ouvrir la notification.
   const title =
     kind === 'nouvelle'
-      ? `Nouvelle note en ${grade.subject.name}`
-      : `Note modifiée en ${grade.subject.name}`;
+      ? `${grade.student.firstName} a une nouvelle note`
+      : `${grade.student.firstName} a une note modifiée`;
 
   const message = {
     title,
-    // L'intitulé de l'évaluation (« Interro du 12/09 ») est plus parlant pour
-    // la famille que le seul type ; on garde le type entre parenthèses.
-    body: `${grade.student.firstName} · ${grade.evaluation.label} : ${Number(grade.value)}/${Number(grade.maxValue)} (${grade.gradeType.label})`,
+    body: `${grade.subject.name} · ${grade.evaluation.label} : ${Number(grade.value)}/${Number(grade.maxValue)}`,
     data: {
       gradeId: String(grade.id),
       studentId: String(grade.studentId),
@@ -73,6 +74,66 @@ export async function notifyParents(event: GradeEvent, kind: 'nouvelle' | 'modif
 
   // Un appareil désinstallé garderait sinon une ligne morte pour toujours, et
   // chaque envoi futur repaierait son échec.
+  if (invalidTokens.length > 0) {
+    await prisma.device.deleteMany({ where: { fcmToken: { in: invalidTokens } } });
+    logger.info({ count: invalidTokens.length }, 'Tokens FCM invalides purgés');
+  }
+}
+
+/**
+ * Prévient les parents d'une absence ou d'un retard, jamais d'une présence.
+ * Exportée pour être testable directement, sans dépendre du timing du bus.
+ */
+export async function notifyParentsOfAttendance(event: AttendanceEvent) {
+  const attendance = await prisma.attendance.findUnique({
+    where: { id: event.attendanceId },
+    include: {
+      student: {
+        select: {
+          firstName: true,
+          lastName: true,
+          archivedAt: true,
+          parents: { select: { parentUserId: true } },
+        },
+      },
+      class: { select: { name: true } },
+    },
+  });
+
+  if (!attendance || attendance.student.archivedAt) return;
+
+  const parentIds = attendance.student.parents.map((p) => p.parentUserId);
+  if (parentIds.length === 0) return;
+
+  const devices = await prisma.device.findMany({
+    where: { userId: { in: parentIds }, user: { archivedAt: null } },
+    select: { fcmToken: true },
+  });
+  if (devices.length === 0) return;
+
+  // Le nom de l'enfant en tête, un ton neutre plutôt qu'une alerte : une
+  // absence est une information pour la famille, pas une urgence.
+  const title =
+    attendance.status === 'absent'
+      ? `${attendance.student.firstName} était absent(e) aujourd'hui`
+      : `${attendance.student.firstName} est arrivé(e) en retard aujourd'hui`;
+
+  const message = {
+    title,
+    body: `${attendance.class.name} · ${attendance.date.toLocaleDateString('fr-FR')}`,
+    data: {
+      attendanceId: String(attendance.id),
+      studentId: String(attendance.studentId),
+      classId: String(attendance.classId),
+    },
+    link: `${webAppUrl}/parent/presence/${attendance.id}`,
+  };
+
+  const { invalidTokens } = await pushSender.send(
+    devices.map((d) => d.fcmToken),
+    message,
+  );
+
   if (invalidTokens.length > 0) {
     await prisma.device.deleteMany({ where: { fcmToken: { in: invalidTokens } } });
     logger.info({ count: invalidTokens.length }, 'Tokens FCM invalides purgés');

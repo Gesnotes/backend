@@ -1,7 +1,7 @@
 import { Prisma } from '../generated/prisma/client';
 
 import prisma from '../lib/prisma';
-import { conflict, notFound } from '../errors/AppError';
+import { badRequest, conflict, notFound } from '../errors/AppError';
 import { labelKey } from '../lib/normalize';
 import { identityFields } from './userFields';
 
@@ -115,21 +115,31 @@ export async function updateSubject(
  * Archivage par défaut : les notes déjà saisies dans cette matière restent
  * lisibles et continuent de compter dans les bulletins passés.
  *
- * `permanent` supprime physiquement, et seulement si aucune note n'existe :
- * une suppression en cascade effacerait silencieusement des notes d'élèves.
+ * `permanent` supprime physiquement, réservé à une matière déjà archivée
+ * avec retapage du nom exact — même garde-fou que pour une période ou une
+ * année scolaire (voir `term.service.ts`) — et emporte en cascade ses
+ * évaluations et ses notes.
  */
-export async function deleteSubject(schoolId: number, id: number, permanent: boolean) {
-  await getSubject(schoolId, id);
+export async function deleteSubject(
+  schoolId: number,
+  id: number,
+  permanent: boolean,
+  expectedName = '',
+) {
+  const subject = await getSubject(schoolId, id);
 
   if (!permanent) {
     return prisma.subject.update({ where: { id }, data: { archivedAt: new Date() } });
   }
 
-  const gradeCount = await prisma.grade.count({ where: { subjectId: id } });
-  if (gradeCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${gradeCount} note(s) sont rattachées à cette matière. Archivez-la plutôt.`,
-      { gradeCount },
+  if (!subject.archivedAt) {
+    throw conflict('Archivez la matière avant de la supprimer définitivement.', { subjectId: id });
+  }
+
+  if (expectedName.trim().toLowerCase() !== subject.name.trim().toLowerCase()) {
+    throw badRequest(
+      'La confirmation ne correspond pas au nom de la matière. Cette suppression est définitive.',
+      { attendu: subject.name },
     );
   }
 
@@ -181,16 +191,23 @@ export async function removeSubjectCoefficient(
  * Résolution du coefficient effectif (plan §2.4) : surcharge de classe, sinon
  * défaut de l'école, sinon 1. Exposé ici pour que le lot 6 s'appuie sur une
  * seule implémentation.
+ *
+ * `schoolId` scope les deux requêtes explicitement — sans lui, un appelant
+ * pourrait lire le coefficient/la matière d'une autre école en devinant un
+ * identifiant, la relation `subjectId`/`classId` seule ne suffisant pas à
+ * garantir l'isolation entre écoles (voir CLAUDE.md).
  */
 export async function resolveSubjectCoefficient(
+  schoolId: number,
   subjectId: number,
   classId: number,
 ): Promise<Prisma.Decimal> {
-  const override = await prisma.subjectCoefficient.findUnique({
-    where: { subjectId_classId: { subjectId, classId } },
+  const override = await prisma.subjectCoefficient.findFirst({
+    where: { subjectId, classId, subject: { schoolId } },
   });
   if (override) return override.coefficient;
 
-  const subject = await prisma.subject.findUniqueOrThrow({ where: { id: subjectId } });
+  const subject = await prisma.subject.findFirst({ where: { id: subjectId, schoolId } });
+  if (!subject) throw notFound('Matière introuvable');
   return subject.coefficient ?? new Prisma.Decimal(1);
 }

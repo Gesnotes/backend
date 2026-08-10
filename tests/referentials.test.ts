@@ -44,9 +44,9 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-const api = (token: string, subdomain = 'ecole-a') => ({
+const api = (token: string) => ({
   get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+    request(app).get(p).set('Authorization', `Bearer ${token}`),
 });
 
 describe('GET /terms', () => {
@@ -126,14 +126,14 @@ describe('GET /terms', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    const res = await request(app).get('/terms').set('X-School-Subdomain', 'ecole-a');
+    const res = await request(app).get('/terms');
     expect(res.status).toBe(401);
   });
 
   it('ne laisse jamais fuir les périodes d’une autre école', async () => {
     await prisma.term.create({ data: { schoolId: schoolA.id, label: 'Trimestre 1' } });
 
-    const res = await api(adminBToken, 'ecole-b').get('/terms');
+    const res = await api(adminBToken).get('/terms');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -145,7 +145,7 @@ describe('GET /terms/:id', () => {
     const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'Trimestre 1' } });
 
     expect((await api(adminToken).get(`/terms/${term.id}`)).status).toBe(200);
-    expect((await api(adminBToken, 'ecole-b').get(`/terms/${term.id}`)).status).toBe(404);
+    expect((await api(adminBToken).get(`/terms/${term.id}`)).status).toBe(404);
   });
 
   it('valide le paramètre', async () => {
@@ -181,7 +181,7 @@ describe('GET /grade-types', () => {
   });
 
   it('refuse une requête sans token', async () => {
-    const res = await request(app).get('/grade-types').set('X-School-Subdomain', 'ecole-a');
+    const res = await request(app).get('/grade-types');
     expect(res.status).toBe(401);
   });
 
@@ -190,7 +190,7 @@ describe('GET /grade-types', () => {
       data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
     });
 
-    const res = await api(adminBToken, 'ecole-b').get('/grade-types');
+    const res = await api(adminBToken).get('/grade-types');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
@@ -200,13 +200,13 @@ describe('GET /grade-types', () => {
 describe('Écriture des périodes', () => {
   const term = { label: 'Trimestre 1', startDate: '2025-09-01', endDate: '2025-12-20' };
 
-  const write = (token: string, subdomain = 'ecole-a') => ({
+  const write = (token: string) => ({
     post: (p: string) =>
-      request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+      request(app).post(p).set('Authorization', `Bearer ${token}`),
     patch: (p: string) =>
-      request(app).patch(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+      request(app).patch(p).set('Authorization', `Bearer ${token}`),
     delete: (p: string) =>
-      request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+      request(app).delete(p).set('Authorization', `Bearer ${token}`),
   });
 
   it('crée une période et la renvoie au format de lecture', async () => {
@@ -269,7 +269,7 @@ describe('Écriture des périodes', () => {
   it('laisse une autre école utiliser les mêmes dates', async () => {
     await write(adminToken).post('/terms').send(term);
 
-    const res = await write(adminBToken, 'ecole-b').post('/terms').send(term);
+    const res = await write(adminBToken).post('/terms').send(term);
     expect(res.status).toBe(201);
   });
 
@@ -428,7 +428,7 @@ describe('Écriture des périodes', () => {
   it('ne laisse pas modifier la période d’une autre école', async () => {
     const created = await write(adminToken).post('/terms').send(term);
 
-    const res = await write(adminBToken, 'ecole-b')
+    const res = await write(adminBToken)
       .patch(`/terms/${created.body.id}`)
       .send({ label: 'Pirate' });
 
@@ -445,11 +445,11 @@ describe('Écriture des périodes', () => {
  * « période en cours » pour toute l'école.
  */
 describe('Réouverture d’une période terminée', () => {
-  const write = (token: string, subdomain = 'ecole-a') => ({
+  const write = (token: string) => ({
     post: (p: string) =>
-      request(app).post(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+      request(app).post(p).set('Authorization', `Bearer ${token}`),
     delete: (p: string) =>
-      request(app).delete(p).set('X-School-Subdomain', subdomain).set('Authorization', `Bearer ${token}`),
+      request(app).delete(p).set('Authorization', `Bearer ${token}`),
   });
 
   /** Période dont la date de fin est passée. */

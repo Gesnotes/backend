@@ -19,11 +19,15 @@ import { createApp } from '../src/app';
  */
 
 /**
- * Nombre de routes volontairement publiques (`publicRoute`) : /health et les
- * cinq routes d'authentification. Le compte est figé pour qu'en ouvrir une
- * sixième soit un geste conscient, pas un effet de bord.
+ * Nombre de routes volontairement publiques (`publicRoute`) : /health, les
+ * quatre routes de session (refresh, logout, forgot-password, reset-password),
+ * la connexion par identifiant seul (/auth/identify — seule porte d'entrée,
+ * aucune école n'est résolue au préalable), la demande de rappel
+ * (avant-inscription), et les trois routes de session de l'équipe Gesnotes
+ * (login/refresh/logout, hors périmètre multi-écoles). Le compte est figé
+ * pour qu'en ouvrir une onzième soit un geste conscient, pas un effet de bord.
  */
-const ROUTES_PUBLIQUES_ATTENDUES = 6;
+const ROUTES_PUBLIQUES_ATTENDUES = 10;
 
 interface Route {
   methode: string;
@@ -98,10 +102,13 @@ describe('gardes de rôle sur toutes les routes', () => {
   it('déclare un rôle explicite, ou son ouverture au public, sur chaque route', () => {
     // Le critère ne dépend d'aucun chemin : chaque route doit dire ce qu'elle
     // est. Un `requireAuth` seul laisse « qui a le droit de lire » indéfini —
-    // c'est ce qui a ouvert les trois fuites.
+    // c'est ce qui a ouvert les trois fuites. `requireStaffAuth` compte
+    // pareillement : les routes /staff n'ont qu'un seul niveau d'accès
+    // (l'équipe Gesnotes), il n'y a pas de rôle à distinguer par-dessus.
     const indecises = routes
       .filter((route) => !route.gardes.includes('roleGuard'))
       .filter((route) => !route.gardes.includes('publicRoute'))
+      .filter((route) => !route.gardes.includes('requireStaffAuth'))
       .map((route) => `${route.methode} ${route.chemin}`);
 
     expect(indecises).toEqual([]);
@@ -116,10 +123,11 @@ describe('gardes de rôle sur toutes les routes', () => {
     expect(publiques.filter((r) => r.gardes.includes('roleGuard'))).toEqual([]);
   });
 
-  it('place requireAuth sur toute route non publique', () => {
+  it('place requireAuth (ou requireStaffAuth) sur toute route non publique', () => {
     const sansAuth = routes
       .filter((route) => !route.gardes.includes('publicRoute'))
       .filter((route) => !route.gardes.includes('requireAuth'))
+      .filter((route) => !route.gardes.includes('requireStaffAuth'))
       .map((route) => `${route.methode} ${route.chemin}`);
 
     expect(sansAuth).toEqual([]);

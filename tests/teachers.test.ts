@@ -37,10 +37,10 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const newTeacher = (email = 'nouveau@a.test', assignments?: unknown[]) =>
@@ -77,8 +77,7 @@ describe('POST /teachers', () => {
     expect(await prisma.passwordResetToken.count({ where: { userId: teacher.id } })).toBe(1);
 
     const login = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'jean@a.test', password: TEST_PASSWORD });
     expect(login.status).toBe(401);
   });
@@ -221,8 +220,7 @@ describe('désactivation', () => {
     await api(adminToken).delete(`/teachers/${teacher.id}`);
 
     const login = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'prof@a.test', password: TEST_PASSWORD });
     expect(login.status).toBe(401);
   });
@@ -237,7 +235,7 @@ describe('désactivation', () => {
     expect((await api(adminToken).get('/teachers')).body).toHaveLength(1);
   });
 
-  it('refuse la suppression définitive si des notes ont été saisies', async () => {
+  it("désolidarise l'auteur des notes déjà saisies plutôt que de refuser la suppression", async () => {
     const created = await newTeacher('jean@a.test');
     const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
     const gradeType = await prisma.gradeType.create({
@@ -256,18 +254,92 @@ describe('désactivation', () => {
       value: 15,
     });
 
-    const res = await api(adminToken).delete(`/teachers/${created.body.id}?permanent=true`);
-    expect(res.status).toBe(409);
-    expect(res.body.error.details.gradeCount).toBe(1);
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
     expect(await prisma.grade.count()).toBe(1);
+    const grade = await prisma.grade.findFirstOrThrow();
+    expect(grade.teacherUserId).toBeNull();
   });
 
-  it('supprime définitivement un compte sans note', async () => {
+  it("désolidarise l'auteur des présences déjà saisies plutôt que de refuser la suppression", async () => {
+    const created = await newTeacher('jean@a.test');
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
+    });
+    await prisma.attendance.create({
+      data: {
+        schoolId: schoolA.id,
+        studentId: student.id,
+        classId: classA.id,
+        date: new Date('2026-01-15'),
+        status: 'present',
+        recordedByUserId: created.body.id,
+      },
+    });
+
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
+    expect(await prisma.attendance.count()).toBe(1);
+    const attendance = await prisma.attendance.findFirstOrThrow();
+    expect(attendance.recordedByUserId).toBeNull();
+  });
+
+  it('détache la classe dont il est référent plutôt que de refuser la suppression', async () => {
+    const created = await newTeacher('jean@a.test');
+    await prisma.class.update({
+      where: { id: classA.id },
+      data: { homeroomTeacherId: created.body.id },
+    });
+
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
+    const updatedClass = await prisma.class.findUniqueOrThrow({ where: { id: classA.id } });
+    expect(updatedClass.homeroomTeacherId).toBeNull();
+  });
+
+  it('refuse la suppression définitive tant que le compte n’est pas archivé', async () => {
+    const created = await newTeacher('jean@a.test');
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(409);
+    expect(await prisma.user.count({ where: { id: created.body.id } })).toBe(1);
+  });
+
+  it('refuse la suppression définitive si la confirmation ne correspond pas au nom', async () => {
+    const created = await newTeacher('jean@a.test');
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Mauvais nom`,
+    );
+    expect(res.status).toBe(400);
+    expect(await prisma.user.count({ where: { id: created.body.id } })).toBe(1);
+  });
+
+  it('supprime définitivement un compte archivé et sans note, avec le nom exact', async () => {
     const created = await newTeacher('jean@a.test', [
       { classId: classA.id, subjectId: subjectA.id },
     ]);
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
 
-    expect((await api(adminToken).delete(`/teachers/${created.body.id}?permanent=true`)).status).toBe(204);
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
     expect(await prisma.user.count({ where: { email: 'jean@a.test' } })).toBe(0);
     // Les affectations partent en cascade.
     expect(await prisma.teacherAssignment.count()).toBe(0);

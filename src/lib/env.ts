@@ -67,10 +67,6 @@ const envSchema = z.object({
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 
-  // Repli de sous-domaine hors production : en local, req.hostname vaut
-  // "localhost" et ne résout aucune école (cf. plan §6.5).
-  DEFAULT_SCHOOL_SUBDOMAIN: z.string().optional(),
-
   /**
    * Suivi des erreurs (GlitchTip, ou tout serveur compatible Sentry).
    *
@@ -108,3 +104,19 @@ export const isProduction = env.NODE_ENV === 'production';
  * Repli sur `APP_BASE_URL` tant que `WEB_APP_URL` n'est pas renseignée.
  */
 export const webAppUrl = (env.WEB_APP_URL ?? env.APP_BASE_URL).replace(/\/+$/, '');
+
+/**
+ * Domaine racine du front (les deux derniers segments de son nom d'hôte,
+ * ex. `gesnotes.app` que `WEB_APP_URL` vaille `https://gesnotes.app` ou
+ * `https://app.gesnotes.app`). Sert de base à la liste blanche CORS : chaque
+ * école a son propre sous-domaine (`ecole-x.gesnotes.app`), une origine
+ * fixe unique ne suffirait pas.
+ */
+export const corsRootDomain: string | null = (() => {
+  try {
+    const labels = new URL(webAppUrl).hostname.split('.');
+    return labels.length >= 2 ? labels.slice(-2).join('.') : labels[0] ?? null;
+  } catch {
+    return null;
+  }
+})();

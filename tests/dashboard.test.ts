@@ -18,6 +18,7 @@ let classe5: { id: number };
 let term: { id: number };
 let maths: { id: number };
 let compoId: number;
+let devoirId: number;
 
 beforeEach(async () => {
   await resetDatabase();
@@ -40,6 +41,10 @@ beforeEach(async () => {
     data: { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3 },
   });
   compoId = compo.id;
+  const devoir = await prisma.gradeType.create({
+    data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2 },
+  });
+  devoirId = devoir.id;
 });
 
 afterAll(async () => {
@@ -48,7 +53,7 @@ afterAll(async () => {
 });
 
 const get = (token: string, path: string) =>
-  request(app).get(path).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`);
+  request(app).get(path).set('Authorization', `Bearer ${token}`);
 
 const addStudent = (classId: number, firstName: string) =>
   prisma.student.create({
@@ -65,6 +70,24 @@ const addGrade = (studentId: number, value: number) =>
     value,
   });
 
+/**
+ * Devoir et composition à la même valeur : passe le seuil de publication de
+ * la moyenne (devoir + composition requis) sans déplacer la valeur attendue
+ * — à utiliser quand le test porte sur une moyenne, pas sur un simple compte
+ * de notes saisies.
+ */
+const addGradedSubject = async (studentId: number, value: number) => {
+  await seedGrade({
+    schoolId: school.id,
+    studentId,
+    subjectId: maths.id,
+    gradeTypeId: devoirId,
+    termId: term.id,
+    value,
+  });
+  return addGrade(studentId, value);
+};
+
 describe('GET /admin/dashboard', () => {
   it('compte les effectifs actifs', async () => {
     await addStudent(classe6.id, 'Ana');
@@ -80,6 +103,11 @@ describe('GET /admin/dashboard', () => {
       matieres: 1,
       parents: 1,
     });
+  });
+
+  it("expose le nom de l'école, toujours, même sans période", async () => {
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.school).toEqual({ name: 'École ecole-a' });
   });
 
   it('ne compte jamais les données des autres écoles', async () => {
@@ -129,21 +157,59 @@ describe('GET /admin/dashboard', () => {
     // une classe de 1 élève ne doit pas peser autant qu'une de 3.
     for (const prenom of ['A', 'B', 'C']) {
       const eleve = await addStudent(classe6.id, prenom);
-      await addGrade(eleve.id, 18);
+      await addGradedSubject(eleve.id, 18);
     }
     const seul = await addStudent(classe5.id, 'D');
-    await addGrade(seul.id, 6);
+    await addGradedSubject(seul.id, 6);
 
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
     expect(res.body.moyenneEcole).toBe(15);
     expect(res.body.moyenneEcole).not.toBe(12);
   });
 
+  it("garde la pleine précision jusqu'à l'arrondi final (pas de double-arrondi)", async () => {
+    // Devoir 1/3 + composition 2/3 (sur 20) : moyenne exacte 32/3 = 10,6666...,
+    // une décimale qui ne s'arrête jamais. Trois élèves identiques : la
+    // moyenne d'école correcte reste 32/3 → 10,67. Un double-arrondi (chaque
+    // élève arrondi à 10,67 individuellement) donnerait ici le même résultat
+    // par coïncidence — la valeur du test est de vérifier que le calcul ne
+    // passe jamais par un `Number` intermédiaire qui tronquerait cette
+    // décimale périodique avant l'arrondi final.
+    for (const prenom of ['A', 'B', 'C']) {
+      const eleve = await addStudent(classe6.id, prenom);
+      await seedGrade({
+        schoolId: school.id,
+        studentId: eleve.id,
+        subjectId: maths.id,
+        gradeTypeId: devoirId,
+        termId: term.id,
+        value: 1,
+        maxValue: 3,
+      });
+      await seedGrade({
+        schoolId: school.id,
+        studentId: eleve.id,
+        subjectId: maths.id,
+        gradeTypeId: compoId,
+        termId: term.id,
+        value: 2,
+        maxValue: 3,
+      });
+    }
+
+    const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
+    expect(res.body.moyenneEcole).toBe(10.67);
+
+    // Même précision attendue sur la moyenne de la classe elle-même.
+    const classe6Row = res.body.classes.find((c: { className: string }) => c.className === '6e A');
+    expect(classe6Row.average).toBe(10.67);
+  });
+
   it('donne le détail par classe et les extrêmes', async () => {
     const forte = await addStudent(classe6.id, 'Ana');
-    await addGrade(forte.id, 18);
+    await addGradedSubject(forte.id, 18);
     const faible = await addStudent(classe5.id, 'Ben');
-    await addGrade(faible.id, 8);
+    await addGradedSubject(faible.id, 8);
 
     const res = await get(tokenAdmin, `/admin/dashboard?term_id=${term.id}`);
     expect(res.body.classes).toHaveLength(2);
@@ -153,7 +219,7 @@ describe('GET /admin/dashboard', () => {
 
   it("expose l'avancement de la saisie et les classes oubliées", async () => {
     const evalue = await addStudent(classe6.id, 'Ana');
-    await addGrade(evalue.id, 15);
+    await addGradedSubject(evalue.id, 15);
     await addStudent(classe6.id, 'Ben'); // sans note
     await addStudent(classe5.id, 'Cid'); // classe entière sans note
 
@@ -185,6 +251,68 @@ describe('GET /admin/dashboard', () => {
     expect((await get(tokenProf, '/admin/dashboard')).status).toBe(403);
   });
 
+  it("expose la présence du jour, sans dépendre d'une période", async () => {
+    const present = await addStudent(classe6.id, 'Ana');
+    const absent = await addStudent(classe6.id, 'Ben');
+    const today = new Date(new Date().toISOString().slice(0, 10));
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: present.id, classId: classe6.id, date: today, status: 'present' },
+    });
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: absent.id, classId: classe6.id, date: today, status: 'absent' },
+    });
+    await addStudent(classe5.id, 'Cid'); // 5e A : aucun appel aujourd'hui
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.presence).toMatchObject({
+      classesAvecAppel: 1,
+      classesTotal: 2,
+      absents: 1,
+      retards: 0,
+    });
+    expect(res.body.presence.classesSansAppel).toEqual(['5e A']);
+  });
+
+  it("utilise le jour transmis par le client plutôt que le jour UTC du serveur", async () => {
+    // Une école à l'est de Greenwich peut avoir un jour local en avance sur
+    // le jour UTC du serveur : le dashboard doit alors suivre le jour transmis
+    // par le navigateur, pas recalculer « aujourd'hui » lui-même.
+    const eleve = await addStudent(classe6.id, 'Ana');
+    const demainUtc = new Date();
+    demainUtc.setUTCDate(demainUtc.getUTCDate() + 1);
+    const demainIso = demainUtc.toISOString().slice(0, 10);
+
+    await prisma.attendance.create({
+      data: {
+        schoolId: school.id,
+        studentId: eleve.id,
+        classId: classe6.id,
+        date: new Date(demainIso),
+        status: 'present',
+      },
+    });
+
+    const sansDate = await get(tokenAdmin, '/admin/dashboard');
+    expect(sansDate.body.presence.classesAvecAppel).toBe(0);
+
+    const avecDate = await get(tokenAdmin, `/admin/dashboard?date=${demainIso}`);
+    expect(avecDate.body.presence.classesAvecAppel).toBe(1);
+  });
+
+  it("ignore la présence d'un autre jour que celui du jour", async () => {
+    const eleve = await addStudent(classe6.id, 'Ana');
+    const hier = new Date();
+    hier.setDate(hier.getDate() - 1);
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: eleve.id, classId: classe6.id, date: hier, status: 'absent' },
+    });
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.presence.classesAvecAppel).toBe(0);
+    expect(res.body.presence.absents).toBe(0);
+    expect(res.body.presence.classesSansAppel).toEqual(['5e A', '6e A']);
+  });
+
   it('tient la charge sur 30 classes sans exploser en requêtes', async () => {
     // Taille visée par le plan : un collège de 30 classes. En boucle sur
     // computeClassBulletin, ce dashboard ferait 150 requêtes SQL par
@@ -197,7 +325,14 @@ describe('GET /admin/dashboard', () => {
       const classe = await prisma.class.create({
         data: { schoolId: school.id, name: `Classe ${c}`, level: '6e' },
       });
-      const evaluation = await seedEvaluation({
+      const evaluationDevoir = await seedEvaluation({
+        schoolId: school.id,
+        classId: classe.id,
+        subjectId: maths.id,
+        gradeTypeId: devoirId,
+        termId: term.id,
+      });
+      const evaluationCompo = await seedEvaluation({
         schoolId: school.id,
         classId: classe.id,
         subjectId: maths.id,
@@ -206,14 +341,26 @@ describe('GET /admin/dashboard', () => {
       });
       for (let e = 0; e < 20; e += 1) {
         const eleve = await addStudent(classe.id, `E${c}-${e}`);
+        // Devoir et composition à la même valeur : passe le seuil de
+        // publication sans changer la moyenne attendue.
+        const value = new Prisma.Decimal(10 + (index % 10));
         gradeRows.push({
           schoolId: school.id,
           studentId: eleve.id,
-          evaluationId: evaluation.id,
+          evaluationId: evaluationDevoir.id,
+          subjectId: maths.id,
+          gradeTypeId: devoirId,
+          termId: term.id,
+          value,
+        });
+        gradeRows.push({
+          schoolId: school.id,
+          studentId: eleve.id,
+          evaluationId: evaluationCompo.id,
           subjectId: maths.id,
           gradeTypeId: compoId,
           termId: term.id,
-          value: new Prisma.Decimal(10 + (index % 10)),
+          value,
         });
         index += 1;
       }

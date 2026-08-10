@@ -32,10 +32,8 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) =>
-    request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) =>
-    request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
 });
 
 /**
@@ -95,8 +93,7 @@ describe('messages de validation', () => {
 describe('messages d’authentification', () => {
   it('disent quoi vérifier quand la connexion échoue', async () => {
     const res = await request(app)
-      .post('/auth/login')
-      .set('X-School-Subdomain', 'ecole-a')
+      .post('/auth/identify')
       .send({ identifier: 'admin@a.test', password: 'mauvais' });
 
     expect(res.status).toBe(401);
@@ -105,10 +102,7 @@ describe('messages d’authentification', () => {
   });
 
   it('expliquent une session expirée sans parler de jeton', async () => {
-    const res = await request(app)
-      .get('/me')
-      .set('X-School-Subdomain', 'ecole-a')
-      .set('Authorization', 'Bearer nimportequoi');
+    const res = await request(app).get('/me').set('Authorization', 'Bearer nimportequoi');
 
     expect(res.status).toBe(401);
     expect(res.body.error.message).toMatch(/reconnectez-vous/i);

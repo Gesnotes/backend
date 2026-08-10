@@ -21,44 +21,160 @@ enum Role {
 model School {
   id        Int       @id @default(autoincrement())
   name      String    @db.VarChar(150)
-  subdomain String    @unique @db.VarChar(63) // "ecole-x" dans ecole-x.gesnotes.app
+  // Sert à désambiguïser deux écoles de même nom à la connexion (identifiant
+  // valable dans plusieurs écoles à la fois) : la liste de choix affiche la
+  // ville. Nullable : les écoles existantes n'en ont pas encore.
+  city      String?   @db.VarChar(100)
   createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  /// Suspension par l'équipe Gesnotes (impayé, litige, fermeture...) : les
+  /// comptes de l'école ne peuvent plus se connecter, mais rien n'est détruit
+  /// — voir `staff.service.ts` (suspendSchool/restoreSchool). Distinct d'une
+  /// suppression définitive, qui reste soumise au retapage du nom exact.
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  /// Moyenne à partir de laquelle l'école considère un élève admis dans une
+  /// matière. Purement déclaratif : le calcul de la moyenne elle-même
+  /// (compute.ts) ne s'en sert pas, seul l'affichage en tient compte.
+  passingGrade Decimal @default(10) @map("passing_grade") @db.Decimal(4, 2)
 
-  users      User[]
-  terms      Term[]
-  classes    Class[]
-  subjects   Subject[]
-  students   Student[]
-  gradeTypes GradeType[]
+  users          User[]
+  schoolYears    SchoolYear[]
+  terms          Term[]
+  classes        Class[]
+  subjects       Subject[]
+  students       Student[]
+  gradeTypes     GradeType[]
+  signupRequests SignupRequest[]
 
+  @@index([archivedAt])
   @@map("schools")
+}
+
+enum SignupRequestStatus {
+  nouveau
+  traite
+
+  @@map("signup_request_status")
+}
+
+/// Demande de rappel du formulaire public d'inscription (inscription
+/// hybride, plan §1) : aucune école ni aucun compte n'existe encore à ce
+/// stade. Le formulaire capte la demande, l'équipe Gesnotes configure
+/// ensuite l'école et son administration au téléphone. Seule table du schéma
+/// qui n'appartient à aucune école — elle en précède l'existence.
+model SignupRequest {
+  id          Int                 @id @default(autoincrement())
+  schoolName  String              @map("school_name") @db.VarChar(150)
+  contactName String              @map("contact_name") @db.VarChar(150)
+  // Seul moyen de recontacter l'école si l'appel manque le téléphone, et sert
+  // à préremplir l'invitation du premier compte administrateur à l'acceptation.
+  email       String              @db.VarChar(150)
+  phone       String              @db.VarChar(30)
+  city        String              @db.VarChar(100)
+  // Niveaux cochés dans le formulaire ("maternelle", "primaire", ...), en
+  // texte libre côté saisie : la liste des niveaux n'est pas un référentiel
+  // fermé dans le reste de l'application.
+  levels      String[]
+  status      SignupRequestStatus @default(nouveau)
+  // Renseigné à l'acceptation (staff.service.ts) : l'école réellement créée à
+  // partir de cette demande, pour retrouver d'où vient chaque école.
+  schoolId    Int?                @map("school_id")
+  createdAt   DateTime?           @default(now()) @map("created_at") @db.Timestamp(6)
+
+  school School? @relation(fields: [schoolId], references: [id])
+
+  @@index([status, createdAt])
+  @@map("signup_requests")
+}
+
+/// Comptes de l'équipe Gesnotes, hors du périmètre multi-écoles : n'appartient
+/// à aucune école, ne porte pas de rôle métier (admin/teacher/parent). Sert à
+/// superviser la plateforme et à traiter les demandes d'inscription. Créé à
+/// la main pour l'instant (script) : pas de self-service, n'importe qui
+/// pourrait sinon s'auto-inscrire comme membre de l'équipe.
+model StaffUser {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique @db.VarChar(150)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  firstName         String?   @map("first_name") @db.VarChar(100)
+  lastName          String?   @map("last_name") @db.VarChar(100)
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
+  /// Même rôle que `User.sessionsRevokedAt` : coupe les access tokens déjà
+  /// émis, le seul moyen de déconnecter réellement un JWT longue durée.
+  sessionsRevokedAt DateTime? @map("sessions_revoked_at") @db.Timestamp(6)
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  refreshTokens StaffRefreshToken[]
+
+  @@map("staff_users")
+}
+
+// Refresh tokens du staff — table dédiée plutôt que réutiliser `RefreshToken`
+// (qui référence `User`) : un compte staff n'est pas un `User` d'école.
+model StaffRefreshToken {
+  id          Int       @id @default(autoincrement())
+  staffUserId Int       @map("staff_user_id")
+  tokenHash   String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamp(6)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamp(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  staffUser StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId, revokedAt])
+  @@map("staff_refresh_tokens")
+}
+
+// Année scolaire ("2025-2026") — regroupe les périodes (trimestres,
+// semestres) d'une même rentrée. Le rattachement d'une période est optionnel :
+// une période sans année continue de fonctionner exactement comme avant,
+// aucune migration de données n'est nécessaire pour les écoles déjà en
+// production.
+model SchoolYear {
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  label      String    @db.VarChar(50) // "2025-2026"
+  startDate  DateTime? @map("start_date") @db.Date
+  endDate    DateTime? @map("end_date") @db.Date
+  // Comme pour une période : archiver plutôt qu'effacer, la suppression
+  // définitive restant une décision distincte prise depuis les archives.
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+
+  school  School  @relation(fields: [schoolId], references: [id])
+  terms   Term[]
+  classes Class[]
+
+  @@index([schoolId, archivedAt])
+  @@map("school_years")
 }
 
 // Utilisateurs (admin, prof, parent — un seul point d'auth)
 model User {
-  id           Int       @id @default(autoincrement())
-  schoolId     Int       @map("school_id")
-  email        String    @db.VarChar(150)
-  phone        String?   @db.VarChar(30)
-  passwordHash String    @map("password_hash") @db.VarChar(255)
-  role         Role
-  firstName    String?   @map("first_name") @db.VarChar(100)
-  lastName     String?   @map("last_name") @db.VarChar(100)
-  archivedAt   DateTime? @map("archived_at") @db.Timestamp(6)
+  id                Int       @id @default(autoincrement())
+  schoolId          Int       @map("school_id")
+  email             String    @db.VarChar(150)
+  phone             String?   @db.VarChar(30)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  role              Role
+  firstName         String?   @map("first_name") @db.VarChar(100)
+  lastName          String?   @map("last_name") @db.VarChar(100)
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
   /// Coupe les access tokens émis avant cette date. Indispensable avec des
   /// tokens longue durée : un JWT est stateless, seule cette borne permet de
   /// déconnecter réellement (logout, archivage, changement de mot de passe).
   sessionsRevokedAt DateTime? @map("sessions_revoked_at") @db.Timestamp(6)
-  createdAt    DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  createdAt         DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
 
-  school         School               @relation(fields: [schoolId], references: [id])
-  children       StudentParent[]
-  assignments    TeacherAssignment[]
-  grades         Grade[]
-  evaluations    Evaluation[]
-  devices        Device[]
-  refreshTokens  RefreshToken[]
-  resetTokens    PasswordResetToken[]
+  school              School               @relation(fields: [schoolId], references: [id])
+  children            StudentParent[]
+  assignments         TeacherAssignment[]
+  grades              Grade[]
+  evaluations         Evaluation[]
+  devices             Device[]
+  refreshTokens       RefreshToken[]
+  resetTokens         PasswordResetToken[]
+  homeroomClasses     Class[]
+  attendancesRecorded Attendance[]
+  enrollmentDecisions EnrollmentDecision[]
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -100,18 +216,21 @@ model PasswordResetToken {
   @@map("password_reset_tokens")
 }
 
-// Année scolaire / période (trimestre, semestre)
+// Période (trimestre, semestre) — le regroupement par année scolaire vit sur
+// `SchoolYear`, `schoolYearId` ci-dessous.
 model Term {
-  id        Int       @id @default(autoincrement())
-  schoolId  Int       @map("school_id")
-  label     String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
-  startDate DateTime? @map("start_date") @db.Date
-  endDate   DateTime? @map("end_date") @db.Date
-  // Une période portant des évaluations ne peut pas être effacée directement :
-  // `evaluations.term_id` et `grades.term_id` sont en RESTRICT. L'archivage la
-  // sort des sélecteurs sans rien détruire ; la suppression définitive se fait
-  // depuis les archives, en connaissance de cause.
-  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  id            Int       @id @default(autoincrement())
+  schoolId      Int       @map("school_id")
+  // Nullable : rattacher une période à une année scolaire est optionnel,
+  // voir le commentaire sur `SchoolYear`.
+  schoolYearId  Int?      @map("school_year_id")
+  label         String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
+  startDate     DateTime? @map("start_date") @db.Date
+  endDate       DateTime? @map("end_date") @db.Date
+  // L'archivage sort la période des sélecteurs sans rien détruire ; la
+  // suppression définitive (depuis les archives, libellé exact retapé) emporte
+  // en cascade ses évaluations et ses notes — voir `deleteTermPermanently`.
+  archivedAt    DateTime? @map("archived_at") @db.Timestamp(6)
   // Instant jusqu'auquel la saisie reste ouverte sur une période pourtant
   // terminée. Une correction de dernière minute ne doit pas obliger
   // l'administration à ressaisir à la place de l'enseignant, ni à repousser la
@@ -122,30 +241,79 @@ model Term {
   reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
+  // Cascade : supprimer une année scolaire pour de bon emporte ses périodes
+  // (voir `deleteSchoolYearPermanently`).
+  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   grades      Grade[]
   evaluations Evaluation[]
 
   @@index([schoolId, archivedAt])
+  @@index([schoolYearId])
   @@map("terms")
+}
+
+// Mode de fonctionnement d'une classe : `notes` pour le suivi habituel
+// (évaluations chiffrées), `presence` pour la maternelle/garderie où seule la
+// présence compte. Les deux sont mutuellement exclusifs — voir le garde-fou
+// dans evaluation.service.ts.
+enum ClassMode {
+  notes
+  presence
+
+  @@map("class_mode")
 }
 
 // Classes
 model Class {
-  id         Int       @id @default(autoincrement())
-  schoolId   Int       @map("school_id")
-  name       String    @db.VarChar(50) // "6e A"
-  level      String    @db.VarChar(20) // "6e" — gabarit de coefficients, jamais utilisé dans le calcul
-  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  id                Int       @id @default(autoincrement())
+  schoolId          Int       @map("school_id")
+  name              String    @db.VarChar(50) // "6e A"
+  level             String    @db.VarChar(20) // "6e" — gabarit de coefficients, jamais utilisé dans le calcul
+  mode              ClassMode @default(notes)
+  // Seul enseignant, avec l'admin, autorisé à saisir la présence de cette
+  // classe (plan maternelle/garderie). `null` : seul l'admin peut saisir.
+  homeroomTeacherId Int?      @map("homeroom_teacher_id")
+  // Nullable, comme `Term.schoolYearId` : une classe non rattachée continue de
+  // fonctionner exactement comme avant. Le nom d'une classe n'est unique que
+  // dans son année (ou parmi les classes sans année) — voir
+  // `assertClassNameAvailable` — pour qu'une « 6e A » puisse revenir chaque
+  // rentrée sans entrer en conflit avec elle-même l'an passé.
+  schoolYearId      Int?      @map("school_year_id")
+  // Classe où les élèves de celle-ci sont censés passer l'année suivante
+  // (« CP » → « CE1 »), posée par `duplicateClassForNextYear` ou à la main.
+  // Sert de base au futur assistant de réinscription (lot 4).
+  promotesToId      Int?      @map("promotes_to_id")
+  archivedAt        DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school       School               @relation(fields: [schoolId], references: [id])
-  students     Student[]
-  assignments  TeacherAssignment[]
-  coefficients SubjectCoefficient[]
-  evaluations  Evaluation[]
+  school          School               @relation(fields: [schoolId], references: [id])
+  // Clé composite : le référent d'une classe est nécessairement de la même
+  // école, comme pour TeacherAssignment. `Restrict` explicite : `school_id`
+  // n'est pas nullable, un `SetNull` par défaut échouerait à l'exécution.
+  // deleteTeacherPermanently détache donc explicitement (homeroomTeacherId à
+  // null) avant de supprimer le compte, plutôt que de laisser filtrer
+  // l'erreur SQL brute.
+  homeroomTeacher User?                @relation(fields: [homeroomTeacherId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  // Cascade : supprimer une année scolaire pour de bon emporte ses classes
+  // (voir `deleteSchoolYearPermanently`).
+  schoolYear      SchoolYear?          @relation(fields: [schoolYearId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  // Auto-relation nommée, composite pour la même raison que `homeroomTeacher` :
+  // même contrainte de nullabilité, même parade — `deleteClassPermanently`
+  // détache promotesToId (sur les classes qui pointent vers celle-ci) avant
+  // de supprimer.
+  promotesTo      Class?               @relation("ClassPromotion", fields: [promotesToId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  promotedFrom    Class[]              @relation("ClassPromotion")
+  students        Student[]
+  assignments     TeacherAssignment[]
+  coefficients    SubjectCoefficient[]
+  evaluations     Evaluation[]
+  attendances     Attendance[]
+  enrolledFrom    EnrollmentDecision[] @relation("EnrollmentFrom")
+  enrolledTo      EnrollmentDecision[] @relation("EnrollmentTo")
 
   // Cible des clés étrangères composites de TeacherAssignment.
   @@unique([id, schoolId])
   @@index([schoolId, archivedAt])
+  @@index([schoolYearId])
   @@map("classes")
 }
 
@@ -211,10 +379,15 @@ model Student {
   birthDate  DateTime? @map("birth_date") @db.Date
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
-  school  School          @relation(fields: [schoolId], references: [id])
-  class   Class           @relation(fields: [classId], references: [id])
-  parents StudentParent[]
-  grades  Grade[]
+  school              School               @relation(fields: [schoolId], references: [id])
+  // Cascade : supprimer une classe pour de bon emporte ses élèves, et donc
+  // (via les cascades ci-dessous) leurs notes, présences et liens parents —
+  // voir `deleteClassPermanently`.
+  class               Class                @relation(fields: [classId], references: [id], onDelete: Cascade)
+  parents             StudentParent[]
+  grades              Grade[]
+  attendances         Attendance[]
+  enrollmentDecisions EnrollmentDecision[]
 
   // Cible de la clé étrangère composite de Grade : garantit en base qu'une
   // note et son élève appartiennent à la même école.
@@ -296,11 +469,14 @@ model Grade {
   // Clé composite : impossible d'enregistrer une note dont le school_id
   // dénormalisé diverge de celui de l'élève. Sans cela, la colonne qui porte
   // tout le filtrage d'isolation ne serait garantie par rien.
+  // Cascade sur subject/term comme sur student/evaluation : supprimer une
+  // matière ou une période pour de bon emporte les notes qui s'y rattachent
+  // (voir `deleteSubjectPermanently`, `deleteTermPermanently`).
   student    Student    @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
   evaluation Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
-  subject    Subject    @relation(fields: [subjectId], references: [id])
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   gradeType  GradeType  @relation(fields: [gradeTypeId], references: [id])
-  term       Term       @relation(fields: [termId], references: [id])
+  term       Term       @relation(fields: [termId], references: [id], onDelete: Cascade)
   teacher    User?      @relation(fields: [teacherUserId], references: [id])
 
   // Une seule note par élève et par évaluation : l'ambiguïté « plusieurs notes
@@ -334,14 +510,88 @@ model Evaluation {
   // Comme Grade s'ancre à son école via l'élève, l'évaluation s'y ancre via sa
   // classe : la clé composite interdit une évaluation dont le school_id diverge
   // de celui de la classe.
+  // Cascade sur subject/term comme sur class : supprimer une matière ou une
+  // période pour de bon emporte ses évaluations, et donc les notes qui s'y
+  // rattachent (Grade.evaluation est déjà en cascade).
   class     Class     @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  subject   Subject   @relation(fields: [subjectId], references: [id])
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
-  term      Term      @relation(fields: [termId], references: [id])
+  term      Term      @relation(fields: [termId], references: [id], onDelete: Cascade)
   teacher   User?     @relation(fields: [teacherUserId], references: [id])
   grades    Grade[]
 
   @@index([classId, subjectId, termId])
   @@index([schoolId])
   @@map("evaluations")
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+
+  @@map("attendance_status")
+}
+
+// Présence : un statut par élève et par jour (plan maternelle/garderie, mais
+// utilisable par toute classe). `classId` est figé à la saisie, comme
+// `Evaluation.classId` pour les notes : déplacer un élève vers une autre
+// classe ne doit pas réécrire l'historique de présence déjà enregistré.
+model Attendance {
+  id               Int              @id @default(autoincrement())
+  schoolId         Int              @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  studentId        Int              @map("student_id")
+  classId          Int              @map("class_id")
+  date             DateTime         @db.Date
+  status           AttendanceStatus
+  comment          String?          @db.Text
+  recordedByUserId Int?             @map("recorded_by_user_id")
+  createdAt        DateTime?        @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // Comme Grade s'ancre à son école via l'élève, la présence s'y ancre aussi
+  // via la classe : les deux clés composites interdisent un enregistrement
+  // dont le school_id dénormalisé diverge de celui de l'élève ou de la classe.
+  student    Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  class      Class   @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  recordedBy User?   @relation(fields: [recordedByUserId], references: [id])
+
+  // Un seul statut par élève et par jour — la granularité décidée pour la v1.
+  @@unique([studentId, date])
+  @@index([classId, date]) // porte la feuille de présence d'une classe pour un jour
+  @@map("attendances")
+}
+
+enum EnrollmentDecisionType {
+  promotion
+  redoublement
+  autre
+
+  @@map("enrollment_decision_type")
+}
+
+// Trace d'une réinscription : un élève déplacé de `fromClass` vers `toClass`
+// à la préparation d'une rentrée, avec la décision qui l'explique (monte,
+// redouble, ou autre). Pur historique — déplacer l'élève se fait sur
+// `Student.classId`, cette table ne fait qu'en garder la mémoire, pour qu'un
+// directeur retrouve qui a redoublé et vers où chacun est parti.
+model EnrollmentDecision {
+  id              Int                    @id @default(autoincrement())
+  schoolId        Int                    @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  studentId       Int                    @map("student_id")
+  fromClassId     Int                    @map("from_class_id")
+  toClassId       Int                    @map("to_class_id")
+  decision        EnrollmentDecisionType
+  decidedByUserId Int?                   @map("decided_by_user_id")
+  createdAt       DateTime?              @default(now()) @map("created_at") @db.Timestamp(6)
+
+  // Comme Grade et Attendance, ancré à son école via l'élève ; les deux
+  // classes le sont pareillement, chacune via sa propre clé composite.
+  student   Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  fromClass Class   @relation("EnrollmentFrom", fields: [fromClassId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  toClass   Class   @relation("EnrollmentTo", fields: [toClassId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  decidedBy User?   @relation(fields: [decidedByUserId], references: [id])
+
+  @@index([fromClassId, createdAt]) // porte l'historique d'une classe qui a préparé sa rentrée
+  @@index([studentId])
+  @@map("enrollment_decisions")
 }

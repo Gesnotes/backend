@@ -12,7 +12,7 @@ const JOURS_ACTIVITE = 7;
  * un dashboard qui compterait les élèves de toutes les écoles serait une fuite
  * silencieuse, invisible à la lecture du chiffre affiché.
  */
-export async function getDashboard(schoolId: number, termId?: number) {
+export async function getDashboard(schoolId: number, termId?: number, date?: string) {
   const depuis = new Date();
   depuis.setDate(depuis.getDate() - JOURS_ACTIVITE);
 
@@ -27,8 +27,9 @@ export async function getDashboard(schoolId: number, termId?: number) {
       : await prisma.term.findFirst({ where: { id: termId, schoolId } });
   const periodeValide = term ? term.id : undefined;
 
-  const [eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes] =
+  const [school, eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
     await Promise.all([
+      prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } }),
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
       prisma.class.count({ where: { schoolId, archivedAt: null } }),
       prisma.user.count({ where: { schoolId, role: 'teacher', archivedAt: null } }),
@@ -38,6 +39,7 @@ export async function getDashboard(schoolId: number, termId?: number) {
       prisma.grade.count({
         where: { schoolId, ...(periodeValide ? { termId: periodeValide } : {}) },
       }),
+      getAttendanceSummary(schoolId, date),
     ]);
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
@@ -47,11 +49,15 @@ export async function getDashboard(schoolId: number, termId?: number) {
    * Forme de réponse unique quelle que soit la requête : toutes les clés sont
    * toujours présentes, à `null` ou vides. Faire disparaître `extremes` selon
    * les paramètres obligerait le front-end à tester son existence, et le ferait
-   * planter le jour où il oublie.
+   * planter le jour où il oublie. `presence` ne dépend d'aucune période — la
+   * présence se prend au jour le jour — elle vaut donc toujours ce chiffre,
+   * même sans période sélectionnée.
    */
   const vide = {
+    school,
     effectifs,
     activite,
+    presence,
     periode: null,
     moyenneEcole: null,
     classes: [],
@@ -87,17 +93,20 @@ export async function getDashboard(schoolId: number, termId?: number) {
   // Moyenne de l'école : moyenne des moyennes d'élèves, pas moyenne des
   // moyennes de classes. Une classe de 10 élèves ne doit pas peser autant
   // qu'une classe de 40.
+  //
+  // `studentRawAverages` (pleine précision), pas `student.average` (déjà
+  // arrondi à 2 décimales) : moyenner des valeurs déjà arrondies dériverait
+  // jusqu'à ±0,005 par élève avant l'arrondi final ci-dessous.
   const moyennesEleves = bulletins
-    .flatMap((bulletin) => bulletin.students)
-    .map((student) => student.average)
-    .filter((average): average is number => average !== null);
+    .flatMap((bulletin) => bulletin.studentRawAverages)
+    .filter((average): average is Prisma.Decimal => average !== null);
 
   const moyenneEcole =
     moyennesEleves.length === 0
       ? null
       : serializeAverage(
           moyennesEleves
-            .reduce((sum, v) => sum.add(new Prisma.Decimal(v)), new Prisma.Decimal(0))
+            .reduce((sum, v) => sum.add(v), new Prisma.Decimal(0))
             .div(moyennesEleves.length),
         );
 
@@ -111,8 +120,10 @@ export async function getDashboard(schoolId: number, termId?: number) {
     .sort((a, b) => b.average - a.average);
 
   return {
+    school,
     effectifs,
     activite,
+    presence,
     periode: { id: term.id, label: term.label },
     moyenneEcole,
     classes: parClasse,
@@ -128,6 +139,46 @@ export async function getDashboard(schoolId: number, termId?: number) {
       meilleureClasse: triees[0] ?? null,
       plusFaibleClasse: triees[triees.length - 1] ?? null,
     },
+  };
+}
+
+/**
+ * Présence du jour, toute l'école : combien de classes ont fait l'appel,
+ * combien d'absents et de retards, et lesquelles n'ont encore rien saisi.
+ * La présence n'est pas réservée aux classes en mode présence — n'importe
+ * quelle classe peut y être suivie — donc aucun filtre sur `mode` ici.
+ *
+ * `date` vient du navigateur (son jour local), comme pour la saisie de
+ * présence elle-même (`getAttendanceSheet`/`saveAttendanceBatch`). Sans
+ * elle — vieux client, appel serveur direct — on retombe sur le jour UTC du
+ * serveur, par défaut correct la plupart du temps mais pas pour une école à
+ * l'est de Greenwich dans la fenêtre entre minuit local et minuit UTC.
+ */
+async function getAttendanceSummary(schoolId: number, date?: string) {
+  const today = date ? new Date(date) : new Date(new Date().toISOString().slice(0, 10));
+
+  const classes = await prisma.class.findMany({
+    where: { schoolId, archivedAt: null },
+    select: { id: true, name: true },
+    orderBy: [{ level: 'asc' }, { name: 'asc' }],
+  });
+  const classIds = classes.map((klass) => klass.id);
+
+  const records = await prisma.attendance.findMany({
+    where: { schoolId, classId: { in: classIds }, date: today },
+    select: { classId: true, status: true },
+  });
+
+  const classesAvecAppel = new Set(records.map((record) => record.classId));
+
+  return {
+    classesAvecAppel: classesAvecAppel.size,
+    classesTotal: classes.length,
+    absents: records.filter((record) => record.status === 'absent').length,
+    retards: records.filter((record) => record.status === 'late').length,
+    classesSansAppel: classes
+      .filter((klass) => !classesAvecAppel.has(klass.id))
+      .map((klass) => klass.name),
   };
 }
 

@@ -86,7 +86,11 @@ describe('computeStudentResult', () => {
   });
 
   it('pondère les matières par leur coefficient', async () => {
+    // Devoir aligné sur la composition : ne change pas la moyenne de matière,
+    // sert seulement à passer le seuil de publication (devoir + composition).
+    await addGrade(ana.id, maths.id, 'devoir', 15);
     await addGrade(ana.id, maths.id, 'composition', 15); // coef 4
+    await addGrade(ana.id, francais.id, 'devoir', 10);
     await addGrade(ana.id, francais.id, 'composition', 10); // coef 1
 
     // (15×4 + 10×1) / 5 = 14
@@ -98,7 +102,9 @@ describe('computeStudentResult', () => {
     await prisma.subjectCoefficient.create({
       data: { subjectId: maths.id, classId: klass.id, coefficient: 1 },
     });
+    await addGrade(ana.id, maths.id, 'devoir', 15);
     await addGrade(ana.id, maths.id, 'composition', 15);
+    await addGrade(ana.id, francais.id, 'devoir', 10);
     await addGrade(ana.id, francais.id, 'composition', 10);
 
     // Maths retombe à coef 1 : (15+10)/2 = 12.5 au lieu de 14.
@@ -116,6 +122,7 @@ describe('computeStudentResult', () => {
     const other = await prisma.term.create({
       data: { schoolId: school.id, label: 'Trimestre 2' },
     });
+    await addGrade(ana.id, maths.id, 'devoir', 15);
     await addGrade(ana.id, maths.id, 'composition', 15);
     await seedGrade({
       schoolId: school.id,
@@ -157,7 +164,9 @@ describe('computeStudentResult', () => {
 
 describe('computeClassBulletin', () => {
   it('classe les élèves et calcule la moyenne de classe', async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 16);
     await addGrade(ana.id, maths.id, 'composition', 16);
+    await addGrade(ben.id, maths.id, 'devoir', 12);
     await addGrade(ben.id, maths.id, 'composition', 12);
 
     const bulletin = await computeClassBulletin(school.id, klass.id, term.id);
@@ -169,6 +178,7 @@ describe('computeClassBulletin', () => {
   });
 
   it('exclut les élèves archivés du bulletin et de la moyenne', async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 16);
     await addGrade(ana.id, maths.id, 'composition', 16);
     await addGrade(ben.id, maths.id, 'composition', 4);
     await prisma.student.update({ where: { id: ben.id }, data: { archivedAt: new Date() } });
@@ -179,6 +189,7 @@ describe('computeClassBulletin', () => {
   });
 
   it("n'écrase pas la moyenne de classe avec les élèves sans note", async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 16);
     await addGrade(ana.id, maths.id, 'composition', 16);
     // Ben n'a aucune note : il apparaît avec null, sans tirer la moyenne vers 0.
 

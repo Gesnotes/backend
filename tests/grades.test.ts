@@ -87,10 +87,10 @@ afterAll(async () => {
 });
 
 const api = (token: string) => ({
-  get: (p: string) => request(app).get(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  post: (p: string) => request(app).post(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  patch: (p: string) => request(app).patch(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
-  delete: (p: string) => request(app).delete(p).set('X-School-Subdomain', 'ecole-a').set('Authorization', `Bearer ${token}`),
+  get: (p: string) => request(app).get(p).set('Authorization', `Bearer ${token}`),
+  post: (p: string) => request(app).post(p).set('Authorization', `Bearer ${token}`),
+  patch: (p: string) => request(app).patch(p).set('Authorization', `Bearer ${token}`),
+  delete: (p: string) => request(app).delete(p).set('Authorization', `Bearer ${token}`),
 });
 
 const payload = (over: Record<string, unknown> = {}) => ({
@@ -302,6 +302,50 @@ describe('GET /teachers/me/classes', () => {
 
     const res = await api(tokenProfA).get('/teachers/me/classes');
     expect(res.body[0].evalues).toBe(1);
+  });
+});
+
+/**
+ * L'admin n'a pas d'affectation propre : ce qu'il voit est l'union de celles
+ * de toute l'école, pas seulement les siennes — sinon la saisie par
+ * l'administration serait toujours vide.
+ */
+describe('GET /teachers/me/classes — administration (école entière)', () => {
+  it("liste toutes les affectations de l'école, pas seulement celles d'un enseignant", async () => {
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const bySubject = Object.fromEntries(
+      (res.body as { subjectName: string; className: string }[]).map((row) => [row.subjectName, row]),
+    );
+    expect(bySubject.Maths).toMatchObject({ className: '6e A' });
+    expect(bySubject.Français).toMatchObject({ className: '5e A' });
+  });
+
+  it("ne compte un couple classe × matière qu'une fois même si plusieurs enseignants le partagent", async () => {
+    const profC = await createUser({ schoolId: school.id, email: 'profc@a.test', role: 'teacher' });
+    await prisma.teacherAssignment.create({
+      data: { schoolId: school.id, teacherUserId: profC.id, classId: classe6.id, subjectId: maths.id },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    const maths6e = (res.body as { subjectName: string; className: string }[]).filter(
+      (row) => row.subjectName === 'Maths' && row.className === '6e A',
+    );
+    expect(maths6e).toHaveLength(1);
+  });
+
+  it('ne propose jamais une classe en mode présence', async () => {
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'PS', mode: 'presence' },
+    });
+    const profGarderie = await createUser({ schoolId: school.id, email: 'profg@a.test', role: 'teacher' });
+    await prisma.teacherAssignment.create({
+      data: { schoolId: school.id, teacherUserId: profGarderie.id, classId: garderie.id, subjectId: maths.id },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    expect((res.body as { className: string }[]).some((row) => row.className === 'Garderie')).toBe(false);
   });
 });
 

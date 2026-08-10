@@ -9,7 +9,12 @@ export const TEST_PASSWORD = 'motdepasse123';
 
 /** Supprime toutes les données de test, dans l'ordre des dépendances. */
 export async function resetDatabase() {
+  await prisma.staffRefreshToken.deleteMany();
+  await prisma.staffUser.deleteMany();
+  await prisma.signupRequest.deleteMany();
   await prisma.grade.deleteMany();
+  await prisma.attendance.deleteMany();
+  await prisma.enrollmentDecision.deleteMany();
   await prisma.evaluation.deleteMany();
   await prisma.subjectCoefficient.deleteMany();
   await prisma.teacherAssignment.deleteMany();
@@ -19,6 +24,7 @@ export async function resetDatabase() {
   await prisma.subject.deleteMany();
   await prisma.class.deleteMany();
   await prisma.term.deleteMany();
+  await prisma.schoolYear.deleteMany();
   await prisma.device.deleteMany();
   await prisma.refreshToken.deleteMany();
   await prisma.passwordResetToken.deleteMany();
@@ -110,8 +116,31 @@ export async function seedGrade(data: {
   });
 }
 
-export function createSchool(subdomain: string, name = `École ${subdomain}`) {
-  return prisma.school.create({ data: { name, subdomain } });
+/** Crée un enregistrement de présence de test. */
+export function seedAttendance(data: {
+  schoolId: number;
+  studentId: number;
+  classId: number;
+  date: Date | string;
+  status: 'present' | 'absent' | 'late';
+  comment?: string | null;
+  recordedByUserId?: number;
+}) {
+  return prisma.attendance.create({
+    data: {
+      schoolId: data.schoolId,
+      studentId: data.studentId,
+      classId: data.classId,
+      date: typeof data.date === 'string' ? new Date(data.date) : data.date,
+      status: data.status,
+      comment: data.comment ?? null,
+      recordedByUserId: data.recordedByUserId ?? null,
+    },
+  });
+}
+
+export function createSchool(identifier: string, name = `École ${identifier}`) {
+  return prisma.school.create({ data: { name } });
 }
 
 export async function createUser(options: {
@@ -128,6 +157,21 @@ export async function createUser(options: {
       email: normalizeEmail(options.email),
       phone: options.phone ? normalizePhone(options.phone) : null,
       role: options.role,
+      passwordHash: await argon2.hash(options.password ?? TEST_PASSWORD),
+      archivedAt: options.archived ? new Date() : null,
+    },
+  });
+}
+
+/** Compte de l'équipe Gesnotes, hors périmètre multi-écoles. */
+export async function createStaffUser(options: {
+  email: string;
+  password?: string;
+  archived?: boolean;
+}) {
+  return prisma.staffUser.create({
+    data: {
+      email: normalizeEmail(options.email),
       passwordHash: await argon2.hash(options.password ?? TEST_PASSWORD),
       archivedAt: options.archived ? new Date() : null,
     },

@@ -692,4 +692,12 @@ async function createParentAccount(
 async function assertClassInSchool(schoolId: number, classId: number) {
   const klass = await prisma.class.findFirst({ where: { id: classId, schoolId } });
   if (!klass) throw notFound("Cette classe n'existe pas dans cet établissement.");
+  // Un élève inscrit dans une classe archivée disparaîtrait des listes
+  // courantes sans que personne ne le remarque.
+  if (klass.archivedAt) {
+    throw conflict(
+      `« ${klass.name} » est archivée : restaurez-la avant d'y inscrire un élève.`,
+      { classId },
+    );
+  }
 }
