@@ -167,7 +167,7 @@ describe('archivage et suppression', () => {
     expect(await prisma.subject.count()).toBe(0);
   });
 
-  it('refuse la suppression définitive si des notes existent', async () => {
+  it('emporte en cascade les évaluations et les notes', async () => {
     const { body } = await createSubject();
     await api(adminToken).delete(`/subjects/${body.id}`);
 
@@ -188,11 +188,11 @@ describe('archivage et suppression', () => {
     });
 
     const res = await api(adminToken).delete(`/subjects/${body.id}?permanent=true&confirm_label=Maths`);
-    expect(res.status).toBe(409);
-    expect(res.body.error.details.gradeCount).toBe(1);
+    expect(res.status).toBe(204);
 
-    // La note n'a pas été effacée au passage.
-    expect(await prisma.grade.count()).toBe(1);
+    // La note et l'évaluation qui la portait ont été emportées avec la matière.
+    expect(await prisma.grade.count()).toBe(0);
+    expect(await prisma.evaluation.count()).toBe(0);
   });
 });
 

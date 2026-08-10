@@ -226,11 +226,13 @@ export async function restoreSchoolYear(schoolId: number, id: number): Promise<S
  * Suppression définitive. Réservée aux années déjà archivées, libellé exact
  * à retaper — même garde-fou que pour une période.
  *
- * Les périodes et les classes rattachées ne sont pas détruites :
- * `terms.school_year_id` et `classes.school_year_id` sont en RESTRICT en
- * base, donc elles sont détachées (repassées à `null`) avant la suppression
- * de l'année. Chacune garde son historique intact, elle perd seulement son
- * regroupement par année.
+ * Emporte en cascade tout ce que l'année contient : ses périodes (et donc
+ * leurs évaluations et notes), ses classes (et donc leurs élèves, notes,
+ * présences, affectations et historique de réinscription — voir
+ * `deleteClassPermanently`). `promotesToId` est détaché sur les classes,
+ * même hors de cette année, qui désignaient l'une des classes supprimées
+ * comme classe supérieure : ce sont des classes indépendantes, pas des
+ * données de cette année.
  */
 export async function deleteSchoolYearPermanently(
   schoolId: number,
@@ -251,8 +253,10 @@ export async function deleteSchoolYearPermanently(
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.term.updateMany({ where: { schoolYearId: id }, data: { schoolYearId: null } });
-    await tx.class.updateMany({ where: { schoolYearId: id }, data: { schoolYearId: null } });
+    await tx.class.updateMany({
+      where: { promotesTo: { schoolYearId: id } },
+      data: { promotesToId: null },
+    });
     await tx.schoolYear.delete({ where: { id } });
   });
 }

@@ -235,7 +235,7 @@ describe('désactivation', () => {
     expect((await api(adminToken).get('/teachers')).body).toHaveLength(1);
   });
 
-  it('refuse la suppression définitive si des notes ont été saisies', async () => {
+  it("désolidarise l'auteur des notes déjà saisies plutôt que de refuser la suppression", async () => {
     const created = await newTeacher('jean@a.test');
     const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
     const gradeType = await prisma.gradeType.create({
@@ -259,9 +259,54 @@ describe('désactivation', () => {
     const res = await api(adminToken).delete(
       `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
     );
-    expect(res.status).toBe(409);
-    expect(res.body.error.details.gradeCount).toBe(1);
+    expect(res.status).toBe(204);
     expect(await prisma.grade.count()).toBe(1);
+    const grade = await prisma.grade.findFirstOrThrow();
+    expect(grade.teacherUserId).toBeNull();
+  });
+
+  it("désolidarise l'auteur des présences déjà saisies plutôt que de refuser la suppression", async () => {
+    const created = await newTeacher('jean@a.test');
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
+    });
+    await prisma.attendance.create({
+      data: {
+        schoolId: schoolA.id,
+        studentId: student.id,
+        classId: classA.id,
+        date: new Date('2026-01-15'),
+        status: 'present',
+        recordedByUserId: created.body.id,
+      },
+    });
+
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
+    expect(await prisma.attendance.count()).toBe(1);
+    const attendance = await prisma.attendance.findFirstOrThrow();
+    expect(attendance.recordedByUserId).toBeNull();
+  });
+
+  it('détache la classe dont il est référent plutôt que de refuser la suppression', async () => {
+    const created = await newTeacher('jean@a.test');
+    await prisma.class.update({
+      where: { id: classA.id },
+      data: { homeroomTeacherId: created.body.id },
+    });
+
+    await api(adminToken).delete(`/teachers/${created.body.id}`);
+
+    const res = await api(adminToken).delete(
+      `/teachers/${created.body.id}?permanent=true&confirm_label=Jean Koffi`,
+    );
+    expect(res.status).toBe(204);
+    const updatedClass = await prisma.class.findUniqueOrThrow({ where: { id: classA.id } });
+    expect(updatedClass.homeroomTeacherId).toBeNull();
   });
 
   it('refuse la suppression définitive tant que le compte n’est pas archivé', async () => {

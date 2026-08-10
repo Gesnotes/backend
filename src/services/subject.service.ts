@@ -117,9 +117,8 @@ export async function updateSubject(
  *
  * `permanent` supprime physiquement, réservé à une matière déjà archivée
  * avec retapage du nom exact — même garde-fou que pour une période ou une
- * année scolaire (voir `term.service.ts`) — et seulement si aucune note
- * n'existe : une suppression en cascade effacerait silencieusement des
- * notes d'élèves.
+ * année scolaire (voir `term.service.ts`) — et emporte en cascade ses
+ * évaluations et ses notes.
  */
 export async function deleteSubject(
   schoolId: number,
@@ -141,14 +140,6 @@ export async function deleteSubject(
     throw badRequest(
       'La confirmation ne correspond pas au nom de la matière. Cette suppression est définitive.',
       { attendu: subject.name },
-    );
-  }
-
-  const gradeCount = await prisma.grade.count({ where: { subjectId: id } });
-  if (gradeCount > 0) {
-    throw conflict(
-      `Suppression impossible : ${gradeCount} note(s) sont rattachées à cette matière. Archivez-la plutôt.`,
-      { gradeCount },
     );
   }
 

@@ -227,10 +227,9 @@ model Term {
   label         String    @db.VarChar(50) // "Trimestre 1", "2025-2026"
   startDate     DateTime? @map("start_date") @db.Date
   endDate       DateTime? @map("end_date") @db.Date
-  // Une période portant des évaluations ne peut pas être effacée directement :
-  // `evaluations.term_id` et `grades.term_id` sont en RESTRICT. L'archivage la
-  // sort des sélecteurs sans rien détruire ; la suppression définitive se fait
-  // depuis les archives, en connaissance de cause.
+  // L'archivage sort la période des sélecteurs sans rien détruire ; la
+  // suppression définitive (depuis les archives, libellé exact retapé) emporte
+  // en cascade ses évaluations et ses notes — voir `deleteTermPermanently`.
   archivedAt    DateTime? @map("archived_at") @db.Timestamp(6)
   // Instant jusqu'auquel la saisie reste ouverte sur une période pourtant
   // terminée. Une correction de dernière minute ne doit pas obliger
@@ -242,11 +241,9 @@ model Term {
   reopenedUntil DateTime? @map("reopened_until") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
-  // RESTRICT explicite (déjà le comportement réel en base depuis la migration
-  // d'origine) : une année scolaire encore rattachée à une période ne peut pas
-  // être supprimée définitivement. `deleteSchoolYearPermanently` détache
-  // d'abord les périodes plutôt que de laisser filtrer une erreur SQL brute.
-  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // Cascade : supprimer une année scolaire pour de bon emporte ses périodes
+  // (voir `deleteSchoolYearPermanently`).
+  schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   grades      Grade[]
   evaluations Evaluation[]
 
@@ -292,11 +289,17 @@ model Class {
   // Clé composite : le référent d'une classe est nécessairement de la même
   // école, comme pour TeacherAssignment. `Restrict` explicite : `school_id`
   // n'est pas nullable, un `SetNull` par défaut échouerait à l'exécution.
-  // deleteTeacherPermanently refuse déjà la suppression d'un référent en poste.
+  // deleteTeacherPermanently détache donc explicitement (homeroomTeacherId à
+  // null) avant de supprimer le compte, plutôt que de laisser filtrer
+  // l'erreur SQL brute.
   homeroomTeacher User?                @relation(fields: [homeroomTeacherId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
-  schoolYear      SchoolYear?          @relation(fields: [schoolYearId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  // Cascade : supprimer une année scolaire pour de bon emporte ses classes
+  // (voir `deleteSchoolYearPermanently`).
+  schoolYear      SchoolYear?          @relation(fields: [schoolYearId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   // Auto-relation nommée, composite pour la même raison que `homeroomTeacher` :
-  // la classe supérieure est forcément de la même école.
+  // même contrainte de nullabilité, même parade — `deleteClassPermanently`
+  // détache promotesToId (sur les classes qui pointent vers celle-ci) avant
+  // de supprimer.
   promotesTo      Class?               @relation("ClassPromotion", fields: [promotesToId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
   promotedFrom    Class[]              @relation("ClassPromotion")
   students        Student[]
@@ -377,7 +380,10 @@ model Student {
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
   school              School               @relation(fields: [schoolId], references: [id])
-  class               Class                @relation(fields: [classId], references: [id])
+  // Cascade : supprimer une classe pour de bon emporte ses élèves, et donc
+  // (via les cascades ci-dessous) leurs notes, présences et liens parents —
+  // voir `deleteClassPermanently`.
+  class               Class                @relation(fields: [classId], references: [id], onDelete: Cascade)
   parents             StudentParent[]
   grades              Grade[]
   attendances         Attendance[]
@@ -463,11 +469,14 @@ model Grade {
   // Clé composite : impossible d'enregistrer une note dont le school_id
   // dénormalisé diverge de celui de l'élève. Sans cela, la colonne qui porte
   // tout le filtrage d'isolation ne serait garantie par rien.
+  // Cascade sur subject/term comme sur student/evaluation : supprimer une
+  // matière ou une période pour de bon emporte les notes qui s'y rattachent
+  // (voir `deleteSubjectPermanently`, `deleteTermPermanently`).
   student    Student    @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
   evaluation Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
-  subject    Subject    @relation(fields: [subjectId], references: [id])
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   gradeType  GradeType  @relation(fields: [gradeTypeId], references: [id])
-  term       Term       @relation(fields: [termId], references: [id])
+  term       Term       @relation(fields: [termId], references: [id], onDelete: Cascade)
   teacher    User?      @relation(fields: [teacherUserId], references: [id])
 
   // Une seule note par élève et par évaluation : l'ambiguïté « plusieurs notes
@@ -501,10 +510,13 @@ model Evaluation {
   // Comme Grade s'ancre à son école via l'élève, l'évaluation s'y ancre via sa
   // classe : la clé composite interdit une évaluation dont le school_id diverge
   // de celui de la classe.
+  // Cascade sur subject/term comme sur class : supprimer une matière ou une
+  // période pour de bon emporte ses évaluations, et donc les notes qui s'y
+  // rattachent (Grade.evaluation est déjà en cascade).
   class     Class     @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  subject   Subject   @relation(fields: [subjectId], references: [id])
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
   gradeType GradeType @relation(fields: [gradeTypeId], references: [id])
-  term      Term      @relation(fields: [termId], references: [id])
+  term      Term      @relation(fields: [termId], references: [id], onDelete: Cascade)
   teacher   User?     @relation(fields: [teacherUserId], references: [id])
   grades    Grade[]
 
