@@ -12,9 +12,9 @@ let staffToken: string;
 
 beforeEach(async () => {
   await resetDatabase();
-  const staff = await createStaffUser({ email: 'equipe@gesnotes.app' });
+  const staff = await createStaffUser({ email: 'equipe@gesnotes.bj' });
   staffToken = (
-    await request(app).post('/staff/login').send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD })
+    await request(app).post('/staff/login').send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD })
   ).body.accessToken;
   void staff;
 });
@@ -35,33 +35,33 @@ describe('POST /staff/login', () => {
   it('connecte avec les bons identifiants', async () => {
     const res = await request(app)
       .post('/staff/login')
-      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
 
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toBeTruthy();
     expect(res.body.refreshToken).toBeTruthy();
-    expect(res.body.staff.email).toBe('equipe@gesnotes.app');
+    expect(res.body.staff.email).toBe('equipe@gesnotes.bj');
   });
 
   it('refuse un mot de passe incorrect', async () => {
     const res = await request(app)
       .post('/staff/login')
-      .send({ email: 'equipe@gesnotes.app', password: 'mauvais-mot-de-passe' });
+      .send({ email: 'equipe@gesnotes.bj', password: 'mauvais-mot-de-passe' });
     expect(res.status).toBe(401);
   });
 
   it('refuse un email inconnu', async () => {
     const res = await request(app)
       .post('/staff/login')
-      .send({ email: 'inconnu@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'inconnu@gesnotes.bj', password: TEST_PASSWORD });
     expect(res.status).toBe(401);
   });
 
   it('refuse un compte archivé', async () => {
-    await createStaffUser({ email: 'parti@gesnotes.app', archived: true });
+    await createStaffUser({ email: 'parti@gesnotes.bj', archived: true });
     const res = await request(app)
       .post('/staff/login')
-      .send({ email: 'parti@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'parti@gesnotes.bj', password: TEST_PASSWORD });
     expect(res.status).toBe(401);
   });
 });
@@ -70,7 +70,7 @@ describe('session staff (refresh, logout)', () => {
   it('rafraîchit la session', async () => {
     const login = await request(app)
       .post('/staff/login')
-      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
 
     const res = await request(app).post('/staff/refresh').send({ refreshToken: login.body.refreshToken });
     expect(res.status).toBe(200);
@@ -80,7 +80,7 @@ describe('session staff (refresh, logout)', () => {
   it('déconnecte : le refresh token révoqué ne fonctionne plus', async () => {
     const login = await request(app)
       .post('/staff/login')
-      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
 
     await request(app).post('/staff/logout').send({ refreshToken: login.body.refreshToken });
     const res = await request(app).post('/staff/refresh').send({ refreshToken: login.body.refreshToken });
@@ -95,7 +95,7 @@ describe('session staff (refresh, logout)', () => {
   it("déconnecte : l'access token déjà émis ne fonctionne plus non plus", async () => {
     const login = await request(app)
       .post('/staff/login')
-      .send({ email: 'equipe@gesnotes.app', password: TEST_PASSWORD });
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
 
     await request(app).post('/staff/logout').send({ refreshToken: login.body.refreshToken });
 

@@ -16,7 +16,7 @@ import { normalizeEmail } from '../src/lib/normalize';
  *   npm run prisma:seed:staff
  */
 
-const EMAIL = normalizeEmail(process.env.SEED_STAFF_EMAIL ?? 'equipe@gesnotes.app');
+const EMAIL = normalizeEmail(process.env.SEED_STAFF_EMAIL ?? 'equipe@gesnotes.bj');
 const PASSWORD = process.env.SEED_STAFF_PASSWORD ?? 'demo1234';
 
 async function main() {

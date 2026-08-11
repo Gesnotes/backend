@@ -7,7 +7,7 @@ import helmet from 'helmet';
 import './lib/validationLocale';
 
 import prisma from './lib/prisma';
-import { corsRootDomain, env, isProduction } from './lib/env';
+import { corsAllowedHost, env, isProduction } from './lib/env';
 import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
 import { attendanceMeRoutes } from './routes/attendance.routes';
@@ -49,8 +49,9 @@ registerNotificationHandlers();
  * se fait par jeton porteur (pas de cookie), donc pas la faille classique
  * « wildcard + credentials », mais ça laisse n'importe quel site fabriquer des
  * appels vers l'API et lire du JSON, dès qu'il obtient un jeton par un autre
- * moyen. Chaque école ayant son propre sous-domaine, une origine fixe unique
- * ne suffirait pas : on autorise le domaine racine et tous ses sous-domaines.
+ * moyen. Une seule origine autorisée désormais (`corsAllowedHost`, dérivée de
+ * `WEB_APP_URL`) : plus de sous-domaine par école à wildcarder, le JWT seul
+ * fait autorité pour l'identité de l'école.
  *
  * Sans en-tête `Origin` (health check, appel serveur-à-serveur, tests) :
  * toujours autorisé — cet en-tête n'existe que pour les requêtes navigateur
@@ -69,7 +70,7 @@ function isAllowedOrigin(
       return callback(null, true);
     }
 
-    if (corsRootDomain && (hostname === corsRootDomain || hostname.endsWith(`.${corsRootDomain}`))) {
+    if (corsAllowedHost && hostname === corsAllowedHost) {
       return callback(null, true);
     }
 
