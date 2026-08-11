@@ -106,16 +106,14 @@ export const isProduction = env.NODE_ENV === 'production';
 export const webAppUrl = (env.WEB_APP_URL ?? env.APP_BASE_URL).replace(/\/+$/, '');
 
 /**
- * Domaine racine du front (les deux derniers segments de son nom d'hôte,
- * ex. `gesnotes.app` que `WEB_APP_URL` vaille `https://gesnotes.app` ou
- * `https://app.gesnotes.app`). Sert de base à la liste blanche CORS : chaque
- * école a son propre sous-domaine (`ecole-x.gesnotes.app`), une origine
- * fixe unique ne suffirait pas.
+ * Nom d'hôte de l'application web (`WEB_APP_URL`), seule origine autorisée
+ * en cross-origin (voir `isAllowedOrigin` dans `app.ts`). Le JWT seul fait
+ * autorité pour l'école d'une requête : aucun sous-domaine par école n'existe
+ * plus, une unique origine fixe suffit.
  */
-export const corsRootDomain: string | null = (() => {
+export const corsAllowedHost: string | null = (() => {
   try {
-    const labels = new URL(webAppUrl).hostname.split('.');
-    return labels.length >= 2 ? labels.slice(-2).join('.') : labels[0] ?? null;
+    return new URL(webAppUrl).hostname;
   } catch {
     return null;
   }
