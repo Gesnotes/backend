@@ -50,7 +50,7 @@ beforeEach(async () => {
       }),
     );
   }
-  await prisma.studentParent.create({ data: { studentId: students[0]!.id, parentUserId: parent.id } });
+  await prisma.studentParent.create({ data: { schoolId: schoolA.id, studentId: students[0]!.id, parentUserId: parent.id } });
 });
 
 afterAll(async () => {

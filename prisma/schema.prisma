@@ -398,12 +398,20 @@ model Student {
 }
 
 // Lien élève ↔ parent (un enfant peut avoir plusieurs parents/tuteurs)
+//
+// `schoolId` est dénormalisé et partagé par les deux clés étrangères
+// composites, comme pour TeacherAssignment : la base refuse désormais un
+// lien qui mélangerait un élève et un parent de deux établissements. Seul
+// `attachParent` (student.service.ts) écrit ici aujourd'hui et vérifie déjà
+// les deux côtés — ce garde-fou protège tout futur point d'écriture qui
+// oublierait ce contrôle applicatif.
 model StudentParent {
+  schoolId     Int @map("school_id")
   studentId    Int @map("student_id")
   parentUserId Int @map("parent_user_id")
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  parent  User    @relation(fields: [parentUserId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  parent  User    @relation(fields: [parentUserId, schoolId], references: [id, schoolId], onDelete: Cascade)
 
   @@id([studentId, parentUserId])
   @@map("student_parents")

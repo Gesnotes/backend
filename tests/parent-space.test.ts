@@ -66,8 +66,8 @@ beforeEach(async () => {
     data: { schoolId: school.id, classId: classe.id, firstName: 'Ben', lastName: 'Beta' },
   });
 
-  await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parentA.id } });
-  await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: parentB.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ana.id, parentUserId: parentA.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ben.id, parentUserId: parentB.id } });
 
   noteAna = await seedGrade({
     schoolId: school.id,

@@ -530,7 +530,7 @@ describe('archivage et suppression', () => {
     const ana = await addStudent('Ana', 'Alpha');
     await addGrade(ana.id, 14);
     const parent = await createUser({ schoolId: schoolA.id, email: 'parent@a.test', role: 'parent' });
-    await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parent.id } });
+    await prisma.studentParent.create({ data: { schoolId: schoolA.id, studentId: ana.id, parentUserId: parent.id } });
     await prisma.attendance.create({
       data: { schoolId: schoolA.id, studentId: ana.id, classId: klass.id, date: new Date(), status: 'present' },
     });
