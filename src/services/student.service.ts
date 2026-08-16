@@ -5,10 +5,14 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { computeStudentResult } from './grading/grading.service';
 import { contactFields, identityFields } from './userFields';
 import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
 import { parseCsv, toCsv, type CsvCell } from '../lib/csv';
 import { sendInvitation } from './invitation.service';
+
+const RECENT_ATTENDANCE_LIMIT = 10;
+const RECENT_GRADES_LIMIT = 10;
 
 export const STUDENTS_PAGE_SIZE = 100;
 
@@ -420,6 +424,64 @@ function contactOf(parent: object): string {
 
 export async function getStudent(auth: AuthPayload, id: number) {
   return loadStudent(auth.schoolId, id, parentSelectFor(auth), await scopeFor(auth));
+}
+
+/**
+ * Fiche complète d'un élève : identité, classe, parents (déjà couverts par
+ * `getStudent`, qui porte aussi le contrôle d'accès — un enseignant n'obtient
+ * la suite que s'il a le droit de voir cet élève), moyennes par matière sur
+ * la période choisie, présence et notes les plus récentes.
+ *
+ * `termId` omis : aucune période n'est encore ouverte, ou aucune n'est
+ * sélectionnée côté client — le bulletin vaut alors `null` plutôt que
+ * d'échouer, comme le reste du tableau de bord (`dashboard.service.ts`).
+ *
+ * Les notes/moyennes ne sont pas bornées aux matières de l'enseignant
+ * appelant : `computeStudentResult` fait déjà de même pour le bulletin de
+ * classe (`bulletin.service.ts`), accessible à qui peut voir la classe — la
+ * fiche élève suit la même règle plutôt que d'en inventer une nouvelle.
+ */
+export async function getStudentDetail(auth: AuthPayload, id: number, termId?: number) {
+  const identity = await getStudent(auth, id);
+
+  const [bulletin, presence, recentGrades] = await Promise.all([
+    termId !== undefined ? computeStudentResult(auth.schoolId, id, termId) : null,
+    prisma.attendance.findMany({
+      where: { studentId: id, schoolId: auth.schoolId },
+      orderBy: { date: 'desc' },
+      take: RECENT_ATTENDANCE_LIMIT,
+      select: { id: true, date: true, status: true, comment: true },
+    }),
+    prisma.grade.findMany({
+      where: { studentId: id, schoolId: auth.schoolId },
+      orderBy: { createdAt: 'desc' },
+      take: RECENT_GRADES_LIMIT,
+      select: {
+        id: true,
+        value: true,
+        maxValue: true,
+        createdAt: true,
+        subject: { select: { id: true, name: true } },
+        gradeType: { select: { label: true } },
+        term: { select: { id: true, label: true } },
+      },
+    }),
+  ]);
+
+  return {
+    ...identity,
+    bulletin,
+    presence,
+    dernieresNotes: recentGrades.map((grade) => ({
+      id: grade.id,
+      value: Number(grade.value),
+      maxValue: Number(grade.maxValue),
+      createdAt: grade.createdAt,
+      matiere: grade.subject,
+      type: { label: grade.gradeType.label },
+      periode: grade.term,
+    })),
+  };
 }
 
 /**

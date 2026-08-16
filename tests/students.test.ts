@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedGrade } from './helpers';
+import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedAttendance, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -446,6 +446,99 @@ describe('association parent ↔ élève', () => {
     const parent = await createUser({ schoolId: schoolA.id, email: 'p@a.test', role: 'parent' });
 
     const res = await api(adminToken).delete(`/students/${created.body.id}/parents/${parent.id}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /students/:id/detail — fiche élève', () => {
+  it('rassemble identité, parents, bulletin, présence et dernières notes', async () => {
+    const created = await newStudent();
+    const studentId = created.body.id;
+
+    const parent = await createUser({ schoolId: schoolA.id, email: 'p@a.test', role: 'parent' });
+    await api(adminToken).post(`/students/${studentId}/parents`).send({ parentUserId: parent.id });
+
+    const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
+    const subject = await prisma.subject.create({ data: { schoolId: schoolA.id, name: 'Maths' } });
+    // La moyenne de matière exige un devoir ET une composition (règle
+    // établie ailleurs, voir grading-service.test.ts) : les deux sont
+    // nécessaires ici pour obtenir une moyenne non nulle.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
+    });
+    const composition = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
+    });
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId,
+      subjectId: subject.id,
+      gradeTypeId: devoir.id,
+      termId: term.id,
+      value: 15,
+    });
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId,
+      subjectId: subject.id,
+      gradeTypeId: composition.id,
+      termId: term.id,
+      value: 15,
+    });
+    await seedAttendance({
+      schoolId: schoolA.id,
+      studentId,
+      classId: klass.id,
+      date: '2026-01-10',
+      status: 'absent',
+    });
+
+    const res = await api(adminToken).get(`/students/${studentId}/detail?term_id=${term.id}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(studentId);
+    expect(res.body.classe.name).toBe('6e A');
+    expect(res.body.parents).toHaveLength(1);
+    expect(res.body.bulletin.average).toBe(15);
+    expect(res.body.bulletin.subjects).toHaveLength(1);
+    expect(res.body.presence).toHaveLength(1);
+    expect(res.body.presence[0]).toMatchObject({ status: 'absent' });
+    expect(res.body.dernieresNotes).toHaveLength(2);
+    expect(res.body.dernieresNotes[0]).toMatchObject({
+      value: 15,
+      maxValue: 20,
+      matiere: { name: 'Maths' },
+    });
+  });
+
+  it('renvoie un bulletin nul sans période choisie', async () => {
+    const created = await newStudent();
+    const res = await api(adminToken).get(`/students/${created.body.id}/detail`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletin).toBeNull();
+    expect(res.body.presence).toEqual([]);
+    expect(res.body.dernieresNotes).toEqual([]);
+  });
+
+  it("refuse un élève hors du périmètre de l'enseignant", async () => {
+    const autre = await prisma.class.create({
+      data: { schoolId: schoolA.id, name: '5e A', level: '5e' },
+    });
+    const horsPerimetre = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: autre.id, firstName: 'Ben', lastName: 'Beta' },
+    });
+
+    const res = await api(teacherToken).get(`/students/${horsPerimetre.id}/detail`);
+    expect(res.status).toBe(404);
+  });
+
+  it("refuse un élève d'une autre école", async () => {
+    const other = await prisma.class.create({ data: { schoolId: schoolB.id, name: '6e A', level: '6e' } });
+    const foreign = await prisma.student.create({
+      data: { schoolId: schoolB.id, classId: other.id, firstName: 'X', lastName: 'Y' },
+    });
+
+    const res = await api(adminToken).get(`/students/${foreign.id}/detail`);
     expect(res.status).toBe(404);
   });
 });
