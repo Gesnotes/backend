@@ -251,17 +251,35 @@ describe('GET /admin/dashboard', () => {
     expect((await get(tokenProf, '/admin/dashboard')).status).toBe(403);
   });
 
+  /**
+   * `presence` ne compte que les classes mode `presence` depuis que les
+   * classes mode `notes` (le défaut de `classe6`/`classe5` ci-dessus) sont
+   * passées aux créneaux (voir le bloc `creneaux` plus bas) — d'où des
+   * classes garderie dédiées dans ces trois tests plutôt que `classe6`.
+   */
   it("expose la présence du jour, sans dépendre d'une période", async () => {
-    const present = await addStudent(classe6.id, 'Ana');
-    const absent = await addStudent(classe6.id, 'Ben');
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },
+    });
+    const sansAppel = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Petite section', level: 'maternelle', mode: 'presence' },
+    });
+    const present = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ana', lastName: 'Nom' },
+    });
+    const absent = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ben', lastName: 'Nom' },
+    });
     const today = new Date(new Date().toISOString().slice(0, 10));
     await prisma.attendance.create({
-      data: { schoolId: school.id, studentId: present.id, classId: classe6.id, date: today, status: 'present' },
+      data: { schoolId: school.id, studentId: present.id, classId: garderie.id, date: today, status: 'present' },
     });
     await prisma.attendance.create({
-      data: { schoolId: school.id, studentId: absent.id, classId: classe6.id, date: today, status: 'absent' },
+      data: { schoolId: school.id, studentId: absent.id, classId: garderie.id, date: today, status: 'absent' },
     });
-    await addStudent(classe5.id, 'Cid'); // 5e A : aucun appel aujourd'hui
+    await prisma.student.create({
+      data: { schoolId: school.id, classId: sansAppel.id, firstName: 'Cid', lastName: 'Nom' },
+    }); // aucun appel aujourd'hui
 
     const res = await get(tokenAdmin, '/admin/dashboard');
     expect(res.body.presence).toMatchObject({
@@ -270,14 +288,19 @@ describe('GET /admin/dashboard', () => {
       absents: 1,
       retards: 0,
     });
-    expect(res.body.presence.classesSansAppel).toEqual(['5e A']);
+    expect(res.body.presence.classesSansAppel).toEqual(['Petite section']);
   });
 
   it("utilise le jour transmis par le client plutôt que le jour UTC du serveur", async () => {
     // Une école à l'est de Greenwich peut avoir un jour local en avance sur
     // le jour UTC du serveur : le dashboard doit alors suivre le jour transmis
     // par le navigateur, pas recalculer « aujourd'hui » lui-même.
-    const eleve = await addStudent(classe6.id, 'Ana');
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },
+    });
+    const eleve = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ana', lastName: 'Nom' },
+    });
     const demainUtc = new Date();
     demainUtc.setUTCDate(demainUtc.getUTCDate() + 1);
     const demainIso = demainUtc.toISOString().slice(0, 10);
@@ -286,7 +309,7 @@ describe('GET /admin/dashboard', () => {
       data: {
         schoolId: school.id,
         studentId: eleve.id,
-        classId: classe6.id,
+        classId: garderie.id,
         date: new Date(demainIso),
         status: 'present',
       },
@@ -300,17 +323,70 @@ describe('GET /admin/dashboard', () => {
   });
 
   it("ignore la présence d'un autre jour que celui du jour", async () => {
-    const eleve = await addStudent(classe6.id, 'Ana');
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },
+    });
+    const eleve = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ana', lastName: 'Nom' },
+    });
     const hier = new Date();
     hier.setDate(hier.getDate() - 1);
     await prisma.attendance.create({
-      data: { schoolId: school.id, studentId: eleve.id, classId: classe6.id, date: hier, status: 'absent' },
+      data: { schoolId: school.id, studentId: eleve.id, classId: garderie.id, date: hier, status: 'absent' },
     });
 
     const res = await get(tokenAdmin, '/admin/dashboard');
     expect(res.body.presence.classesAvecAppel).toBe(0);
     expect(res.body.presence.absents).toBe(0);
-    expect(res.body.presence.classesSansAppel).toEqual(['5e A', '6e A']);
+    expect(res.body.presence.classesSansAppel).toEqual(['Garderie']);
+  });
+
+  it('expose les créneaux du jour pour les classes mode notes', async () => {
+    const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'] as const;
+    const todayWeekday = WEEKDAYS[new Date().getUTCDay()]!;
+    const autreJour = WEEKDAYS[(new Date().getUTCDay() + 1) % 7]!;
+
+    const prof2 = await createUser({ schoolId: school.id, email: 'prof2@a.test', role: 'teacher' });
+    const assignment = await prisma.teacherAssignment.create({
+      data: { schoolId: school.id, teacherUserId: prof2.id, classId: classe6.id, subjectId: maths.id },
+    });
+    const couvert = await prisma.timetableSlot.create({
+      data: { schoolId: school.id, teacherAssignmentId: assignment.id, dayOfWeek: todayWeekday, startMinute: 480, endMinute: 540 },
+    });
+    await prisma.timetableSlot.create({
+      data: { schoolId: school.id, teacherAssignmentId: assignment.id, dayOfWeek: todayWeekday, startMinute: 600, endMinute: 660 },
+    });
+    await prisma.timetableSlot.create({
+      // Un autre jour que celui du test : hors périmètre du résumé du jour.
+      data: { schoolId: school.id, teacherAssignmentId: assignment.id, dayOfWeek: autreJour, startMinute: 480, endMinute: 540 },
+    });
+
+    const eleve = await addStudent(classe6.id, 'Ana');
+    await prisma.attendance.create({
+      data: {
+        schoolId: school.id,
+        studentId: eleve.id,
+        classId: classe6.id,
+        slotId: couvert.id,
+        date: new Date(new Date().toISOString().slice(0, 10)),
+        status: 'absent',
+      },
+    });
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.creneaux).toMatchObject({
+      creneauxCouverts: 1,
+      creneauxTotal: 2,
+      absents: 1,
+      retards: 0,
+    });
+    expect(res.body.creneaux.creneauxNonCouverts).toHaveLength(1);
+    expect(res.body.creneaux.creneauxNonCouverts[0]).toMatchObject({
+      className: '6e A',
+      subjectName: 'Maths',
+      startTime: '10:00',
+      endTime: '11:00',
+    });
   });
 
   it('tient la charge sur 30 classes sans exploser en requêtes', async () => {
