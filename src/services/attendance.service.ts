@@ -1,25 +1,36 @@
 import prisma from '../lib/prisma';
 import type { AttendanceStatus } from '../generated/prisma/enums';
 import type { AuthPayload } from '../types/express';
-import { badRequest, forbidden, notFound } from '../errors/AppError';
+import { badRequest, conflict, forbidden, notFound } from '../errors/AppError';
 import { emitEvent } from '../lib/events';
 import { assertIsParentOf } from './parent.service';
+import { minutesToHHMM, weekdayOfIsoDate } from './schedule.service';
 
 /**
- * Saisie de la présence, un statut par élève et par jour.
+ * Saisie de la présence.
  *
- * Ancienne demande initiale (absence/retard) rejointe par le plan
- * maternelle/garderie : la présence sert aux deux usages — suivi
- * complémentaire aux notes pour une classe ordinaire, suivi **unique** pour
- * une classe en mode présence (maternelle). Le droit de saisie ne dépend donc
- * jamais du mode de la classe, seulement de qui la tient : l'administration,
- * sans restriction, ou l'unique enseignant référent désigné sur la classe —
- * pas « un des professeurs qui y enseignent », pour éviter qu'une classe à
- * plusieurs intervenants n'ait personne de responsable de l'appel.
+ * Deux flux cohabitent, selon `Class.mode` :
+ * - `presence` (maternelle/garderie) — un statut par élève et par jour,
+ *   saisi par l'administration ou l'unique enseignant référent désigné sur
+ *   la classe. Pas de créneau : un seul appel, pour éviter qu'une classe à
+ *   plusieurs intervenants n'ait personne de responsable.
+ * - `notes` — un statut par élève, par jour, **et par créneau** de l'emploi
+ *   du temps (voir schedule.service.ts) : chaque enseignant fait l'appel
+ *   pendant son propre cours, plusieurs fois par jour si sa matière y a
+ *   plusieurs créneaux.
+ *
+ * Les deux flux sont mutuellement exclusifs par classe : voir
+ * `assertCanTakeAttendanceForClass`/`assertCanTakeAttendanceForSlot`.
  */
-export async function assertCanTakeAttendance(auth: AuthPayload, classId: number) {
+export async function assertCanTakeAttendanceForClass(auth: AuthPayload, classId: number) {
   const klass = await prisma.class.findFirst({ where: { id: classId, schoolId: auth.schoolId } });
   if (!klass) throw notFound('Classe introuvable');
+
+  if (klass.mode !== 'presence') {
+    throw badRequest(
+      "Cette classe utilise l'appel par créneau : indiquez un créneau plutôt qu'une classe.",
+    );
+  }
 
   if (auth.role === 'admin') return klass;
 
@@ -30,6 +41,33 @@ export async function assertCanTakeAttendance(auth: AuthPayload, classId: number
   );
 }
 
+/**
+ * Droit de saisir la présence d'un créneau : l'administration sans
+ * restriction, ou l'enseignant précis de ce créneau — le référent de la
+ * classe n'a plus de droit spécial ici, il redevient un enseignant ordinaire
+ * pour ses propres créneaux. Pas de délégation/substitution en v1 :
+ * l'administration reste l'échappatoire pour remplacer un professeur absent.
+ */
+export async function assertCanTakeAttendanceForSlot(auth: AuthPayload, slotId: number, date: string) {
+  const slot = await prisma.timetableSlot.findFirst({
+    where: { id: slotId, schoolId: auth.schoolId },
+    include: { teacherAssignment: { include: { class: true, subject: true } } },
+  });
+  if (!slot) throw notFound('Créneau introuvable');
+  if (slot.archivedAt) throw conflict("Ce créneau a été retiré de l'emploi du temps.");
+  if (slot.teacherAssignment.class.mode !== 'notes') {
+    throw badRequest("Cette classe utilise l'appel classique, pas de créneau.");
+  }
+  if (weekdayOfIsoDate(date) !== slot.dayOfWeek) {
+    throw badRequest("Ce créneau n'a pas cours ce jour-là.");
+  }
+
+  if (auth.role === 'admin') return slot;
+  if (auth.role === 'teacher' && slot.teacherAssignment.teacherUserId === auth.userId) return slot;
+
+  throw forbidden("Seuls l'administration et l'enseignant de ce créneau peuvent saisir sa présence.");
+}
+
 export interface AttendanceEntry {
   studentId: number;
   /** `null` efface l'enregistrement du jour pour cet élève. */
@@ -37,8 +75,13 @@ export interface AttendanceEntry {
   comment?: string | null;
 }
 
-export interface AttendanceBatchInput {
-  classId: number;
+/** Classe (mode `presence`) ou créneau (mode `notes`) — jamais les deux. */
+export interface AttendanceTarget {
+  classId?: number;
+  slotId?: number;
+}
+
+export interface AttendanceBatchInput extends AttendanceTarget {
   date: string;
   entries: AttendanceEntry[];
 }
@@ -53,8 +96,48 @@ export interface AttendanceBatchResult {
   skipped: { studentId: number; reason: SkipReason }[];
 }
 
+interface ResolvedTarget {
+  classId: number;
+  className: string;
+  slotId: number | null;
+  slot: { subjectName: string; startTime: string; endTime: string } | null;
+}
+
 /**
- * Saisit la présence d'une classe pour un jour donné, en un lot.
+ * Résout une cible d'appel (classe ou créneau) vers la classe et le créneau
+ * effectifs, en vérifiant au passage le droit d'y saisir la présence.
+ * `date` sert à vérifier qu'un créneau a bien cours ce jour-là.
+ */
+async function resolveTarget(
+  auth: AuthPayload,
+  target: AttendanceTarget,
+  date: string,
+): Promise<ResolvedTarget> {
+  if (target.slotId !== undefined) {
+    const slot = await assertCanTakeAttendanceForSlot(auth, target.slotId, date);
+    return {
+      classId: slot.teacherAssignment.classId,
+      className: slot.teacherAssignment.class.name,
+      slotId: slot.id,
+      slot: {
+        subjectName: slot.teacherAssignment.subject.name,
+        startTime: minutesToHHMM(slot.startMinute),
+        endTime: minutesToHHMM(slot.endMinute),
+      },
+    };
+  }
+
+  if (target.classId === undefined) {
+    throw badRequest('Indiquez la classe ou le créneau.');
+  }
+
+  const klass = await assertCanTakeAttendanceForClass(auth, target.classId);
+  return { classId: klass.id, className: klass.name, slotId: null, slot: null };
+}
+
+/**
+ * Saisit la présence d'une classe (ou d'un créneau) pour un jour donné, en
+ * un lot.
  *
  * Reprend le pattern de `saveGradeBatch` : idempotent, transactionnel, les
  * événements ne partent qu'après le commit. `entries` décrit l'état voulu de
@@ -64,7 +147,7 @@ export async function saveAttendanceBatch(
   auth: AuthPayload,
   input: AttendanceBatchInput,
 ): Promise<AttendanceBatchResult> {
-  const klass = await assertCanTakeAttendance(auth, input.classId);
+  const resolved = await resolveTarget(auth, input, input.date);
   const date = new Date(input.date);
 
   const seen = new Set<number>();
@@ -80,16 +163,17 @@ export async function saveAttendanceBatch(
   // Seuls les élèves actuellement dans cette classe peuvent y recevoir une
   // présence : un élève déplacé entre-temps n'y figure plus.
   const students = await prisma.student.findMany({
-    where: { id: { in: [...seen] }, classId: klass.id, schoolId: auth.schoolId, archivedAt: null },
+    where: { id: { in: [...seen] }, classId: resolved.classId, schoolId: auth.schoolId, archivedAt: null },
     select: { id: true },
   });
   const validIds = new Set(students.map((student) => student.id));
 
-  // Un seul statut par élève et par jour (contrainte d'unicité) : la
-  // recherche ne filtre pas par classe, qui pourrait diverger si l'élève a
+  // Un seul statut par élève, par jour, et par créneau (contrainte
+  // d'unicité) : la recherche filtre par créneau (null pour les classes
+  // mode presence) mais pas par classe, qui pourrait diverger si l'élève a
   // changé de classe le jour même.
   const existing = await prisma.attendance.findMany({
-    where: { studentId: { in: [...validIds] }, date },
+    where: { studentId: { in: [...validIds] }, date, slotId: resolved.slotId },
     select: { id: true, studentId: true, classId: true, status: true, comment: true },
   });
   const byStudent = new Map(existing.map((record) => [record.studentId, record]));
@@ -120,7 +204,7 @@ export async function saveAttendanceBatch(
 
     const comment = entry.comment === undefined ? record.comment : entry.comment || null;
     const identical =
-      record.status === entry.status && record.classId === klass.id && record.comment === comment;
+      record.status === entry.status && record.classId === resolved.classId && record.comment === comment;
 
     if (identical) unchanged += 1;
     else toUpdate.push({ id: record.id, entry });
@@ -139,7 +223,7 @@ export async function saveAttendanceBatch(
         where: { id },
         data: {
           status: entry.status as AttendanceStatus,
-          classId: klass.id,
+          classId: resolved.classId,
           recordedByUserId: auth.userId,
           ...(entry.comment !== undefined ? { comment: entry.comment || null } : {}),
         },
@@ -153,7 +237,8 @@ export async function saveAttendanceBatch(
         data: {
           schoolId: auth.schoolId,
           studentId: entry.studentId,
-          classId: klass.id,
+          classId: resolved.classId,
+          slotId: resolved.slotId,
           date,
           status: entry.status as AttendanceStatus,
           comment: entry.comment || null,
@@ -175,7 +260,8 @@ export async function saveAttendanceBatch(
       attendanceId: record.id,
       schoolId: auth.schoolId,
       studentId: record.studentId,
-      classId: klass.id,
+      classId: resolved.classId,
+      slotId: resolved.slotId,
       status: record.status,
     });
   }
@@ -189,19 +275,19 @@ export async function saveAttendanceBatch(
   };
 }
 
-/** Feuille de présence d'une classe pour un jour : tous ses élèves, chacun avec son statut (ou aucun). */
-export async function getAttendanceSheet(auth: AuthPayload, classId: number, date: string) {
-  const klass = await assertCanTakeAttendance(auth, classId);
+/** Feuille de présence d'une classe ou d'un créneau pour un jour : tous ses élèves, chacun avec son statut (ou aucun). */
+export async function getAttendanceSheet(auth: AuthPayload, target: AttendanceTarget, date: string) {
+  const resolved = await resolveTarget(auth, target, date);
   const day = new Date(date);
 
   const [students, records] = await Promise.all([
     prisma.student.findMany({
-      where: { classId: klass.id, schoolId: auth.schoolId, archivedAt: null },
+      where: { classId: resolved.classId, schoolId: auth.schoolId, archivedAt: null },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
       select: { id: true, firstName: true, lastName: true },
     }),
     prisma.attendance.findMany({
-      where: { classId: klass.id, schoolId: auth.schoolId, date: day },
+      where: { classId: resolved.classId, schoolId: auth.schoolId, date: day, slotId: resolved.slotId },
       select: { studentId: true, status: true, comment: true },
     }),
   ]);
@@ -209,8 +295,10 @@ export async function getAttendanceSheet(auth: AuthPayload, classId: number, dat
   const byStudent = new Map(records.map((record) => [record.studentId, record]));
 
   return {
-    classId: klass.id,
-    className: klass.name,
+    classId: resolved.classId,
+    className: resolved.className,
+    slotId: resolved.slotId,
+    slot: resolved.slot,
     date,
     students: students.map((student) => {
       const record = byStudent.get(student.id);
@@ -242,8 +330,18 @@ export async function listChildAttendance(
     },
     orderBy: { date: 'desc' },
     take: 200,
-    select: { id: true, date: true, status: true, comment: true, classId: true },
+    select: {
+      id: true,
+      date: true,
+      status: true,
+      comment: true,
+      classId: true,
+      slot: { select: { teacherAssignment: { select: { subject: { select: { name: true } } } } } },
+    },
   });
 
-  return records;
+  return records.map(({ slot, ...record }) => ({
+    ...record,
+    subjectName: slot?.teacherAssignment.subject.name ?? null,
+  }));
 }

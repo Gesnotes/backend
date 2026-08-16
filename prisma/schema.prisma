@@ -473,8 +473,9 @@ model TimetableSlot {
   // Un créneau qui a déjà de la présence enregistrée est protégé par
   // Attendance.slot en RESTRICT, qui bloque alors toute la chaîne.
   teacherAssignment TeacherAssignment @relation(fields: [teacherAssignmentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  attendances       Attendance[]
 
-  // Cible de la future clé étrangère composite d'Attendance (PR2).
+  // Cible de la clé étrangère composite d'Attendance.
   @@unique([id, schoolId])
   @@index([schoolId, dayOfWeek, archivedAt])
   @@index([teacherAssignmentId, dayOfWeek, archivedAt])
@@ -590,6 +591,12 @@ model Attendance {
   schoolId         Int              @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
   studentId        Int              @map("student_id")
   classId          Int              @map("class_id")
+  // Créneau d'origine pour les classes mode `notes` — `null` pour les
+  // classes mode `presence`, qui gardent le flux historique (un appel/jour,
+  // admin ou référent, sans créneau). Comme `classId`, figé à la saisie :
+  // retirer un créneau de l'emploi du temps ne doit jamais réécrire une
+  // présence déjà enregistrée (voir TimetableSlot.slot en RESTRICT).
+  slotId           Int?             @map("slot_id")
   date             DateTime         @db.Date
   status           AttendanceStatus
   comment          String?          @db.Text
@@ -599,13 +606,20 @@ model Attendance {
   // Comme Grade s'ancre à son école via l'élève, la présence s'y ancre aussi
   // via la classe : les deux clés composites interdisent un enregistrement
   // dont le school_id dénormalisé diverge de celui de l'élève ou de la classe.
-  student    Student @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  class      Class   @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
-  recordedBy User?   @relation(fields: [recordedByUserId], references: [id])
+  student    Student        @relation(fields: [studentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  class      Class          @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  slot       TimetableSlot? @relation(fields: [slotId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: Cascade)
+  recordedBy User?          @relation(fields: [recordedByUserId], references: [id])
 
-  // Un seul statut par élève et par jour — la granularité décidée pour la v1.
-  @@unique([studentId, date])
+  // Un seul statut par élève, par jour, et par créneau. Prisma ne sait pas
+  // exprimer un index unique PARTIEL (WHERE slot_id IS [NOT] NULL) :
+  // @@unique([studentId, date, slotId]) laisserait passer deux lignes à
+  // slot_id NULL comme non-dupliquées (NULL <> NULL en SQL), ce qui
+  // permettrait deux statuts le même jour pour une classe mode `presence`.
+  // Les deux vrais index uniques sont posés à la main dans la migration SQL.
+  @@index([studentId, date, slotId])
   @@index([classId, date]) // porte la feuille de présence d'une classe pour un jour
+  @@index([slotId, date]) // porte la feuille de présence d'un créneau pour un jour
   @@map("attendances")
 }
 

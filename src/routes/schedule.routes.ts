@@ -125,3 +125,21 @@ scheduleRoutes.post(
     res.json(await scheduleService.restoreSlot(schoolIdOf(req), id, slotId));
   },
 );
+
+/**
+ * /teachers/me/schedule — mes créneaux du jour.
+ *
+ * Ce qu'un enseignant voit pour choisir sur quel cours faire l'appel (voir
+ * TeacherAttendancePage côté frontend) : uniquement les siens, jamais ceux
+ * d'un collègue.
+ */
+export const scheduleMeRoutes = Router();
+
+scheduleMeRoutes.use(requireAuth, requireRole('teacher'));
+
+const myScheduleQuery = z.object({ date: z.iso.date() });
+
+scheduleMeRoutes.get('/schedule', validate({ query: myScheduleQuery }), async (req, res) => {
+  const { date } = req.query as unknown as z.infer<typeof myScheduleQuery>;
+  res.json(await scheduleService.listMySlotsForDate(authOf(req), date));
+});

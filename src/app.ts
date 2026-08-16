@@ -20,7 +20,7 @@ import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
-import { scheduleRoutes } from './routes/schedule.routes';
+import { scheduleMeRoutes, scheduleRoutes } from './routes/schedule.routes';
 import { schoolRoutes } from './routes/school.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
@@ -171,6 +171,7 @@ export function createApp() {
   app.use('/teachers/me', teacherMeRoutes);
   app.use('/teachers/me', evaluationMeRoutes);
   app.use('/teachers/me', attendanceMeRoutes);
+  app.use('/teachers/me', scheduleMeRoutes);
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.

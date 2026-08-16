@@ -307,6 +307,7 @@ describe('notification des parents en cas d’absence ou de retard', () => {
       schoolId: schoolA.id,
       studentId: students[0]!.id,
       classId: klass.id,
+      slotId: null,
       status: 'absent',
     });
 
@@ -332,6 +333,7 @@ describe('notification des parents en cas d’absence ou de retard', () => {
       schoolId: schoolA.id,
       studentId: students[0]!.id,
       classId: klass.id,
+      slotId: null,
       status: 'late',
     });
 
@@ -353,6 +355,7 @@ describe('notification des parents en cas d’absence ou de retard', () => {
       schoolId: schoolA.id,
       studentId: students[0]!.id,
       classId: klass.id,
+      slotId: null,
       status: 'absent',
     });
 
