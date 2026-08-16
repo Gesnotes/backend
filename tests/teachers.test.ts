@@ -146,6 +146,40 @@ describe('PATCH /teachers/:id', () => {
     expect(res.body.affectations[0].classId).toBe(other.id);
   });
 
+  it('préserve les id des affectations inchangées (un créneau y reste ancré)', async () => {
+    const created = await newTeacher('jean@a.test', [{ classId: classA.id, subjectId: subjectA.id }]);
+    const originalAssignmentId = created.body.affectations[0].id;
+
+    // Renvoyer la même liste (ce que fait TeacherModal à chaque sauvegarde,
+    // même pour ne changer que le téléphone) ne doit pas recréer la ligne.
+    const res = await api(adminToken)
+      .patch(`/teachers/${created.body.id}`)
+      .send({ phone: '97 00 00 00', assignments: [{ classId: classA.id, subjectId: subjectA.id }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.affectations).toHaveLength(1);
+    expect(res.body.affectations[0].id).toBe(originalAssignmentId);
+  });
+
+  it('refuse de retirer une affectation qui a encore des créneaux actifs', async () => {
+    const created = await newTeacher('jean@a.test', [{ classId: classA.id, subjectId: subjectA.id }]);
+    const assignmentId = created.body.affectations[0].id;
+    await prisma.timetableSlot.create({
+      data: {
+        schoolId: schoolA.id,
+        teacherAssignmentId: assignmentId,
+        dayOfWeek: 'lundi',
+        startMinute: 480,
+        endMinute: 540,
+      },
+    });
+
+    const res = await api(adminToken).patch(`/teachers/${created.body.id}`).send({ assignments: [] });
+
+    expect(res.status).toBe(409);
+    expect(await prisma.teacherAssignment.count({ where: { id: assignmentId } })).toBe(1);
+  });
+
   it('laisse les affectations intactes si le champ est absent', async () => {
     const created = await newTeacher('jean@a.test', [
       { classId: classA.id, subjectId: subjectA.id },

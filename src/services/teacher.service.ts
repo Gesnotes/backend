@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { revokeAllSessions } from './auth.service';
@@ -105,15 +106,7 @@ export async function createTeacher(
     });
 
     if (data.assignments?.length) {
-      await tx.teacherAssignment.createMany({
-        data: data.assignments.map((a) => ({
-          schoolId,
-          teacherUserId: created.id,
-          classId: a.classId,
-          subjectId: a.subjectId,
-        })),
-        skipDuplicates: true,
-      });
+      await reconcileAssignments(tx, schoolId, created.id, data.assignments);
     }
 
     return created;
@@ -128,9 +121,13 @@ export async function createTeacher(
  * Modifie les informations et, si `assignments` est fourni, remplace
  * intégralement les affectations.
  *
- * Remplacement et non fusion : c'est ce qu'attend un écran d'édition qui
- * envoie la liste complète des classes cochées. Ne pas fournir le champ laisse
- * les affectations inchangées.
+ * Remplacement et non fusion côté résultat : c'est ce qu'attend un écran
+ * d'édition qui envoie la liste complète des classes cochées. Ne pas fournir
+ * le champ laisse les affectations inchangées. `reconcileAssignments` fait
+ * ce remplacement en ne touchant que ce qui change (voir sa documentation) :
+ * une affectation déjà présente garde son `id`, qu'un futur créneau
+ * d'emploi du temps pourra référencer sans craindre qu'une simple
+ * modification du téléphone de l'enseignant ne l'efface.
  */
 export async function updateTeacher(
   schoolId: number,
@@ -169,18 +166,7 @@ export async function updateTeacher(
     });
 
     if (data.assignments) {
-      await tx.teacherAssignment.deleteMany({ where: { teacherUserId: id } });
-      if (data.assignments.length) {
-        await tx.teacherAssignment.createMany({
-          data: data.assignments.map((a) => ({
-            schoolId,
-            teacherUserId: id,
-            classId: a.classId,
-            subjectId: a.subjectId,
-          })),
-          skipDuplicates: true,
-        });
-      }
+      await reconcileAssignments(tx, schoolId, id, data.assignments);
     }
   });
 
@@ -314,4 +300,52 @@ async function assertAssignmentsBelongToSchool(schoolId: number, assignments: As
 
   if (classCount !== classIds.length) throw notFound('Classe introuvable dans cette école');
   if (subjectCount !== subjectIds.length) throw notFound('Matière introuvable dans cette école');
+}
+
+/**
+ * Fait converger les `TeacherAssignment` d'un enseignant vers `desired`, en
+ * ne touchant que ce qui change — retire ce qui n'y est plus, ajoute ce qui
+ * manque, laisse intactes (même `id`) les affectations déjà présentes.
+ *
+ * Un simple delete-all/create-all serait plus court, mais `TeacherModal`
+ * renvoie la liste complète des affectations à chaque sauvegarde, même pour
+ * ne changer que le téléphone : ça recréerait systématiquement toutes les
+ * lignes avec de nouveaux `id`. Inoffensif tant que rien ne les référence,
+ * mais un créneau d'emploi du temps (`TimetableSlot.teacherAssignmentId`)
+ * s'ancre justement à cet `id` — le perdre à chaque édition de fiche
+ * enseignant supprimerait en cascade tout son planning. On refuse aussi de
+ * retirer une affectation qui a encore des créneaux actifs : la classe
+ * doit d'abord être vidée de son emploi du temps depuis sa propre fiche.
+ */
+async function reconcileAssignments(
+  tx: Prisma.TransactionClient,
+  schoolId: number,
+  teacherUserId: number,
+  desired: AssignmentInput[],
+): Promise<void> {
+  const existing = await tx.teacherAssignment.findMany({ where: { teacherUserId, schoolId } });
+  const key = (a: { classId: number; subjectId: number }) => `${a.classId}:${a.subjectId}`;
+  const desiredKeys = new Set(desired.map(key));
+
+  const toRemove = existing.filter((a) => !desiredKeys.has(key(a)));
+  if (toRemove.length) {
+    const withSlots = await tx.timetableSlot.count({
+      where: { teacherAssignmentId: { in: toRemove.map((a) => a.id) }, archivedAt: null },
+    });
+    if (withSlots > 0) {
+      throw conflict(
+        "Impossible de retirer cette affectation : elle a des créneaux dans l'emploi du temps. Supprimez-les d'abord depuis la fiche de la classe.",
+      );
+    }
+    await tx.teacherAssignment.deleteMany({ where: { id: { in: toRemove.map((a) => a.id) } } });
+  }
+
+  const existingKeys = new Set(existing.map(key));
+  const toCreate = desired.filter((a) => !existingKeys.has(key(a)));
+  if (toCreate.length) {
+    await tx.teacherAssignment.createMany({
+      data: toCreate.map((a) => ({ schoolId, teacherUserId, classId: a.classId, subjectId: a.subjectId })),
+      skipDuplicates: true,
+    });
+  }
 }

@@ -3,7 +3,7 @@ import argon2 from 'argon2';
 import prisma from '../src/lib/prisma';
 import { Prisma } from '../src/generated/prisma/client';
 import { normalizeEmail, normalizePhone } from '../src/lib/normalize';
-import type { Role } from '../src/generated/prisma/enums';
+import type { Role, Weekday } from '../src/generated/prisma/enums';
 
 export const TEST_PASSWORD = 'motdepasse123';
 
@@ -17,6 +17,7 @@ export async function resetDatabase() {
   await prisma.enrollmentDecision.deleteMany();
   await prisma.evaluation.deleteMany();
   await prisma.subjectCoefficient.deleteMany();
+  await prisma.timetableSlot.deleteMany();
   await prisma.teacherAssignment.deleteMany();
   await prisma.studentParent.deleteMany();
   await prisma.student.deleteMany();
@@ -137,6 +138,17 @@ export function seedAttendance(data: {
       recordedByUserId: data.recordedByUserId ?? null,
     },
   });
+}
+
+/** Crée un créneau d'emploi du temps de test. */
+export function seedTimetableSlot(data: {
+  schoolId: number;
+  teacherAssignmentId: number;
+  dayOfWeek: Weekday;
+  startMinute: number;
+  endMinute: number;
+}) {
+  return prisma.timetableSlot.create({ data });
 }
 
 export function createSchool(identifier: string, name = `École ${identifier}`) {
