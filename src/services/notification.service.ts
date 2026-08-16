@@ -4,6 +4,7 @@ import { logger } from '../lib/logger';
 import { webAppUrl } from '../lib/env';
 import { onEvent } from '../lib/events';
 import { pushSender } from '../lib/push';
+import { minutesToHHMM } from './schedule.service';
 
 /**
  * Notifications push aux parents.
@@ -97,6 +98,13 @@ export async function notifyParentsOfAttendance(event: AttendanceEvent) {
         },
       },
       class: { select: { name: true } },
+      slot: {
+        select: {
+          startMinute: true,
+          endMinute: true,
+          teacherAssignment: { select: { subject: { select: { name: true } } } },
+        },
+      },
     },
   });
 
@@ -112,11 +120,17 @@ export async function notifyParentsOfAttendance(event: AttendanceEvent) {
   if (devices.length === 0) return;
 
   // Le nom de l'enfant en tête, un ton neutre plutôt qu'une alerte : une
-  // absence est une information pour la famille, pas une urgence.
+  // absence est une information pour la famille, pas une urgence. Sur une
+  // classe mode `notes`, on précise la matière et l'horaire : sans ça, deux
+  // absences le même jour (deux créneaux différents) produiraient deux
+  // notifications identiques, indiscernables l'une de l'autre.
+  const when = attendance.slot
+    ? `en ${attendance.slot.teacherAssignment.subject.name} (${minutesToHHMM(attendance.slot.startMinute)}-${minutesToHHMM(attendance.slot.endMinute)})`
+    : "aujourd'hui";
   const title =
     attendance.status === 'absent'
-      ? `${attendance.student.firstName} était absent(e) aujourd'hui`
-      : `${attendance.student.firstName} est arrivé(e) en retard aujourd'hui`;
+      ? `${attendance.student.firstName} était absent(e) ${when}`
+      : `${attendance.student.firstName} est arrivé(e) en retard ${when}`;
 
   const message = {
     title,

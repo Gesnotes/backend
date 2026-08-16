@@ -15,6 +15,8 @@ export interface AttendanceEvent {
   schoolId: number;
   studentId: number;
   classId: number;
+  /** Créneau d'origine (mode `notes`), `null` pour une classe mode `presence`. */
+  slotId: number | null;
   /** Toujours 'absent' ou 'late' : le 'present' ne notifie personne. */
   status: 'absent' | 'late';
 }

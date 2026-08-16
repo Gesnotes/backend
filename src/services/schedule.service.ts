@@ -46,6 +46,23 @@ export interface SlotView {
   archivedAt: string | null;
 }
 
+/**
+ * Jour de semaine d'une date ISO (`"2026-08-17"` → `lundi`).
+ *
+ * `new Date("YYYY-MM-DD")` est toujours interprétée en UTC minuit par le
+ * moteur JS (spec ECMA-262) : `getUTCDay()` donne donc le bon jour quel que
+ * soit le fuseau du serveur. Different de « quel jour sommes-nous
+ * maintenant ? » (déjà source d'un bug UTC-vs-fuseau-école ailleurs, voir
+ * dashboard.service.ts) — ici la date est déjà choisie par l'appelant, il
+ * ne reste qu'à la convertir en jour de semaine, une opération sans
+ * ambiguïté de fuseau.
+ */
+const WEEKDAYS_BY_JS_DAY: Weekday[] = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+
+export function weekdayOfIsoDate(date: string): Weekday {
+  return WEEKDAYS_BY_JS_DAY[new Date(date).getUTCDay()]!;
+}
+
 export function minutesToHHMM(minutes: number): string {
   const hours = Math.floor(minutes / 60).toString().padStart(2, '0');
   const rest = (minutes % 60).toString().padStart(2, '0');
@@ -362,4 +379,26 @@ export async function deleteSlotPermanently(
   }
 
   await prisma.timetableSlot.delete({ where: { id } });
+}
+
+/**
+ * Mes créneaux du jour : ce qu'un enseignant voit pour choisir sur quel
+ * cours faire l'appel — voir `assertCanTakeAttendanceForSlot`
+ * (attendance.service.ts) pour le contrôle d'accès à la saisie elle-même.
+ */
+export async function listMySlotsForDate(auth: AuthPayload, date: string): Promise<SlotView[]> {
+  const dayOfWeek = weekdayOfIsoDate(date);
+
+  const slots = await prisma.timetableSlot.findMany({
+    where: {
+      schoolId: auth.schoolId,
+      archivedAt: null,
+      dayOfWeek,
+      teacherAssignment: { teacherUserId: auth.userId },
+    },
+    orderBy: { startMinute: 'asc' },
+    select: slotSelect,
+  });
+
+  return slots.map(toView);
 }
