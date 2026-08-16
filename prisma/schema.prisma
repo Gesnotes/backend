@@ -427,10 +427,58 @@ model TeacherAssignment {
   teacher User    @relation(fields: [teacherUserId, schoolId], references: [id, schoolId], onDelete: Cascade)
   class   Class   @relation(fields: [classId, schoolId], references: [id, schoolId], onDelete: Cascade)
   subject Subject @relation(fields: [subjectId, schoolId], references: [id, schoolId], onDelete: Cascade)
+  slots   TimetableSlot[]
 
   @@unique([teacherUserId, classId, subjectId])
+  // Cible de la clé étrangère composite de TimetableSlot.
+  @@unique([id, schoolId])
   @@index([schoolId])
   @@map("teacher_assignments")
+}
+
+// Jour de semaine d'un créneau d'emploi du temps.
+enum Weekday {
+  lundi
+  mardi
+  mercredi
+  jeudi
+  vendredi
+  samedi
+  dimanche
+
+  @@map("weekday")
+}
+
+// Créneau récurrent de l'emploi du temps : jour de semaine + horaire, pour
+// une affectation enseignant×classe×matière. Plusieurs créneaux de la même
+// matière le même jour sont possibles (ex. Maths 8h-9h et 14h-15h).
+//
+// Ne concerne que les classes en mode `notes` — les classes `presence`
+// (maternelle/garderie) gardent le flux historique : admin ou référent,
+// un appel par jour, sans créneau (voir attendance.service.ts).
+model TimetableSlot {
+  id                  Int       @id @default(autoincrement())
+  schoolId            Int       @map("school_id") // dénormalisé : isolation multi-écoles sans jointure
+  teacherAssignmentId Int       @map("teacher_assignment_id")
+  dayOfWeek           Weekday   @map("day_of_week")
+  // Minutes depuis minuit (0-1439) plutôt que @db.Time : évite toute
+  // ambiguïté de fuseau horaire pour comparer deux horaires du même jour —
+  // déjà eu ce bug une fois sur "aujourd'hui" calculé en UTC serveur, voir
+  // dashboard.service.ts::getAttendanceSummary.
+  startMinute         Int       @map("start_minute")
+  endMinute           Int       @map("end_minute")
+  archivedAt          DateTime? @map("archived_at") @db.Timestamp(6)
+
+  // Cascade : supprimer une affectation emporte ses créneaux *inutilisés*.
+  // Un créneau qui a déjà de la présence enregistrée est protégé par
+  // Attendance.slot en RESTRICT, qui bloque alors toute la chaîne.
+  teacherAssignment TeacherAssignment @relation(fields: [teacherAssignmentId, schoolId], references: [id, schoolId], onDelete: Cascade)
+
+  // Cible de la future clé étrangère composite d'Attendance (PR2).
+  @@unique([id, schoolId])
+  @@index([schoolId, dayOfWeek, archivedAt])
+  @@index([teacherAssignmentId, dayOfWeek, archivedAt])
+  @@map("timetable_slots")
 }
 
 // Appareils des utilisateurs (tokens push FCM) — un parent peut en avoir plusieurs

@@ -20,6 +20,7 @@ import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
+import { scheduleRoutes } from './routes/schedule.routes';
 import { schoolRoutes } from './routes/school.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
@@ -148,6 +149,12 @@ export function createApp() {
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);
   app.use('/classes', classRoutes);
+  // Avant enrollmentRoutes : sa garde de rôle (admin+enseignant) est plus
+  // large que celle d'enrollmentRoutes (admin seul), qui intercepterait sinon
+  // en 403 tout enseignant sur un chemin /classes/:id/... qu'elle ne gère
+  // pas elle-même (son `.use(requireRole('admin'))` n'est pas scopé à ses
+  // seules routes).
+  app.use('/classes', scheduleRoutes);
   app.use('/classes', enrollmentRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);

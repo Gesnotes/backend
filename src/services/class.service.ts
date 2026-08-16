@@ -94,7 +94,7 @@ export async function getClass(schoolId: number, id: number) {
  * fin de classement — un élève non évalué n'est pas dernier de la classe.
  */
 export async function getClassDetail(auth: AuthPayload, id: number, termId: number) {
-  await assertCanViewClass(auth, id);
+  const klass = await assertCanViewClass(auth, id);
 
   const bulletin = await computeClassBulletin(auth.schoolId, id, termId);
 
@@ -115,6 +115,9 @@ export async function getClassDetail(auth: AuthPayload, id: number, termId: numb
 
   return {
     ...bulletinPublic,
+    // Nécessaire au frontend pour n'afficher l'emploi du temps que sur les
+    // classes en mode `notes` (voir ClassSchedulePanel).
+    mode: klass.mode,
     students: ranked.map((student, index) => ({
       ...student,
       rang: student.average === null ? null : index + 1,
@@ -205,6 +208,11 @@ async function assertHomeroomTeacherValid(schoolId: number, homeroomTeacherId: n
  * `createEvaluation` (une classe présence ne peut plus en recevoir de
  * nouvelles). Refusé plutôt que de laisser les évaluations existantes orphelines
  * d'un mode qui ne les autorise plus.
+ *
+ * Même refus si la classe a un emploi du temps actif : le mode présence n'a
+ * pas de notion de créneau (voir schedule.service.ts), et repasser une classe
+ * en présence laisserait ses créneaux orphelins d'un mode qui ne les
+ * comprend plus.
  */
 async function assertModeSwitchAllowed(classId: number, nextMode: ClassMode) {
   if (nextMode !== 'presence') return;
@@ -214,6 +222,16 @@ async function assertModeSwitchAllowed(classId: number, nextMode: ClassMode) {
     throw conflict(
       `Passage en mode présence impossible : ${evaluationCount} évaluation(s) existent déjà sur cette classe.`,
       { evaluationCount },
+    );
+  }
+
+  const slotCount = await prisma.timetableSlot.count({
+    where: { archivedAt: null, teacherAssignment: { classId } },
+  });
+  if (slotCount > 0) {
+    throw conflict(
+      `Passage en mode présence impossible : ${slotCount} créneau(x) d'emploi du temps existent déjà sur cette classe.`,
+      { slotCount },
     );
   }
 }
