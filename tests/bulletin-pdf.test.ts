@@ -55,8 +55,8 @@ beforeEach(async () => {
     data: { schoolId: school.id, classId: classe.id, firstName: 'Ben', lastName: 'Beta' },
   });
 
-  await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parent.id } });
-  await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: autre.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ana.id, parentUserId: parent.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ben.id, parentUserId: autre.id } });
 
   // Devoir aligné sur la moyenne finale de chaque élève (15 pour Ana, 10 pour
   // Ben) : ajouter cette catégorie ne fait que passer le seuil de publication

@@ -598,7 +598,7 @@ export async function attachParent(
   });
   if (already) throw conflict('Ce parent est déjà associé à cet élève.');
 
-  await prisma.studentParent.create({ data: { studentId, parentUserId: parent.id } });
+  await prisma.studentParent.create({ data: { schoolId, studentId, parentUserId: parent.id } });
 
   return getStudentForAdmin(schoolId, studentId);
 }
