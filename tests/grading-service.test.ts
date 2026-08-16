@@ -246,6 +246,25 @@ describe('computeClassBulletin', () => {
     expect(premier.average).toBe(12.67);
   });
 
+  it("n'attribue pas à la nouvelle classe une note gagnée dans l'ancienne (élève déplacé)", async () => {
+    const otherClass = await prisma.class.create({
+      data: { schoolId: school.id, name: '5e A', level: '5e' },
+    });
+
+    // La note s'ancre à klass via son évaluation (seedGrade la crée sur la
+    // classe courante de l'élève, ici klass).
+    await addGrade(ana.id, maths.id, 'composition', 16);
+
+    // Réinscription en cours de période : Ana change de classe, son
+    // historique déjà noté ne doit pas suivre.
+    await prisma.student.update({ where: { id: ana.id }, data: { classId: otherClass.id } });
+
+    const nouvelleClasse = await computeClassBulletin(school.id, otherClass.id, term.id);
+    const anaDansNouvelle = nouvelleClasse.students.find((s) => s.studentId === ana.id)!;
+    expect(anaDansNouvelle.average).toBeNull();
+    expect(anaDansNouvelle.subjects).toHaveLength(0);
+  });
+
   it('refuse une classe ou une période d\'une autre école', async () => {
     const other = await createSchool('ecole-b');
     const otherClass = await prisma.class.create({

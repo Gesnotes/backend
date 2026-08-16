@@ -67,14 +67,20 @@ export async function computeClassBulletins(
       select: { id: true, classId: true, firstName: true, lastName: true },
     }),
     prisma.grade.findMany({
-      where: { schoolId, termId, student: { classId: { in: classIds }, archivedAt: null } },
+      // Ancrée à `evaluation.classId`, jamais à `student.classId` : une note
+      // reste attachée à la classe où elle a été saisie, pas à la classe
+      // courante de l'élève (voir le commentaire de Grade dans schema.prisma).
+      // Un élève déplacé en cours de période ne doit ni perdre son historique
+      // dans son ancienne classe, ni le voir apparaître à tort dans la
+      // nouvelle.
+      where: { schoolId, termId, student: { archivedAt: null }, evaluation: { classId: { in: classIds } } },
       select: {
         studentId: true,
         subjectId: true,
         gradeTypeId: true,
         value: true,
         maxValue: true,
-        student: { select: { classId: true } },
+        evaluation: { select: { classId: true } },
         gradeType: { select: { id: true, code: true, label: true, weight: true, position: true } },
         subject: { select: { id: true, name: true, coefficient: true } },
       },
@@ -87,7 +93,7 @@ export async function computeClassBulletins(
       klass,
       term,
       allStudents.filter((s) => s.classId === klass.id),
-      allGrades.filter((g) => g.student.classId === klass.id),
+      allGrades.filter((g) => g.evaluation.classId === klass.id),
       allCoefficients.filter((c) => c.classId === klass.id),
     ),
   );
