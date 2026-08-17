@@ -29,6 +29,7 @@ const listQuery = z.object({
   class_id: z.coerce.number().int().positive().optional(),
   include_archived: boolFlag,
   page: z.coerce.number().int().positive().default(1),
+  search: z.string().trim().max(200).optional(),
 });
 
 const exportQuery = z.object({
@@ -146,12 +147,13 @@ studentRoutes.get(
   requireRole('admin', 'teacher'),
   validate({ query: listQuery }),
   async (req, res) => {
-    const { class_id, include_archived, page } = req.query as unknown as z.infer<typeof listQuery>;
+    const { class_id, include_archived, page, search } = req.query as unknown as z.infer<typeof listQuery>;
     res.json(
       await studentService.listStudents(authOf(req), {
         classId: class_id,
         includeArchived: include_archived,
         page,
+        search,
       }),
     );
   },

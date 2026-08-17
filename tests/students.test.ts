@@ -104,6 +104,23 @@ describe('CRUD /students', () => {
     expect((await api(adminToken).get(`/students?class_id=${klass.id}`)).body.students).toHaveLength(1);
   });
 
+  it('filtre par recherche texte, insensible à la casse et au prénom comme au nom', async () => {
+    await newStudent(); // Ana Alpha
+    await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: klass.id, firstName: 'Ben', lastName: 'Beta' },
+    });
+
+    const byLastName = await api(adminToken).get('/students?search=alph');
+    expect(byLastName.body.students).toHaveLength(1);
+    expect(byLastName.body.students[0].firstName).toBe('Ana');
+
+    const byFirstName = await api(adminToken).get('/students?search=BEN');
+    expect(byFirstName.body.students).toHaveLength(1);
+    expect(byFirstName.body.students[0].lastName).toBe('Beta');
+
+    expect((await api(adminToken).get('/students?search=inexistant')).body.students).toHaveLength(0);
+  });
+
   it("refuse une classe d'une autre école", async () => {
     const foreign = await prisma.class.create({
       data: { schoolId: schoolB.id, name: '6e B', level: '6e' },
