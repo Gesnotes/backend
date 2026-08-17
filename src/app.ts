@@ -175,8 +175,18 @@ export function createApp() {
   app.use('/teachers', teacherRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
-  app.get('/me', requireAuth, requireRole(...ALL_ROLES), (req, res) => {
-    res.json(req.auth);
+  //
+  // `schoolName` n'est pas dans le JWT (il porte seulement `schoolId`) et
+  // n'est renvoyé par `/auth/identify` qu'au moment de la connexion, jamais
+  // conservé côté client : sans cette requête, le nom de l'école disparaît
+  // au premier rechargement de page pour l'enseignant et le parent, qui
+  // n'ont pas d'autre endroit où le lire.
+  app.get('/me', requireAuth, requireRole(...ALL_ROLES), async (req, res) => {
+    const school = await prisma.school.findUniqueOrThrow({
+      where: { id: req.auth!.schoolId },
+      select: { name: true },
+    });
+    res.json({ ...req.auth, schoolName: school.name });
   });
 
   app.use(notFoundHandler);

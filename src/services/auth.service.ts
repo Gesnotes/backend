@@ -7,7 +7,8 @@ import { mailer } from '../lib/mailer';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { signAccessToken } from '../lib/jwt';
 import { hashToken } from '../lib/tokens';
-import { unauthorized } from '../errors/AppError';
+import { badRequest, conflict, unauthorized } from '../errors/AppError';
+import type { AuthPayload } from '../types/express';
 
 /**
  * Message unique pour tout échec de connexion.
@@ -24,12 +25,28 @@ export interface LoginResult {
   user: { id: number; email: string; role: string; firstName: string | null; lastName: string | null };
 }
 
+/**
+ * Un autre compte accessible à la même personne : soit détecté
+ * automatiquement (même identifiant + mot de passe valides dans une autre
+ * école), soit lié explicitement (`linkAccount`, identifiants différents).
+ * Porte son propre `refreshToken`, fraîchement émis, utilisable tout de
+ * suite pour basculer sans repasser par `/auth/identify`.
+ */
+export interface OtherAccount {
+  userId: number;
+  schoolId: number;
+  schoolName: string;
+  role: string;
+  refreshToken: string;
+}
+
 export interface IdentifyOk {
   status: 'ok';
   accessToken: string;
   refreshToken: string;
   user: LoginResult['user'];
   school: { id: number; name: string };
+  otherAccounts: OtherAccount[];
 }
 
 export interface IdentifyAmbiguous {
@@ -55,6 +72,59 @@ export async function identify(
   password: string,
   schoolId?: number,
 ): Promise<IdentifyResult> {
+  const allVerified = await findValidAccountsFor(identifier, password);
+  if (allVerified.length === 0) throw unauthorized(LOGIN_FAILED);
+
+  // École choisie dans la liste ambiguë d'un appel précédent : on referme le
+  // choix plutôt que de le redemander.
+  let chosen = allVerified;
+  if (schoolId !== undefined) {
+    chosen = allVerified.filter((u) => u.schoolId === schoolId);
+    if (chosen.length === 0) throw unauthorized(LOGIN_FAILED);
+  }
+
+  if (chosen.length > 1) {
+    return {
+      status: 'ambiguous',
+      schools: chosen.map((u) => ({
+        id: u.school.id,
+        name: u.school.name,
+        city: u.school.city,
+      })),
+    };
+  }
+
+  const user = chosen[0]!;
+  const accessToken = signAccessToken({ userId: user.id, schoolId: user.schoolId, role: user.role });
+  const refreshToken = await issueRefreshToken(user.id);
+
+  return {
+    status: 'ok',
+    accessToken,
+    refreshToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    },
+    school: { id: user.school.id, name: user.school.name },
+    // Toutes les écoles où ce même mot de passe est aussi valable, plus les
+    // comptes liés explicitement — jamais l'utilisateur lui-même.
+    otherAccounts: await otherAccountsFor(user.id, allVerified),
+  };
+}
+
+type VerifiedCandidate = Awaited<ReturnType<typeof findValidAccountsFor>>[number];
+
+/**
+ * Cherche, à travers toutes les écoles actives, les comptes non archivés
+ * dont l'identifiant (email ou téléphone) et le mot de passe correspondent.
+ * Utilisée par `identify()` (connexion) et `linkAccount()` (liaison
+ * explicite d'un second compte) — la même recherche, deux usages.
+ */
+async function findValidAccountsFor(identifier: string, password: string) {
   const parEmail = identifier.includes('@');
 
   const candidates = await prisma.user.findMany({
@@ -72,50 +142,109 @@ export async function identify(
   // temps de réponse trahit son absence (attaque temporelle).
   if (candidates.length === 0) {
     await argon2.hash('mot-de-passe-factice-pour-egaliser-le-temps');
-    throw unauthorized(LOGIN_FAILED);
+    return [];
   }
 
-  let verified = [];
+  const verified = [];
   for (const candidate of candidates) {
     if (await argon2.verify(candidate.passwordHash, password)) verified.push(candidate);
   }
+  return verified;
+}
 
+/**
+ * Les autres comptes accessibles à la même personne que `userId` : ceux
+ * découverts par `findValidAccountsFor` (même identifiant+mot de passe,
+ * écoles différentes) et ceux liés explicitement via `AccountLink`. Chacun
+ * reçoit un `refreshToken` fraîchement émis — la bascule se fait ensuite par
+ * un simple `POST /auth/refresh`, sans repasser par `/auth/identify`.
+ */
+async function otherAccountsFor(
+  userId: number,
+  allVerifiedSameIdentifier: VerifiedCandidate[],
+): Promise<OtherAccount[]> {
+  const byUserId = new Map<number, { schoolId: number; schoolName: string; role: string }>();
+
+  for (const candidate of allVerifiedSameIdentifier) {
+    if (candidate.id === userId) continue;
+    byUserId.set(candidate.id, {
+      schoolId: candidate.schoolId,
+      schoolName: candidate.school.name,
+      role: candidate.role,
+    });
+  }
+
+  const links = await prisma.accountLink.findMany({
+    where: { ownerUserId: userId },
+    include: { linked: { include: { school: { select: { name: true, archivedAt: true } } } } },
+  });
+  for (const link of links) {
+    if (link.linked.archivedAt || link.linked.school.archivedAt) continue;
+    byUserId.set(link.linkedUserId, {
+      schoolId: link.linked.schoolId,
+      schoolName: link.linked.school.name,
+      role: link.linked.role,
+    });
+  }
+
+  return Promise.all(
+    [...byUserId.entries()].map(async ([otherUserId, account]) => ({
+      userId: otherUserId,
+      ...account,
+      refreshToken: await issueRefreshToken(otherUserId),
+    })),
+  );
+}
+
+/**
+ * Liaison explicite de deux comptes appartenant à la même personne réelle.
+ *
+ * Nécessaire quand `identify()` ne peut pas les rapprocher seul : un
+ * enseignant qui est aussi parent dans la même école a forcément un
+ * identifiant différent pour chaque compte (contrainte d'unicité par école).
+ * Ressaisir une fois l'identifiant+mot de passe de l'autre compte prouve que
+ * la même personne contrôle les deux — comme un login classique, mais dont
+ * le résultat crée une liaison au lieu d'émettre un jeton pour cette requête.
+ *
+ * Crée les deux lignes symétriques (A→B et B→A) : la bascule doit
+ * fonctionner dans les deux sens sans requête supplémentaire.
+ */
+export async function linkAccount(
+  auth: AuthPayload,
+  identifier: string,
+  password: string,
+): Promise<OtherAccount> {
+  const verified = await findValidAccountsFor(identifier, password);
   if (verified.length === 0) throw unauthorized(LOGIN_FAILED);
 
-  // École choisie dans la liste ambiguë d'un appel précédent : on referme le
-  // choix plutôt que de le redemander.
-  if (schoolId !== undefined) {
-    verified = verified.filter((u) => u.schoolId === schoolId);
-    if (verified.length === 0) throw unauthorized(LOGIN_FAILED);
+  const candidates = verified.filter((u) => u.id !== auth.userId);
+  if (candidates.length === 0) {
+    throw badRequest('Vous ne pouvez pas lier un compte à lui-même.');
+  }
+  if (candidates.length > 1) {
+    throw badRequest(
+      "Cet identifiant correspond à plusieurs écoles : indiquez un identifiant propre au compte à lier.",
+    );
   }
 
-  if (verified.length > 1) {
-    return {
-      status: 'ambiguous',
-      schools: verified.map((u) => ({
-        id: u.school.id,
-        name: u.school.name,
-        city: u.school.city,
-      })),
-    };
-  }
+  const target = candidates[0]!;
 
-  const user = verified[0]!;
-  const accessToken = signAccessToken({ userId: user.id, schoolId: user.schoolId, role: user.role });
-  const refreshToken = await issueRefreshToken(user.id);
+  const existing = await prisma.accountLink.findUnique({
+    where: { ownerUserId_linkedUserId: { ownerUserId: auth.userId, linkedUserId: target.id } },
+  });
+  if (existing) throw conflict('Ce compte est déjà lié.');
+
+  await prisma.$transaction([
+    prisma.accountLink.create({ data: { ownerUserId: auth.userId, linkedUserId: target.id } }),
+    prisma.accountLink.create({ data: { ownerUserId: target.id, linkedUserId: auth.userId } }),
+  ]);
 
   return {
-    status: 'ok',
-    accessToken,
-    refreshToken,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      firstName: user.firstName,
-      lastName: user.lastName,
-    },
-    school: { id: user.school.id, name: user.school.name },
+    userId: target.id,
+    schoolId: target.schoolId,
+    schoolName: target.school.name,
+    role: target.role,
+    refreshToken: await issueRefreshToken(target.id),
   };
 }
 

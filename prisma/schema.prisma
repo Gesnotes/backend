@@ -175,6 +175,8 @@ model User {
   homeroomClasses     Class[]
   attendancesRecorded Attendance[]
   enrollmentDecisions EnrollmentDecision[]
+  linkedAccounts      AccountLink[]        @relation("AccountLinkOwner")
+  linkedBy            AccountLink[]        @relation("AccountLinkLinked")
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -199,6 +201,25 @@ model RefreshToken {
 
   @@index([userId, revokedAt])
   @@map("refresh_tokens")
+}
+
+/// Liaison explicite entre deux comptes `User` distincts appartenant à la
+/// même personne réelle — cas qu'`identify()` ne peut pas détecter seul
+/// (identifiants différents, ex. un enseignant qui est aussi parent dans la
+/// même école, ou dans une autre avec un email différent). Toujours créée en
+/// double ligne symétrique (A→B et B→A) pour que la bascule fonctionne dans
+/// les deux sens sans requête supplémentaire.
+model AccountLink {
+  id           Int      @id @default(autoincrement())
+  ownerUserId  Int      @map("owner_user_id")
+  linkedUserId Int      @map("linked_user_id")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  owner  User @relation("AccountLinkOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  linked User @relation("AccountLinkLinked", fields: [linkedUserId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerUserId, linkedUserId])
+  @@map("account_links")
 }
 
 // Tokens de réinitialisation de mot de passe (usage unique, expirants)
