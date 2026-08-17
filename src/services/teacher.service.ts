@@ -5,6 +5,7 @@ import prisma from '../lib/prisma';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
+import { recordAudit } from './audit.service';
 import { revokeAllSessions } from './auth.service';
 import { sendInvitation } from './invitation.service';
 
@@ -181,8 +182,8 @@ export async function updateTeacher(
  * désactivé garderait son accès jusqu'à l'expiration de son access token,
  * soit 30 jours.
  */
-export async function archiveTeacher(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
+export async function archiveTeacher(schoolId: number, id: number, actingUserId: number) {
+  const existing = await getTeacher(schoolId, id);
 
   const maintenant = new Date();
 
@@ -202,16 +203,36 @@ export async function archiveTeacher(schoolId: number, id: number) {
     }),
   ]);
 
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.archived',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${existing.firstName ?? ''} ${existing.lastName ?? ''}`.trim() || existing.email,
+  });
+
   return teacher;
 }
 
-export async function restoreTeacher(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
-  return prisma.user.update({
+export async function restoreTeacher(schoolId: number, id: number, actingUserId: number) {
+  const existing = await getTeacher(schoolId, id);
+  const teacher = await prisma.user.update({
     where: { id },
     data: { archivedAt: null },
     select: publicFields,
   });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.restored',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${existing.firstName ?? ''} ${existing.lastName ?? ''}`.trim() || existing.email,
+  });
+
+  return teacher;
 }
 
 /**
@@ -228,7 +249,8 @@ export async function restoreTeacher(schoolId: number, id: number) {
 export async function deleteTeacherPermanently(
   schoolId: number,
   id: number,
-  expectedName = '',
+  expectedName: string,
+  actingUserId: number,
 ) {
   const teacher = await getTeacher(schoolId, id);
 
@@ -250,6 +272,15 @@ export async function deleteTeacherPermanently(
       data: { homeroomTeacherId: null },
     });
     await tx.user.delete({ where: { id } });
+  });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.permanently_deleted',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim() || teacher.email,
   });
 }
 

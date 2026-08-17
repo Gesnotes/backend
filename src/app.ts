@@ -11,6 +11,7 @@ import { corsAllowedHost, env, isProduction } from './lib/env';
 import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
 import { attendanceMeRoutes } from './routes/attendance.routes';
+import { auditRoutes } from './routes/audit.routes';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
@@ -164,6 +165,7 @@ export function createApp() {
   app.use('/parents/me', parentMeRoutes);
   app.use('/parents', parentSearchRoutes);
   app.use('/admin/dashboard', dashboardRoutes);
+  app.use('/admin/audit-logs', auditRoutes);
   app.use('/children', childrenRoutes);
   // Lecture avant écriture : GET /grades/:id est ouvert au parent, alors que
   // le reste de /grades est réservé aux enseignants.

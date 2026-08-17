@@ -51,6 +51,7 @@ model School {
   gradeTypes     GradeType[]
   signupRequests SignupRequest[]
   holidays       Holiday[]
+  auditLogs      AuditLog[]
 
   @@index([archivedAt])
   @@map("schools")
@@ -184,6 +185,7 @@ model User {
   enrollmentDecisions EnrollmentDecision[]
   linkedAccounts      AccountLink[]        @relation("AccountLinkOwner")
   linkedBy            AccountLink[]        @relation("AccountLinkLinked")
+  auditLogsAsActor    AuditLog[]
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -298,6 +300,34 @@ model Holiday {
 
   @@index([schoolId, date])
   @@map("holidays")
+}
+
+// Journal d'audit, volontairement borné à un petit nombre d'actions
+// sensibles (note modifiée/supprimée, élève déplacé de classe, compte
+// archivé/restauré/supprimé définitivement — voir `audit.service.ts`), pas
+// une trace générique de toute mutation. `actorName`/`actorRole` sont figés
+// à l'écriture : un acteur supprimé plus tard (suppression définitive d'un
+// compte) ne doit pas faire disparaître qui a fait quoi. `targetId` n'est
+// volontairement pas une clé étrangère : l'entité visée (note, élève...)
+// peut elle-même avoir disparu depuis, l'entrée du journal doit survivre.
+model AuditLog {
+  id          Int      @id @default(autoincrement())
+  schoolId    Int      @map("school_id")
+  actorUserId Int?     @map("actor_user_id")
+  actorName   String   @map("actor_name") @db.VarChar(150)
+  actorRole   Role     @map("actor_role")
+  action      String   @db.VarChar(50)
+  targetType  String   @map("target_type") @db.VarChar(50)
+  targetId    Int?     @map("target_id")
+  targetLabel String?  @map("target_label") @db.VarChar(255)
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId, createdAt])
+  @@map("audit_logs")
 }
 
 // Mode de fonctionnement d'une classe : `notes` pour le suivi habituel

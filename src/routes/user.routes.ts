@@ -43,5 +43,5 @@ userRoutes.delete('/:id', validate({ params: idParam }), async (req, res) => {
 
 userRoutes.post('/:id/restore', validate({ params: idParam }), async (req, res) => {
   const { id } = req.params as unknown as z.infer<typeof idParam>;
-  res.json(await userService.restoreUserAccount(schoolIdOf(req), id));
+  res.json(await userService.restoreUserAccount(schoolIdOf(req), id, authOf(req).userId));
 });

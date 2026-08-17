@@ -193,7 +193,7 @@ studentRoutes.patch(
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const data = req.body as z.infer<typeof updateBody>;
-    res.json(await studentService.updateStudent(schoolIdOf(req), id, data));
+    res.json(await studentService.updateStudent(authOf(req), id, data));
   },
 );
 
