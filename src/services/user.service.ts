@@ -1,8 +1,13 @@
 import prisma from '../lib/prisma';
 import type { Role } from '../generated/prisma/enums';
 import { badRequest, notFound } from '../errors/AppError';
+import { recordAudit } from './audit.service';
 import { revokeAllSessions } from './auth.service';
 import { accountFields } from './userFields';
+
+function accountLabel(user: { firstName: string | null; lastName: string | null; email: string }): string {
+  return [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || user.email;
+}
 
 /**
  * Vue unifiée des comptes de l'école (admin + enseignant + parent), pour
@@ -85,7 +90,7 @@ export async function archiveUserAccount(
   if (id === actingUserId) {
     throw badRequest('Vous ne pouvez pas archiver votre propre compte.');
   }
-  await getManageableUser(schoolId, id);
+  const existing = await getManageableUser(schoolId, id);
 
   await revokeAllSessions(id);
   const updated = await prisma.user.update({
@@ -93,15 +98,39 @@ export async function archiveUserAccount(
     data: { archivedAt: new Date() },
     select: { ...accountFields, role: true },
   });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.archived',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: accountLabel(existing),
+  });
+
   return toView(updated);
 }
 
-export async function restoreUserAccount(schoolId: number, id: number): Promise<UserAccountView> {
-  await getManageableUser(schoolId, id);
+export async function restoreUserAccount(
+  schoolId: number,
+  id: number,
+  actingUserId: number,
+): Promise<UserAccountView> {
+  const existing = await getManageableUser(schoolId, id);
   const updated = await prisma.user.update({
     where: { id },
     data: { archivedAt: null },
     select: { ...accountFields, role: true },
   });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.restored',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: accountLabel(existing),
+  });
+
   return toView(updated);
 }

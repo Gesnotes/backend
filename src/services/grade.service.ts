@@ -2,6 +2,7 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { badRequest, conflict, forbidden, notFound } from '../errors/AppError';
 import { emitEvent } from '../lib/events';
+import { recordAudit } from './audit.service';
 import { isOpenForEntry } from './term.service';
 
 /**
@@ -378,12 +379,32 @@ export async function updateGrade(
     termId: grade.termId,
   });
 
+  await recordAudit({
+    schoolId: auth.schoolId,
+    actorUserId: auth.userId,
+    action: 'grade.updated',
+    targetType: 'grade',
+    targetId: grade.id,
+    targetLabel: `${existing.student.firstName} ${existing.student.lastName}`,
+    metadata: { oldValue: Number(existing.value), newValue: Number(grade.value) },
+  });
+
   return toPublicGrade(grade);
 }
 
 export async function deleteGrade(auth: AuthPayload, id: number) {
-  await findGradeForWrite(auth, id);
+  const grade = await findGradeForWrite(auth, id);
   await prisma.grade.delete({ where: { id } });
+
+  await recordAudit({
+    schoolId: auth.schoolId,
+    actorUserId: auth.userId,
+    action: 'grade.deleted',
+    targetType: 'grade',
+    targetId: id,
+    targetLabel: `${grade.student.firstName} ${grade.student.lastName}`,
+    metadata: { value: Number(grade.value) },
+  });
 }
 
 /** Historique des notes saisies par cet enseignant. */
@@ -426,7 +447,7 @@ export async function listMyGradeHistory(
 async function findGradeForWrite(auth: AuthPayload, id: number) {
   const grade = await prisma.grade.findFirst({
     where: { id, schoolId: auth.schoolId },
-    include: { student: { select: { classId: true } } },
+    include: { student: { select: { classId: true, firstName: true, lastName: true } } },
   });
   if (!grade) throw notFound('Note introuvable');
 

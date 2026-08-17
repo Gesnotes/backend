@@ -5,6 +5,7 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { recordAudit } from './audit.service';
 import { computeStudentResult } from './grading/grading.service';
 import { contactFields, identityFields } from './userFields';
 import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
@@ -543,12 +544,12 @@ export async function createStudent(
 }
 
 export async function updateStudent(
-  schoolId: number,
+  auth: AuthPayload,
   id: number,
   data: { firstName?: string; lastName?: string; classId?: number; birthDate?: string | null },
 ) {
-  await getStudentForAdmin(schoolId, id);
-  if (data.classId !== undefined) await assertClassInSchool(schoolId, data.classId);
+  const before = await getStudentForAdmin(auth.schoolId, id);
+  if (data.classId !== undefined) await assertClassInSchool(auth.schoolId, data.classId);
 
   await prisma.student.update({
     where: { id },
@@ -562,7 +563,29 @@ export async function updateStudent(
     },
   });
 
-  return getStudentForAdmin(schoolId, id);
+  const after = await getStudentForAdmin(auth.schoolId, id);
+
+  // Un changement de classe déplace l'élève d'un contexte pédagogique à un
+  // autre (enseignants, présence, bulletin) — les autres champs (nom,
+  // date de naissance) sont de simples corrections, sans intérêt d'audit.
+  if (data.classId !== undefined && data.classId !== before.classe.id) {
+    await recordAudit({
+      schoolId: auth.schoolId,
+      actorUserId: auth.userId,
+      action: 'student.moved',
+      targetType: 'student',
+      targetId: id,
+      targetLabel: `${after.firstName} ${after.lastName}`,
+      metadata: {
+        fromClassId: before.classe.id,
+        fromClassName: before.classe.name,
+        toClassId: after.classe.id,
+        toClassName: after.classe.name,
+      },
+    });
+  }
+
+  return after;
 }
 
 /**
