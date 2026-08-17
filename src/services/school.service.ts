@@ -11,28 +11,54 @@ import prisma from '../lib/prisma';
 export interface SchoolSettingsView {
   name: string;
   passingGrade: number;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
 }
 
-function toView(school: { name: string; passingGrade: { toString(): string } }): SchoolSettingsView {
-  return { name: school.name, passingGrade: Number(school.passingGrade) };
+const settingsSelect = {
+  name: true, passingGrade: true, email: true, phone: true, address: true,
+} as const;
+
+function toView(school: {
+  name: string;
+  passingGrade: { toString(): string };
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+}): SchoolSettingsView {
+  return {
+    name: school.name,
+    passingGrade: Number(school.passingGrade),
+    email: school.email,
+    phone: school.phone,
+    address: school.address,
+  };
 }
 
 export async function getSchoolSettings(schoolId: number): Promise<SchoolSettingsView> {
   const school = await prisma.school.findUniqueOrThrow({
     where: { id: schoolId },
-    select: { name: true, passingGrade: true },
+    select: settingsSelect,
   });
   return toView(school);
 }
 
-export async function updatePassingGrade(
+export interface UpdateSchoolSettingsInput {
+  passingGrade?: number;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+}
+
+export async function updateSchoolSettings(
   schoolId: number,
-  passingGrade: number,
+  patch: UpdateSchoolSettingsInput,
 ): Promise<SchoolSettingsView> {
   const school = await prisma.school.update({
     where: { id: schoolId },
-    data: { passingGrade },
-    select: { name: true, passingGrade: true },
+    data: patch,
+    select: settingsSelect,
   });
   return toView(school);
 }

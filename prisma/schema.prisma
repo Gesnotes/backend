@@ -35,6 +35,12 @@ model School {
   /// matière. Purement déclaratif : le calcul de la moyenne elle-même
   /// (compute.ts) ne s'en sert pas, seul l'affichage en tient compte.
   passingGrade Decimal @default(10) @map("passing_grade") @db.Decimal(4, 2)
+  /// Coordonnées affichées dans Paramètres — purement déclaratives, sans
+  /// validation d'unicité ni d'usage ailleurs dans l'app (contrairement à
+  /// l'email/téléphone d'un `User`, qui servent à la connexion).
+  email   String? @db.VarChar(150)
+  phone   String? @db.VarChar(30)
+  address String? @db.VarChar(255)
 
   users          User[]
   schoolYears    SchoolYear[]

@@ -85,4 +85,36 @@ describe('PATCH /school', () => {
     const settings = await prisma.school.findUniqueOrThrow({ where: { id: autre.id } });
     expect(Number(settings.passingGrade)).toBe(10);
   });
+
+  it('modifie les coordonnées (email, téléphone, adresse)', async () => {
+    const res = await api(adminToken)
+      .patch('/school')
+      .send({ email: 'contact@ecole-a.test', phone: '+22961000000', address: 'Cotonou, Bénin' });
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('contact@ecole-a.test');
+    expect(res.body.phone).toBe('+22961000000');
+    expect(res.body.address).toBe('Cotonou, Bénin');
+  });
+
+  it('efface une coordonnée avec une chaîne vide', async () => {
+    await api(adminToken).patch('/school').send({ email: 'contact@ecole-a.test' });
+    const res = await api(adminToken).patch('/school').send({ email: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBeNull();
+  });
+
+  it('refuse un email mal formé', async () => {
+    const res = await api(adminToken).patch('/school').send({ email: 'pas-un-email' });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse un téléphone mal formé', async () => {
+    const res = await api(adminToken).patch('/school').send({ phone: 'abc' });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse un corps vide', async () => {
+    const res = await api(adminToken).patch('/school').send({});
+    expect(res.status).toBe(400);
+  });
 });
