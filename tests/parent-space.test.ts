@@ -89,6 +89,47 @@ afterAll(async () => {
 const get = (token: string, path: string) =>
   request(app).get(path).set('Authorization', `Bearer ${token}`);
 
+describe('GET /children/:id/schedule', () => {
+  it("un parent voit l'emploi du temps de la classe de son enfant", async () => {
+    const assignment = await prisma.teacherAssignment.findFirstOrThrow({
+      where: { schoolId: school.id, classId: classe.id, subjectId: maths.id },
+    });
+    await prisma.timetableSlot.create({
+      data: {
+        schoolId: school.id, teacherAssignmentId: assignment.id, dayOfWeek: 'lundi', startMinute: 480, endMinute: 540,
+      },
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}/schedule`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].subjectName).toBe('Maths');
+    expect(res.body[0].startTime).toBe('08:00');
+  });
+
+  it("un parent d'un autre enfant est refusé (404)", async () => {
+    const res = await get(tokenParentB, `/children/${ana.id}/schedule`);
+    expect(res.status).toBe(404);
+  });
+
+  it('renvoie un tableau vide pour une classe en mode présence', async () => {
+    const presenceClass = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Petite section', level: 'maternelle', mode: 'presence' },
+    });
+    const kid = await prisma.student.create({
+      data: { schoolId: school.id, classId: presenceClass.id, firstName: 'Kim', lastName: 'Gamma' },
+    });
+    const parentAUser = await prisma.user.findFirstOrThrow({ where: { schoolId: school.id, email: 'pa@a.test' } });
+    await prisma.studentParent.create({
+      data: { schoolId: school.id, studentId: kid.id, parentUserId: parentAUser.id },
+    });
+
+    const res = await get(tokenParentA, `/children/${kid.id}/schedule`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
 /**
  * Garde-fou symétrique de celui des enseignants : un parent ne voit que ses
  * propres enfants. Le refus est un 404 et non un 403 — répondre « interdit »

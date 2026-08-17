@@ -117,6 +117,12 @@ const attendanceHistoryQuery = z.object({
   to: z.iso.date().optional(),
 });
 
+/** Emploi du temps de la classe de l'enfant — matière et horaire, pas seulement présent/absent. */
+childrenRoutes.get('/:id/schedule', validate({ params: idParam }), async (req, res) => {
+  const { id } = req.params as unknown as z.infer<typeof idParam>;
+  res.json(await parentService.getChildSchedule(authOf(req), id));
+});
+
 childrenRoutes.get(
   '/:id/attendance',
   validate({ params: idParam, query: attendanceHistoryQuery }),

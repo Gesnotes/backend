@@ -250,10 +250,22 @@ export async function listSlotsForClass(
   includeArchived = false,
 ): Promise<SlotView[]> {
   await assertCanViewSchedule(auth, classId);
+  return listSlotsForClassRaw(auth.schoolId, classId, includeArchived);
+}
 
+/**
+ * Même requête que `listSlotsForClass`, sans le contrôle d'accès enseignant.
+ * Réservé aux appelants qui ont déjà vérifié le droit de lecture par une
+ * autre voie — `parent.service.ts::getChildSchedule` via `assertIsParentOf`.
+ */
+export async function listSlotsForClassRaw(
+  schoolId: number,
+  classId: number,
+  includeArchived = false,
+): Promise<SlotView[]> {
   const slots = await prisma.timetableSlot.findMany({
     where: {
-      schoolId: auth.schoolId,
+      schoolId,
       teacherAssignment: { classId },
       ...(includeArchived ? {} : { archivedAt: null }),
     },
@@ -382,21 +394,25 @@ export async function deleteSlotPermanently(
 }
 
 /**
- * Mes créneaux du jour : ce qu'un enseignant voit pour choisir sur quel
- * cours faire l'appel — voir `assertCanTakeAttendanceForSlot`
- * (attendance.service.ts) pour le contrôle d'accès à la saisie elle-même.
+ * Mes créneaux : ce qu'un enseignant voit pour choisir sur quel cours faire
+ * l'appel — voir `assertCanTakeAttendanceForSlot` (attendance.service.ts)
+ * pour le contrôle d'accès à la saisie elle-même.
+ *
+ * `date` restreint à un seul jour (usage historique, appel du jour) ; omis,
+ * renvoie toute la semaine récurrente — utilisé par la vue « mon emploi du
+ * temps » de l'enseignant.
  */
-export async function listMySlotsForDate(auth: AuthPayload, date: string): Promise<SlotView[]> {
-  const dayOfWeek = weekdayOfIsoDate(date);
+export async function listMySlotsForDate(auth: AuthPayload, date?: string): Promise<SlotView[]> {
+  const dayOfWeek = date ? weekdayOfIsoDate(date) : undefined;
 
   const slots = await prisma.timetableSlot.findMany({
     where: {
       schoolId: auth.schoolId,
       archivedAt: null,
-      dayOfWeek,
+      ...(dayOfWeek ? { dayOfWeek } : {}),
       teacherAssignment: { teacherUserId: auth.userId },
     },
-    orderBy: { startMinute: 'asc' },
+    orderBy: dayOfWeek ? [{ startMinute: 'asc' }] : [{ dayOfWeek: 'asc' }, { startMinute: 'asc' }],
     select: slotSelect,
   });
 
