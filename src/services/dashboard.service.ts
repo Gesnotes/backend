@@ -42,7 +42,7 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
       }),
       getAttendanceSummary(schoolId, date),
     ]);
-  const { presence, creneaux } = appel;
+  const { presence, creneaux, ferie } = appel;
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
   const activite = { notesDerniers7Jours: notesRecentes, notesTotal: totalNotes };
@@ -61,6 +61,7 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
     activite,
     presence,
     creneaux,
+    ferie,
     periode: null,
     moyenneEcole: null,
     classes: [],
@@ -128,6 +129,7 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
     activite,
     presence,
     creneaux,
+    ferie,
     periode: { id: term.id, label: term.label },
     moyenneEcole,
     classes: parClasse,
@@ -163,7 +165,7 @@ async function getAttendanceSummary(schoolId: number, date?: string) {
   const todayIso = date ?? new Date().toISOString().slice(0, 10);
   const today = new Date(todayIso);
 
-  const [presenceClasses, todaysSlots] = await Promise.all([
+  const [presenceClasses, todaysSlots, holidayToday] = await Promise.all([
     prisma.class.findMany({
       where: { schoolId, archivedAt: null, mode: 'presence' },
       select: { id: true, name: true },
@@ -179,6 +181,13 @@ async function getAttendanceSummary(schoolId: number, date?: string) {
           select: { class: { select: { name: true } }, subject: { select: { name: true } } },
         },
       },
+    }),
+    // « Classes sans appel » n'a rien d'alarmant un jour férié : personne
+    // n'est censé faire l'appel. On expose le libellé plutôt qu'un simple
+    // booléen, pour que le client puisse l'afficher tel quel.
+    prisma.holiday.findFirst({
+      where: { schoolId, archivedAt: null, date: today },
+      select: { label: true },
     }),
   ]);
 
@@ -221,7 +230,7 @@ async function getAttendanceSummary(schoolId: number, date?: string) {
       })),
   };
 
-  return { presence, creneaux };
+  return { presence, creneaux, ferie: holidayToday ? { label: holidayToday.label } : null };
 }
 
 /**

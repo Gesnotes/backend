@@ -18,6 +18,7 @@ import { enrollmentRoutes } from './routes/enrollment.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { holidayRoutes } from './routes/holiday.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 import { scheduleMeRoutes, scheduleRoutes } from './routes/schedule.routes';
@@ -149,6 +150,7 @@ export function createApp() {
   app.use('/school-years', schoolYearRoutes);
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);
+  app.use('/holidays', holidayRoutes);
   app.use('/classes', classRoutes);
   // Avant enrollmentRoutes : sa garde de rôle (admin+enseignant) est plus
   // large que celle d'enrollmentRoutes (admin seul), qui intercepterait sinon

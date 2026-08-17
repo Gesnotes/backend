@@ -25,6 +25,7 @@ export async function resetDatabase() {
   await prisma.subject.deleteMany();
   await prisma.class.deleteMany();
   await prisma.term.deleteMany();
+  await prisma.holiday.deleteMany();
   await prisma.schoolYear.deleteMany();
   await prisma.device.deleteMany();
   await prisma.refreshToken.deleteMany();
