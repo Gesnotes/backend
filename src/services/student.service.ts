@@ -53,14 +53,23 @@ const parentSelectFor = (auth: AuthPayload) =>
 
 export async function listStudents(
   auth: AuthPayload,
-  filters: { classId?: number; includeArchived?: boolean; page?: number },
+  filters: { classId?: number; includeArchived?: boolean; page?: number; search?: string },
 ) {
   const page = Math.max(1, filters.page ?? 1);
+  const search = filters.search?.trim();
 
   const where = {
     schoolId: auth.schoolId,
     ...(await scopeFor(auth, filters.classId)),
     ...(filters.includeArchived ? {} : { archivedAt: null }),
+    ...(search
+      ? {
+          OR: [
+            { firstName: { contains: search, mode: 'insensitive' as const } },
+            { lastName: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
   };
 
   const [total, students] = await Promise.all([
