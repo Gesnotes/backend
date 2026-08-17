@@ -322,6 +322,34 @@ describe('GET /admin/dashboard', () => {
     expect(avecDate.body.presence.classesAvecAppel).toBe(1);
   });
 
+  it('expose le jour férié du jour, sans changer les compteurs de présence', async () => {
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },
+    });
+    await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ana', lastName: 'Nom' },
+    });
+    const todayIso = new Date().toISOString().slice(0, 10);
+    await prisma.holiday.create({
+      data: { schoolId: school.id, date: new Date(todayIso), label: 'Fête du Vodoun' },
+    });
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.ferie).toEqual({ label: 'Fête du Vodoun' });
+    expect(res.body.presence.classesSansAppel).toEqual(['Garderie']);
+  });
+
+  it('ignore un jour férié archivé', async () => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const holiday = await prisma.holiday.create({
+      data: { schoolId: school.id, date: new Date(todayIso), label: 'Fête du Vodoun' },
+    });
+    await prisma.holiday.update({ where: { id: holiday.id }, data: { archivedAt: new Date() } });
+
+    const res = await get(tokenAdmin, '/admin/dashboard');
+    expect(res.body.ferie).toBeNull();
+  });
+
   it("ignore la présence d'un autre jour que celui du jour", async () => {
     const garderie = await prisma.class.create({
       data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },

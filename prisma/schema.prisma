@@ -50,6 +50,7 @@ model School {
   students       Student[]
   gradeTypes     GradeType[]
   signupRequests SignupRequest[]
+  holidays       Holiday[]
 
   @@index([archivedAt])
   @@map("schools")
@@ -277,6 +278,26 @@ model Term {
   @@index([schoolId, archivedAt])
   @@index([schoolYearId])
   @@map("terms")
+}
+
+// Jour férié ou de congé, exclu du calcul « classes sans appel » du tableau
+// de bord (voir `getAttendanceSummary`) : sans appel un jour férié n'est pas
+// un oubli à relancer. Pas de contrainte unique en base sur (school_id,
+// date) — comme pour Term, le chevauchement n'est contrôlé qu'entre jours
+// actifs (`assertNoDuplicateDate`), pour ne pas bloquer la recréation d'un
+// jour après archivage d'un doublon.
+model Holiday {
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  date       DateTime  @db.Date
+  label      String    @db.VarChar(150)
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
+  createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  school School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId, date])
+  @@map("holidays")
 }
 
 // Mode de fonctionnement d'une classe : `notes` pour le suivi habituel
