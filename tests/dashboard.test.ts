@@ -455,6 +455,85 @@ describe('GET /admin/dashboard', () => {
   });
 });
 
+describe('GET /admin/dashboard/absences', () => {
+  const isoDaysAgo = (n: number) => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  it('regroupe absences et retards par jour, sur la période demandée', async () => {
+    const garderie = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Garderie', level: 'maternelle', mode: 'presence' },
+    });
+    const ana = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ana', lastName: 'Nom' },
+    });
+    const ben = await prisma.student.create({
+      data: { schoolId: school.id, classId: garderie.id, firstName: 'Ben', lastName: 'Nom' },
+    });
+
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: ana.id, classId: garderie.id, date: new Date(isoDaysAgo(0)), status: 'absent' },
+    });
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: ben.id, classId: garderie.id, date: new Date(isoDaysAgo(0)), status: 'late' },
+    });
+    await prisma.attendance.create({
+      data: { schoolId: school.id, studentId: ana.id, classId: garderie.id, date: new Date(isoDaysAgo(2)), status: 'absent' },
+    });
+
+    const res = await get(tokenAdmin, `/admin/dashboard/absences?date=${isoDaysAgo(0)}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(14);
+
+    const today = res.body.find((row: { date: string }) => row.date === isoDaysAgo(0));
+    expect(today).toMatchObject({ absents: 1, retards: 1 });
+
+    const avantHier = res.body.find((row: { date: string }) => row.date === isoDaysAgo(2));
+    expect(avantHier).toMatchObject({ absents: 1, retards: 0 });
+
+    const hier = res.body.find((row: { date: string }) => row.date === isoDaysAgo(1));
+    expect(hier).toMatchObject({ absents: 0, retards: 0 });
+  });
+
+  it('respecte le nombre de jours demandé', async () => {
+    const res = await get(tokenAdmin, '/admin/dashboard/absences?days=7');
+    expect(res.body).toHaveLength(7);
+  });
+
+  it('refuse un nombre de jours hors bornes', async () => {
+    expect((await get(tokenAdmin, '/admin/dashboard/absences?days=1')).status).toBe(400);
+    expect((await get(tokenAdmin, '/admin/dashboard/absences?days=365')).status).toBe(400);
+  });
+
+  it('ne mélange pas les absences des autres écoles', async () => {
+    const autreClasse = await prisma.class.create({
+      data: { schoolId: autreEcole.id, name: '6e B', level: '6e', mode: 'presence' },
+    });
+    const foreignStudent = await prisma.student.create({
+      data: { schoolId: autreEcole.id, classId: autreClasse.id, firstName: 'X', lastName: 'Y' },
+    });
+    await prisma.attendance.create({
+      data: {
+        schoolId: autreEcole.id,
+        studentId: foreignStudent.id,
+        classId: autreClasse.id,
+        date: new Date(isoDaysAgo(0)),
+        status: 'absent',
+      },
+    });
+
+    const res = await get(tokenAdmin, `/admin/dashboard/absences?date=${isoDaysAgo(0)}`);
+    const today = res.body.find((row: { date: string }) => row.date === isoDaysAgo(0));
+    expect(today).toMatchObject({ absents: 0, retards: 0 });
+  });
+
+  it("est réservé à l'administration", async () => {
+    expect((await get(tokenProf, '/admin/dashboard/absences')).status).toBe(403);
+  });
+});
+
 describe('GET /admin/dashboard/recent-grades', () => {
   it("renvoie le flux d'activité, du plus récent au plus ancien", async () => {
     const ana = await addStudent(classe6.id, 'Ana');
