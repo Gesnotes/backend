@@ -84,6 +84,7 @@ const FIELD_LABELS: Record<string, string> = {
   city: 'Ville',
   levels: 'Niveaux',
   q: 'Recherche',
+  days: 'Nombre de jours',
 };
 
 function labelOf(field: string): string {

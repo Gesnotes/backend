@@ -224,6 +224,45 @@ async function getAttendanceSummary(schoolId: number, date?: string) {
   return { presence, creneaux };
 }
 
+/**
+ * Absences et retards des `days` derniers jours, un point par jour.
+ *
+ * Tous modes de présence confondus (`presence` par classe et `notes` par
+ * créneau) : la courbe répond à « l'absentéisme augmente-t-il ? », une
+ * question qui ne dépend pas de la façon dont chaque classe fait l'appel.
+ * Chaque jour de la plage apparaît, même à zéro — un trou dans la série
+ * romprait la courbe côté client sans qu'on sache si c'est une vraie absence
+ * de données ou une semaine sans aucune absence.
+ */
+export async function getAbsenceTrend(schoolId: number, days: number, date?: string) {
+  const todayIso = date ?? new Date().toISOString().slice(0, 10);
+  const end = new Date(todayIso);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+
+  const records = await prisma.attendance.groupBy({
+    by: ['date', 'status'],
+    where: { schoolId, date: { gte: start, lte: end } },
+    _count: { _all: true },
+  });
+
+  const parJour = new Map<string, { absents: number; retards: number }>();
+  for (let i = 0; i < days; i += 1) {
+    const jour = new Date(start);
+    jour.setUTCDate(jour.getUTCDate() + i);
+    parJour.set(jour.toISOString().slice(0, 10), { absents: 0, retards: 0 });
+  }
+
+  for (const record of records) {
+    const entry = parJour.get(record.date.toISOString().slice(0, 10));
+    if (!entry) continue;
+    if (record.status === 'absent') entry.absents += record._count._all;
+    if (record.status === 'late') entry.retards += record._count._all;
+  }
+
+  return Array.from(parJour.entries()).map(([date, counts]) => ({ date, ...counts }));
+}
+
 /** Flux d'activité : dernières notes saisies dans l'établissement. */
 export async function getRecentGrades(schoolId: number, limit: number) {
   const grades = await prisma.grade.findMany({
