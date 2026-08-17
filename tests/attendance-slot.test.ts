@@ -198,6 +198,13 @@ describe('GET /teachers/me/schedule — mes créneaux du jour', () => {
     const res = await api(adminToken).get(`/teachers/me/schedule?date=${todayIso()}`);
     expect(res.status).toBe(403);
   });
+
+  it("sans date, renvoie toute la semaine — vue « mon emploi du temps »", async () => {
+    const res = await api(teacherXToken).get('/teachers/me/schedule');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].id).toBe(slotX.id);
+  });
 });
 
 describe('mode presence — inchangé', () => {

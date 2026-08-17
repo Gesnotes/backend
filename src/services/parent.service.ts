@@ -2,6 +2,7 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { notFound } from '../errors/AppError';
 import { computeStudentResult } from './grading/grading.service';
+import { listSlotsForClassRaw } from './schedule.service';
 
 /**
  * Garde-fou de l'espace parent, symétrique de `assertCanGrade`.
@@ -37,6 +38,23 @@ export async function assertIsParentOf(auth: AuthPayload, studentId: number) {
   if (!link) throw notFound('Élève introuvable');
 
   return student;
+}
+
+/**
+ * Emploi du temps de la classe de mon enfant — tableau vide si la classe est
+ * en mode `presence` (maternelle/garderie), qui n'a pas de notion de créneau
+ * par matière (voir schedule.service.ts).
+ */
+export async function getChildSchedule(auth: AuthPayload, studentId: number) {
+  const student = await assertIsParentOf(auth, studentId);
+
+  const klass = await prisma.class.findFirst({
+    where: { id: student.classId },
+    select: { mode: true },
+  });
+  if (!klass || klass.mode !== 'notes') return [];
+
+  return listSlotsForClassRaw(auth.schoolId, student.classId);
 }
 
 /** Mes enfants, avec leur classe et leur moyenne sur la période demandée. */

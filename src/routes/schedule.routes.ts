@@ -137,7 +137,7 @@ export const scheduleMeRoutes = Router();
 
 scheduleMeRoutes.use(requireAuth, requireRole('teacher'));
 
-const myScheduleQuery = z.object({ date: z.iso.date() });
+const myScheduleQuery = z.object({ date: z.iso.date().optional() });
 
 scheduleMeRoutes.get('/schedule', validate({ query: myScheduleQuery }), async (req, res) => {
   const { date } = req.query as unknown as z.infer<typeof myScheduleQuery>;
