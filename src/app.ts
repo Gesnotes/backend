@@ -39,6 +39,7 @@ import { publicRoute } from './middlewares/publicRoute';
 import { registerNotificationHandlers } from './services/notification.service';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
+import { userRoutes } from './routes/user.routes';
 
 // Abonne les notifications aux événements de saisie (lot 9 → lot 11).
 registerNotificationHandlers();
@@ -173,6 +174,7 @@ export function createApp() {
   app.use('/teachers/me', attendanceMeRoutes);
   app.use('/teachers/me', scheduleMeRoutes);
   app.use('/teachers', teacherRoutes);
+  app.use('/users', userRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   //
