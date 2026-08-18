@@ -4,8 +4,11 @@ import prisma from '../src/lib/prisma';
 import { createSchool, resetDatabase, seedGrade } from './helpers';
 import {
   checkDuplicateWarning,
+  computeAnnualAverage,
   computeClassBulletin,
+  computeStudentRank,
   computeStudentResult,
+  computeTermTrend,
 } from '../src/services/grading/grading.service';
 
 let school: { id: number };
@@ -276,6 +279,210 @@ describe('computeClassBulletin', () => {
 
     await expect(computeClassBulletin(school.id, otherClass.id, term.id)).rejects.toThrow();
     await expect(computeClassBulletin(school.id, klass.id, otherTerm.id)).rejects.toThrow();
+  });
+});
+
+describe('computeAnnualAverage', () => {
+  it("moyenne simple des moyennes générales de chaque période de l'année scolaire", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    const term2 = await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+
+    // T1 : (15×4 + 10×1) / 5 = 14 (comme le test de pondération ci-dessus)
+    await addGrade(ana.id, maths.id, 'devoir', 15);
+    await addGrade(ana.id, maths.id, 'composition', 15);
+    await addGrade(ana.id, francais.id, 'devoir', 10);
+    await addGrade(ana.id, francais.id, 'composition', 10);
+
+    // T2 : maths seule, 18/20
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id,
+      gradeTypeId: types.devoir!, termId: term2.id, value: 18,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id,
+      gradeTypeId: types.composition!, termId: term2.id, value: 18,
+    });
+
+    // Moyenne annuelle = (14 + 18) / 2 = 16, pas la moyenne des notes brutes.
+    const annual = await computeAnnualAverage(school.id, ana.id, schoolYear.id);
+    expect(annual).toBe(16);
+  });
+
+  it("exclut une période sans moyenne pour l'élève, sans la compter 0", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // Trimestre 2 : aucune note pour Ana.
+
+    await addGrade(ana.id, maths.id, 'devoir', 12);
+    await addGrade(ana.id, maths.id, 'composition', 12);
+
+    const annual = await computeAnnualAverage(school.id, ana.id, schoolYear.id);
+    expect(annual).toBe(12);
+  });
+
+  it('ignore les périodes archivées de la même année scolaire', async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    const term2 = await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2 (erreur)', schoolYearId: schoolYear.id, archivedAt: new Date() },
+    });
+
+    await addGrade(ana.id, maths.id, 'devoir', 10);
+    await addGrade(ana.id, maths.id, 'composition', 10);
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id,
+      gradeTypeId: types.composition!, termId: term2.id, value: 20,
+    });
+
+    const annual = await computeAnnualAverage(school.id, ana.id, schoolYear.id);
+    expect(annual).toBe(10);
+  });
+
+  it("renvoie null quand l'année scolaire n'a aucune période active", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+
+    const annual = await computeAnnualAverage(school.id, ana.id, schoolYear.id);
+    expect(annual).toBeNull();
+  });
+
+  it("refuse l'élève d'une autre école", async () => {
+    const other = await createSchool('ecole-b');
+    const otherClass = await prisma.class.create({
+      data: { schoolId: other.id, name: '6e B', level: '6e' },
+    });
+    const foreign = await prisma.student.create({
+      data: { schoolId: other.id, classId: otherClass.id, firstName: 'X', lastName: 'Y' },
+    });
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+
+    await expect(computeAnnualAverage(school.id, foreign.id, schoolYear.id)).rejects.toThrow();
+  });
+});
+
+describe('computeStudentRank', () => {
+  it('classe deux élèves par moyenne décroissante', async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 16);
+    await addGrade(ana.id, maths.id, 'composition', 16);
+    await addGrade(ben.id, maths.id, 'devoir', 12);
+    await addGrade(ben.id, maths.id, 'composition', 12);
+
+    expect(await computeStudentRank(school.id, ana.id, klass.id, term.id)).toEqual({
+      position: 1,
+      total: 2,
+    });
+    expect(await computeStudentRank(school.id, ben.id, klass.id, term.id)).toEqual({
+      position: 2,
+      total: 2,
+    });
+  });
+
+  it("renvoie null pour un élève sans moyenne cette période, sans le compter dans total", async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 16);
+    await addGrade(ana.id, maths.id, 'composition', 16);
+    // Ben n'a aucune note.
+
+    expect(await computeStudentRank(school.id, ana.id, klass.id, term.id)).toEqual({
+      position: 1,
+      total: 1,
+    });
+    expect(await computeStudentRank(school.id, ben.id, klass.id, term.id)).toBeNull();
+  });
+
+  it('donne le même rang que le classement de classe (class.service.ts)', async () => {
+    await addGrade(ana.id, maths.id, 'devoir', 14);
+    await addGrade(ana.id, maths.id, 'composition', 14);
+    await addGrade(ben.id, maths.id, 'devoir', 14);
+    await addGrade(ben.id, maths.id, 'composition', 14);
+
+    // Égalité : départagée par nom de famille, comme class.service.ts.
+    // Alpha (Ana) avant Beta (Ben).
+    expect(await computeStudentRank(school.id, ana.id, klass.id, term.id)).toEqual({
+      position: 1,
+      total: 2,
+    });
+    expect(await computeStudentRank(school.id, ben.id, klass.id, term.id)).toEqual({
+      position: 2,
+      total: 2,
+    });
+  });
+});
+
+describe('computeTermTrend', () => {
+  it("moyenne générale de chaque période de l'année scolaire, dans l'ordre chronologique", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({
+      where: { id: term.id },
+      data: { schoolYearId: schoolYear.id, startDate: new Date('2025-09-01'), endDate: new Date('2025-12-20') },
+    });
+    const term2 = await prisma.term.create({
+      data: {
+        schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id,
+        startDate: new Date('2026-01-05'), endDate: new Date('2026-03-31'),
+      },
+    });
+
+    await addGrade(ana.id, maths.id, 'devoir', 14);
+    await addGrade(ana.id, maths.id, 'composition', 14);
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id,
+      gradeTypeId: types.devoir!, termId: term2.id, value: 17,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id,
+      gradeTypeId: types.composition!, termId: term2.id, value: 17,
+    });
+
+    const trend = await computeTermTrend(school.id, ana.id, schoolYear.id);
+    expect(trend).toEqual([
+      { termId: term.id, termLabel: 'Trimestre 1', average: 14 },
+      { termId: term2.id, termLabel: 'Trimestre 2', average: 17 },
+    ]);
+  });
+
+  it("porte null pour une période sans note, plutôt que de l'omettre", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    const term2 = await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // Trimestre 2 : aucune note pour Ana.
+
+    await addGrade(ana.id, maths.id, 'devoir', 12);
+    await addGrade(ana.id, maths.id, 'composition', 12);
+
+    const trend = await computeTermTrend(school.id, ana.id, schoolYear.id);
+    expect(trend).toEqual([
+      { termId: term.id, termLabel: 'Trimestre 1', average: 12 },
+      { termId: term2.id, termLabel: 'Trimestre 2', average: null },
+    ]);
+  });
+
+  it("renvoie un tableau vide quand l'année scolaire n'a aucune période active", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+
+    expect(await computeTermTrend(school.id, ana.id, schoolYear.id)).toEqual([]);
   });
 });
 

@@ -99,6 +99,33 @@ export async function computeClassBulletins(
   );
 }
 
+/**
+ * Rang de l'élève dans sa classe sur une période — même tri que
+ * `class.service.ts::getClassDetail` (nulls en fin de classement, égalité
+ * départagée par nom) pour que le rang annoncé au parent corresponde
+ * exactement à celui vu côté classe. Ne renvoie qu'un nombre : jamais les
+ * autres élèves, qui n'ont pas à être exposés au parent.
+ */
+export async function computeStudentRank(
+  schoolId: number,
+  studentId: number,
+  classId: number,
+  termId: number,
+): Promise<{ position: number; total: number } | null> {
+  const bulletin = await computeClassBulletin(schoolId, classId, termId);
+
+  const ranked = [...bulletin.students].sort((a, b) => {
+    if (a.average === null && b.average === null) return a.lastName.localeCompare(b.lastName, 'fr');
+    if (a.average === null) return 1;
+    if (b.average === null) return -1;
+    return b.average - a.average;
+  });
+  const noted = ranked.filter((s) => s.average !== null);
+
+  const position = noted.findIndex((s) => s.studentId === studentId);
+  return position === -1 ? null : { position: position + 1, total: noted.length };
+}
+
 function buildBulletin(
   klass: { id: number; name: string; level: string },
   term: { id: number; label: string },
@@ -208,18 +235,18 @@ function buildBulletin(
   };
 }
 
-/** Résultats d'un élève sur une période (espace parent, détail classe). */
-export async function computeStudentResult(
+/**
+ * Notes, moyennes par matière et moyenne générale (pleine précision) d'un
+ * élève sur une période — cœur partagé par `computeStudentResult` (un seul
+ * terme, arrondi à la sérialisation) et `computeAnnualAverage` (plusieurs
+ * termes de la même année scolaire, moyennés avant tout arrondi).
+ */
+async function studentSubjectsAndAverage(
   schoolId: number,
   studentId: number,
+  classId: number,
   termId: number,
-): Promise<StudentResult> {
-  const student = await prisma.student.findFirst({
-    where: { id: studentId, schoolId },
-    select: { id: true, firstName: true, lastName: true, classId: true, archivedAt: true },
-  });
-  if (!student) throw notFound('Élève introuvable');
-
+): Promise<{ subjects: SubjectResult[]; rawAverage: D | null }> {
   const [grades, coefficients] = await Promise.all([
     prisma.grade.findMany({
       where: { schoolId, studentId, termId },
@@ -233,7 +260,7 @@ export async function computeStudentResult(
         subject: { select: { id: true, name: true, coefficient: true } },
       },
     }),
-    prisma.subjectCoefficient.findMany({ where: { classId: student.classId } }),
+    prisma.subjectCoefficient.findMany({ where: { classId } }),
   ]);
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
@@ -269,13 +296,104 @@ export async function computeStudentResult(
 
   subjects.sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'fr'));
 
+  return { subjects, rawAverage: generalAverage(forGeneral) };
+}
+
+/** Résultats d'un élève sur une période (espace parent, détail classe). */
+export async function computeStudentResult(
+  schoolId: number,
+  studentId: number,
+  termId: number,
+): Promise<StudentResult> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, firstName: true, lastName: true, classId: true, archivedAt: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const { subjects, rawAverage } = await studentSubjectsAndAverage(
+    schoolId,
+    studentId,
+    student.classId,
+    termId,
+  );
+
   return {
     studentId: student.id,
     firstName: student.firstName,
     lastName: student.lastName,
-    average: serializeAverage(generalAverage(forGeneral)),
+    average: serializeAverage(rawAverage),
     subjects,
   };
+}
+
+/**
+ * Moyenne annuelle : moyenne simple des moyennes générales (pleine
+ * précision) de chaque période active de l'année scolaire — même discipline
+ * que la moyenne de classe (`averageOfDecimals`) pour éviter de dériver en
+ * moyennant des moyennes déjà arrondies à 2 décimales. Une période sans
+ * moyenne (élève pas encore noté ce terme-là) est simplement absente du
+ * calcul, jamais comptée 0. `null` si l'année scolaire n'a aucune période
+ * active.
+ */
+export async function computeAnnualAverage(
+  schoolId: number,
+  studentId: number,
+  schoolYearId: number,
+): Promise<number | null> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, classId: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    select: { id: true },
+  });
+  if (terms.length === 0) return null;
+
+  const rawAverages = await Promise.all(
+    terms.map((term) =>
+      studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id).then(
+        (r) => r.rawAverage,
+      ),
+    ),
+  );
+
+  return serializeAverage(averageOfDecimals(rawAverages));
+}
+
+/**
+ * Moyenne générale de chaque période active de l'année scolaire, dans
+ * l'ordre chronologique — la « tendance » côté parent, adaptée à notre
+ * découpage par trimestre plutôt qu'au mensuel qui ne correspond à rien dans
+ * ce modèle. Un seul point (ou aucun) n'est pas une tendance : c'est au
+ * client de décider s'il affiche quelque chose en dessous de deux.
+ */
+export async function computeTermTrend(
+  schoolId: number,
+  studentId: number,
+  schoolYearId: number,
+): Promise<{ termId: number; termLabel: string; average: number | null }[]> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, classId: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    select: { id: true, label: true },
+  });
+
+  return Promise.all(
+    terms.map(async (term) => {
+      const { rawAverage } = await studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id);
+      return { termId: term.id, termLabel: term.label, average: serializeAverage(rawAverage) };
+    }),
+  );
 }
 
 /**

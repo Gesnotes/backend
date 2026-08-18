@@ -240,6 +240,90 @@ describe('GET /children/:id', () => {
     expect((await get(tokenParentA, `/children/${ana.id}`)).status).toBe(400);
   });
 
+  it("calcule la moyenne annuelle quand la période appartient à une année scolaire", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    const term2 = await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // noteAna (composition, 15) + un devoir à 15 (beforeEach) passent le
+    // trimestre 1 à 15 ; le trimestre 2 est noté à 19.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: compoId, termId: term2.id, value: 19,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term2.id, value: 19,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.average).toBe(15);
+    // (15 + 19) / 2 = 17
+    expect(res.body.annualAverage).toBe(17);
+  });
+
+  it("ne calcule pas de moyenne annuelle si la période n'est rattachée à aucune année scolaire", async () => {
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.annualAverage).toBeNull();
+  });
+
+  it('renvoie le rang de l\'enfant dans sa classe, sans exposer les autres élèves', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition). Ben n'a aucune
+    // note ce terme-là : exclu du classement.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.rank).toEqual({ position: 1, total: 1 });
+    expect(JSON.stringify(res.body)).not.toContain('Beta');
+  });
+
+  it("renvoie la tendance par période de l'année scolaire", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // noteAna (composition à 15, beforeEach) est la seule note de T1 pour Ana ;
+    // devoir manquant : pas de moyenne matière publiée sur ce seul terme.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.termTrend).toEqual([
+      { termId: term.id, termLabel: 'Trimestre 1', average: 15 },
+      { termId: expect.any(Number), termLabel: 'Trimestre 2', average: null },
+    ]);
+  });
+
+  it("renvoie une tendance vide si la période n'est rattachée à aucune année scolaire", async () => {
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.termTrend).toEqual([]);
+  });
+
   it('reste accessible au professeur de la classe et à l\'admin', async () => {
     expect((await get(tokenProf, `/children/${ana.id}?term_id=${term.id}`)).status).toBe(200);
     expect((await get(tokenAdmin, `/children/${ana.id}?term_id=${term.id}`)).status).toBe(200);

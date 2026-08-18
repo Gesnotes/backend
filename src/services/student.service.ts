@@ -6,7 +6,7 @@ import type { AuthPayload } from '../types/express';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { recordAudit } from './audit.service';
-import { computeStudentResult } from './grading/grading.service';
+import { computeAnnualAverage, computeStudentResult } from './grading/grading.service';
 import { contactFields, identityFields } from './userFields';
 import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
 import { parseCsv, toCsv, type CsvCell } from '../lib/csv';
@@ -446,6 +446,10 @@ export async function getStudent(auth: AuthPayload, id: number) {
  * sélectionnée côté client — le bulletin vaut alors `null` plutôt que
  * d'échouer, comme le reste du tableau de bord (`dashboard.service.ts`).
  *
+ * `annualAverage` : moyenne des périodes actives de l'année scolaire à
+ * laquelle appartient `termId`, `null` si la période n'est rattachée à
+ * aucune année scolaire (voir `computeAnnualAverage`).
+ *
  * Les notes/moyennes ne sont pas bornées aux matières de l'enseignant
  * appelant : `computeStudentResult` fait déjà de même pour le bulletin de
  * classe (`bulletin.service.ts`), accessible à qui peut voir la classe — la
@@ -454,8 +458,11 @@ export async function getStudent(auth: AuthPayload, id: number) {
 export async function getStudentDetail(auth: AuthPayload, id: number, termId?: number) {
   const identity = await getStudent(auth, id);
 
-  const [bulletin, presence, recentGrades] = await Promise.all([
+  const [bulletin, term, presence, recentGrades] = await Promise.all([
     termId !== undefined ? computeStudentResult(auth.schoolId, id, termId) : null,
+    termId !== undefined
+      ? prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId }, select: { schoolYearId: true } })
+      : null,
     prisma.attendance.findMany({
       where: { studentId: id, schoolId: auth.schoolId },
       orderBy: { date: 'desc' },
@@ -478,9 +485,13 @@ export async function getStudentDetail(auth: AuthPayload, id: number, termId?: n
     }),
   ]);
 
+  const annualAverage =
+    term?.schoolYearId != null ? await computeAnnualAverage(auth.schoolId, id, term.schoolYearId) : null;
+
   return {
     ...identity,
     bulletin,
+    annualAverage,
     presence,
     dernieresNotes: recentGrades.map((grade) => ({
       id: grade.id,
