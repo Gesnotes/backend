@@ -296,6 +296,35 @@ describe('Écriture des périodes', () => {
     expect(res.body).toMatchObject({ label: 'Premier trimestre', startDate: '2025-09-01' });
   });
 
+  it('rattache une période à une année scolaire, à la création et à la modification', async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: schoolA.id, label: '2025-2026' },
+    });
+
+    const created = await write(adminToken)
+      .post('/terms')
+      .send({ ...term, schoolYearId: schoolYear.id });
+    expect(created.status).toBe(201);
+    expect(created.body.schoolYearId).toBe(schoolYear.id);
+
+    const detached = await write(adminToken)
+      .patch(`/terms/${created.body.id}`)
+      .send({ schoolYearId: null });
+    expect(detached.status).toBe(200);
+    expect(detached.body.schoolYearId).toBeNull();
+  });
+
+  it("refuse une année scolaire d'une autre école", async () => {
+    const otherYear = await prisma.schoolYear.create({
+      data: { schoolId: schoolB.id, label: '2025-2026' },
+    });
+
+    const res = await write(adminToken)
+      .post('/terms')
+      .send({ ...term, schoolYearId: otherYear.id });
+    expect(res.status).toBe(404);
+  });
+
   /**
    * Remplit une période : une classe, une matière, un élève et une note — donc
    * aussi une évaluation, `seedGrade` en créant une au passage.

@@ -49,6 +49,7 @@ const createBody = z.object({
   label: z.string().trim().min(1).max(50),
   startDate: z.iso.date().nullable().optional(),
   endDate: z.iso.date().nullable().optional(),
+  schoolYearId: z.coerce.number().int().positive().nullable().optional(),
 });
 
 const updateBody = createBody

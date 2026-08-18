@@ -163,6 +163,13 @@ export interface TermInput {
   label: string;
   startDate?: string | null;
   endDate?: string | null;
+  schoolYearId?: number | null;
+}
+
+/** Vérifie que l'année scolaire proposée existe bien dans l'école appelante. */
+async function assertSchoolYearValid(schoolId: number, schoolYearId: number) {
+  const year = await prisma.schoolYear.findFirst({ where: { id: schoolYearId, schoolId } });
+  if (!year) throw notFound('Année scolaire introuvable');
 }
 
 /**
@@ -221,6 +228,7 @@ async function assertNoOverlap(
 export async function createTerm(schoolId: number, data: TermInput): Promise<TermView> {
   assertDateRange(data.startDate, data.endDate);
   await assertNoOverlap(schoolId, data.startDate, data.endDate);
+  if (data.schoolYearId != null) await assertSchoolYearValid(schoolId, data.schoolYearId);
 
   const term = await prisma.term.create({
     data: {
@@ -228,6 +236,7 @@ export async function createTerm(schoolId: number, data: TermInput): Promise<Ter
       label: data.label,
       startDate: data.startDate ? new Date(data.startDate) : null,
       endDate: data.endDate ? new Date(data.endDate) : null,
+      schoolYearId: data.schoolYearId ?? null,
     },
     select: termSelect,
   });
@@ -258,6 +267,7 @@ export async function updateTerm(
 
   assertDateRange(startDate, endDate);
   await assertNoOverlap(schoolId, startDate, endDate, id);
+  if (data.schoolYearId != null) await assertSchoolYearValid(schoolId, data.schoolYearId);
 
   const term = await prisma.term.update({
     where: { id },
@@ -269,6 +279,7 @@ export async function updateTerm(
       ...(data.endDate !== undefined
         ? { endDate: data.endDate ? new Date(data.endDate) : null }
         : {}),
+      ...(data.schoolYearId !== undefined ? { schoolYearId: data.schoolYearId } : {}),
     },
     select: termSelect,
   });
