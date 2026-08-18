@@ -99,6 +99,33 @@ export async function computeClassBulletins(
   );
 }
 
+/**
+ * Rang de l'élève dans sa classe sur une période — même tri que
+ * `class.service.ts::getClassDetail` (nulls en fin de classement, égalité
+ * départagée par nom) pour que le rang annoncé au parent corresponde
+ * exactement à celui vu côté classe. Ne renvoie qu'un nombre : jamais les
+ * autres élèves, qui n'ont pas à être exposés au parent.
+ */
+export async function computeStudentRank(
+  schoolId: number,
+  studentId: number,
+  classId: number,
+  termId: number,
+): Promise<{ position: number; total: number } | null> {
+  const bulletin = await computeClassBulletin(schoolId, classId, termId);
+
+  const ranked = [...bulletin.students].sort((a, b) => {
+    if (a.average === null && b.average === null) return a.lastName.localeCompare(b.lastName, 'fr');
+    if (a.average === null) return 1;
+    if (b.average === null) return -1;
+    return b.average - a.average;
+  });
+  const noted = ranked.filter((s) => s.average !== null);
+
+  const position = noted.findIndex((s) => s.studentId === studentId);
+  return position === -1 ? null : { position: position + 1, total: noted.length };
+}
+
 function buildBulletin(
   klass: { id: number; name: string; level: string },
   term: { id: number; label: string },
@@ -335,6 +362,38 @@ export async function computeAnnualAverage(
   );
 
   return serializeAverage(averageOfDecimals(rawAverages));
+}
+
+/**
+ * Moyenne générale de chaque période active de l'année scolaire, dans
+ * l'ordre chronologique — la « tendance » côté parent, adaptée à notre
+ * découpage par trimestre plutôt qu'au mensuel qui ne correspond à rien dans
+ * ce modèle. Un seul point (ou aucun) n'est pas une tendance : c'est au
+ * client de décider s'il affiche quelque chose en dessous de deux.
+ */
+export async function computeTermTrend(
+  schoolId: number,
+  studentId: number,
+  schoolYearId: number,
+): Promise<{ termId: number; termLabel: string; average: number | null }[]> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, classId: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    select: { id: true, label: true },
+  });
+
+  return Promise.all(
+    terms.map(async (term) => {
+      const { rawAverage } = await studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id);
+      return { termId: term.id, termLabel: term.label, average: serializeAverage(rawAverage) };
+    }),
+  );
 }
 
 /**
