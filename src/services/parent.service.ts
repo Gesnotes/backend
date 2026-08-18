@@ -1,7 +1,7 @@
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { notFound } from '../errors/AppError';
-import { computeStudentResult } from './grading/grading.service';
+import { computeAnnualAverage, computeStudentResult } from './grading/grading.service';
 import { listSlotsForClassRaw } from './schedule.service';
 
 /**
@@ -82,15 +82,26 @@ export async function listMyChildren(auth: AuthPayload, termId?: number) {
   );
 }
 
-/** Détail d'un enfant : moyenne générale et moyenne par matière. */
+/**
+ * Détail d'un enfant : moyenne générale et moyenne par matière sur la
+ * période, plus `annualAverage` — moyenne des périodes actives de l'année
+ * scolaire de `termId`, `null` si cette période n'est rattachée à aucune
+ * année scolaire (voir `computeAnnualAverage`).
+ */
 export async function getChildDetail(auth: AuthPayload, studentId: number, termId: number) {
   await assertIsParentOf(auth, studentId);
 
   const term = await prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } });
   if (!term) throw notFound('Période introuvable');
 
-  const result = await computeStudentResult(auth.schoolId, studentId, termId);
-  return { ...result, termId, termLabel: term.label };
+  const [result, annualAverage] = await Promise.all([
+    computeStudentResult(auth.schoolId, studentId, termId),
+    term.schoolYearId != null
+      ? computeAnnualAverage(auth.schoolId, studentId, term.schoolYearId)
+      : Promise.resolve(null),
+  ]);
+
+  return { ...result, termId, termLabel: term.label, annualAverage };
 }
 
 /** Historique complet des notes d'un enfant, filtrable par période. */

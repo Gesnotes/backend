@@ -13,6 +13,8 @@ import { badRequest, conflict, notFound } from '../errors/AppError';
 export interface TermView {
   id: number;
   label: string;
+  /** Année scolaire de rattachement, `null` si la période n'y est pas liée. */
+  schoolYearId: number | null;
   startDate: string | null;
   endDate: string | null;
   /** Période en cours à la date du jour. Au plus une l'est. */
@@ -58,6 +60,7 @@ function toIsoDay(date: Date): string {
 type TermRow = {
   id: number;
   label: string;
+  schoolYearId: number | null;
   startDate: Date | null;
   endDate: Date | null;
   archivedAt: Date | null;
@@ -98,6 +101,7 @@ export function isOpenForEntry(
 const termSelect = {
   id: true,
   label: true,
+  schoolYearId: true,
   startDate: true,
   endDate: true,
   archivedAt: true,
@@ -109,6 +113,7 @@ function toView(term: TermRow, today: string): TermView {
   return {
     id: term.id,
     label: term.label,
+    schoolYearId: term.schoolYearId,
     startDate: term.startDate ? toIsoDay(term.startDate) : null,
     endDate: term.endDate ? toIsoDay(term.endDate) : null,
     // Une période archivée n'est jamais « en cours » : elle ne doit pas être

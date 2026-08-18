@@ -533,8 +533,45 @@ describe('GET /students/:id/detail — fiche élève', () => {
     const res = await api(adminToken).get(`/students/${created.body.id}/detail`);
     expect(res.status).toBe(200);
     expect(res.body.bulletin).toBeNull();
+    expect(res.body.annualAverage).toBeNull();
     expect(res.body.presence).toEqual([]);
     expect(res.body.dernieresNotes).toEqual([]);
+  });
+
+  it("calcule la moyenne annuelle quand la période appartient à une année scolaire", async () => {
+    const created = await newStudent();
+    const studentId = created.body.id;
+
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: schoolA.id, label: '2025-2026' },
+    });
+    const term1 = await prisma.term.create({
+      data: { schoolId: schoolA.id, label: 'T1', schoolYearId: schoolYear.id },
+    });
+    const term2 = await prisma.term.create({
+      data: { schoolId: schoolA.id, label: 'T2', schoolYearId: schoolYear.id },
+    });
+    const subject = await prisma.subject.create({ data: { schoolId: schoolA.id, name: 'Maths' } });
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
+    });
+    const composition = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
+    });
+
+    for (const [t, value] of [[term1, 10], [term2, 14]] as const) {
+      await seedGrade({
+        schoolId: schoolA.id, studentId, subjectId: subject.id, gradeTypeId: devoir.id, termId: t.id, value,
+      });
+      await seedGrade({
+        schoolId: schoolA.id, studentId, subjectId: subject.id, gradeTypeId: composition.id, termId: t.id, value,
+      });
+    }
+
+    const res = await api(adminToken).get(`/students/${studentId}/detail?term_id=${term1.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletin.average).toBe(10);
+    expect(res.body.annualAverage).toBe(12);
   });
 
   it("refuse un élève hors du périmètre de l'enseignant", async () => {
