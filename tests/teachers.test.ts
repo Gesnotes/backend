@@ -405,3 +405,95 @@ describe('GET /teachers', () => {
     expect((await api(teacherToken).get('/teachers')).status).toBe(403);
   });
 });
+
+describe('GET /teachers/:id/detail', () => {
+  it("retourne l'identité, les affectations, les dernières notes et présences saisies par ce compte", async () => {
+    const created = await newTeacher('jean@a.test', [{ classId: classA.id, subjectId: subjectA.id }]);
+    const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
+    const gradeType = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
+    });
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
+    });
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subjectA.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      teacherUserId: created.body.id,
+      value: 15,
+    });
+    await prisma.attendance.create({
+      data: {
+        schoolId: schoolA.id,
+        studentId: student.id,
+        classId: classA.id,
+        date: new Date('2026-01-15'),
+        status: 'present',
+        recordedByUserId: created.body.id,
+      },
+    });
+
+    const res = await api(adminToken).get(`/teachers/${created.body.id}/detail`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.email).toBe('jean@a.test');
+    expect(res.body).not.toHaveProperty('passwordHash');
+    expect(res.body.affectations).toHaveLength(1);
+    expect(res.body.affectations[0].className).toBe('6e A');
+    expect(res.body.totalNotesSaisies).toBe(1);
+    expect(res.body.dernieresNotes).toHaveLength(1);
+    expect(res.body.dernieresNotes[0].value).toBe(15);
+    expect(res.body.dernieresNotes[0].eleve.firstName).toBe('Ana');
+    expect(res.body.dernieresPresences).toHaveLength(1);
+    expect(res.body.dernieresPresences[0].status).toBe('present');
+  });
+
+  it("n'inclut ni les notes saisies par l'administration ni celles d'un autre enseignant", async () => {
+    const created = await newTeacher('jean@a.test', [{ classId: classA.id, subjectId: subjectA.id }]);
+    const otherTeacher = await createUser({ schoolId: schoolA.id, email: 'autre@a.test', role: 'teacher' });
+    const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'T1' } });
+    const gradeType = await prisma.gradeType.create({
+      data: { schoolId: schoolA.id, code: 'devoir', label: 'Devoir', weight: 2 },
+    });
+    const student = await prisma.student.create({
+      data: { schoolId: schoolA.id, classId: classA.id, firstName: 'Ana', lastName: 'K' },
+    });
+    // Note saisie par l'administration (pas de teacherUserId).
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subjectA.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      value: 12,
+    });
+    // Note saisie par un autre enseignant.
+    await seedGrade({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      subjectId: subjectA.id,
+      gradeTypeId: gradeType.id,
+      termId: term.id,
+      teacherUserId: otherTeacher.id,
+      value: 18,
+    });
+
+    const res = await api(adminToken).get(`/teachers/${created.body.id}/detail`);
+    expect(res.body.totalNotesSaisies).toBe(0);
+    expect(res.body.dernieresNotes).toHaveLength(0);
+  });
+
+  it("renvoie 404 pour un enseignant d'une autre école", async () => {
+    const foreign = await createUser({ schoolId: schoolB.id, email: 'prof@b.test', role: 'teacher' });
+    const res = await api(adminToken).get(`/teachers/${foreign.id}/detail`);
+    expect(res.status).toBe(404);
+  });
+
+  it('interdit la consultation à un enseignant', async () => {
+    const created = await newTeacher('jean@a.test');
+    expect((await api(teacherToken).get(`/teachers/${created.body.id}/detail`)).status).toBe(403);
+  });
+});

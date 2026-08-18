@@ -64,6 +64,93 @@ export async function getTeacher(schoolId: number, id: number) {
   return teacher;
 }
 
+const RECENT_GRADES_LIMIT = 10;
+const RECENT_ATTENDANCE_LIMIT = 10;
+
+/**
+ * Fiche complète d'un enseignant : identité (déjà couverte par `getTeacher`,
+ * qui porte aussi le contrôle d'accès), affectations classe × matière,
+ * dernières notes saisies et dernières présences enregistrées par ce compte —
+ * le pendant de `getStudentDetail` (student.service.ts), mais pour un
+ * enseignant plutôt qu'un élève.
+ *
+ * Une note ou une présence saisie par l'administration au nom d'un
+ * enseignant n'a pas `teacherUserId`/`recordedByUserId` égal à son id : elle
+ * n'apparaît donc pas ici, ce qui est le comportement voulu — cette fiche
+ * retrace ce que CE compte a lui-même saisi.
+ */
+export async function getTeacherDetail(schoolId: number, id: number) {
+  const teacher = await getTeacher(schoolId, id);
+
+  const [assignments, recentGrades, recentAttendance, totalGrades] = await Promise.all([
+    prisma.teacherAssignment.findMany({
+      where: { teacherUserId: id, schoolId },
+      orderBy: [{ class: { name: 'asc' } }, { subject: { name: 'asc' } }],
+      select: {
+        id: true,
+        classId: true,
+        class: { select: { name: true, level: true } },
+        subjectId: true,
+        subject: { select: { name: true } },
+      },
+    }),
+    prisma.grade.findMany({
+      where: { teacherUserId: id, schoolId },
+      orderBy: { createdAt: 'desc' },
+      take: RECENT_GRADES_LIMIT,
+      select: {
+        id: true,
+        value: true,
+        maxValue: true,
+        createdAt: true,
+        student: { select: { id: true, firstName: true, lastName: true } },
+        subject: { select: { id: true, name: true } },
+        gradeType: { select: { label: true } },
+      },
+    }),
+    prisma.attendance.findMany({
+      where: { recordedByUserId: id, schoolId },
+      orderBy: { date: 'desc' },
+      take: RECENT_ATTENDANCE_LIMIT,
+      select: {
+        id: true,
+        date: true,
+        status: true,
+        student: { select: { id: true, firstName: true, lastName: true } },
+      },
+    }),
+    prisma.grade.count({ where: { teacherUserId: id, schoolId } }),
+  ]);
+
+  return {
+    ...teacher,
+    affectations: assignments.map((a) => ({
+      id: a.id,
+      classId: a.classId,
+      className: a.class.name,
+      level: a.class.level,
+      subjectId: a.subjectId,
+      subjectName: a.subject.name,
+    })),
+    totalNotesSaisies: totalGrades,
+    dernieresNotes: recentGrades.map((grade) => ({
+      id: grade.id,
+      value: Number(grade.value),
+      maxValue: Number(grade.maxValue),
+      createdAt: grade.createdAt,
+      eleve: grade.student,
+      matiere: grade.subject,
+      type: { label: grade.gradeType.label },
+    })),
+    dernieresPresences: recentAttendance.map((record) => ({
+      id: record.id,
+      date: record.date,
+      status: record.status,
+      eleve: record.student,
+    })),
+  };
+}
+
 /**
  * Crée le compte enseignant et ses affectations dans une seule transaction :
  * un compte sans affectation ou des affectations orphelines seraient des états
