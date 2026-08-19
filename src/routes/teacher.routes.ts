@@ -74,6 +74,7 @@ teacherRoutes.post('/', validate({ body: createBody }), async (req, res) => {
   res.status(201).json(await teacherService.createTeacher(schoolIdOf(req), data));
 });
 
+/** Fiche complète : identité, affectations, dernières notes et présences saisies par ce compte. */
 teacherRoutes.get('/:id/detail', validate({ params: idParam }), async (req, res) => {
   const { id } = req.params as unknown as z.infer<typeof idParam>;
   res.json(await teacherService.getTeacherDetail(schoolIdOf(req), id));

@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import prisma from '../src/lib/prisma';
-import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedGrade } from './helpers';
+import { TEST_PASSWORD, createSchool, createUser, resetDatabase, seedAttendance, seedGrade } from './helpers';
 import { createApp } from '../src/app';
 import { signAccessToken } from '../src/lib/jwt';
 
@@ -425,15 +425,13 @@ describe('GET /teachers/:id/detail', () => {
       teacherUserId: created.body.id,
       value: 15,
     });
-    await prisma.attendance.create({
-      data: {
-        schoolId: schoolA.id,
-        studentId: student.id,
-        classId: classA.id,
-        date: new Date('2026-01-15'),
-        status: 'present',
-        recordedByUserId: created.body.id,
-      },
+    await seedAttendance({
+      schoolId: schoolA.id,
+      studentId: student.id,
+      classId: classA.id,
+      date: '2026-01-15',
+      status: 'present',
+      recordedByUserId: created.body.id,
     });
 
     const res = await api(adminToken).get(`/teachers/${created.body.id}/detail`);
