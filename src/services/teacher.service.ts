@@ -4,6 +4,7 @@ import argon2 from 'argon2';
 import prisma from '../lib/prisma';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { RECENT_ATTENDANCE_LIMIT, RECENT_GRADES_LIMIT, serializeGradeAmount } from '../lib/gradeSerializers';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
 import { recordAudit } from './audit.service';
 import { revokeAllSessions } from './auth.service';
@@ -27,6 +28,31 @@ const publicFields = {
   createdAt: true,
 } as const;
 
+/**
+ * Forme API commune d'une affectation classe × matière — partagée par
+ * `listTeachers`, `getTeacherWithAssignments` et `getTeacherDetail`, qui la
+ * recopiaient chacune sans qu'un changement de forme n'ait de garde-fou pour
+ * rester synchronisé entre les trois.
+ */
+function mapAssignments(
+  assignments: {
+    id: number;
+    classId: number;
+    class: { name: string; level: string };
+    subjectId: number;
+    subject: { name: string };
+  }[],
+) {
+  return assignments.map((a) => ({
+    id: a.id,
+    classId: a.classId,
+    className: a.class.name,
+    level: a.class.level,
+    subjectId: a.subjectId,
+    subjectName: a.subject.name,
+  }));
+}
+
 export async function listTeachers(schoolId: number, includeArchived = false) {
   const teachers = await prisma.user.findMany({
     where: { schoolId, role: 'teacher', ...(includeArchived ? {} : { archivedAt: null }) },
@@ -44,14 +70,7 @@ export async function listTeachers(schoolId: number, includeArchived = false) {
 
   return teachers.map(({ assignments, ...teacher }) => ({
     ...teacher,
-    affectations: assignments.map((a) => ({
-      id: a.id,
-      classId: a.classId,
-      className: a.class.name,
-      level: a.class.level,
-      subjectId: a.subjectId,
-      subjectName: a.subject.name,
-    })),
+    affectations: mapAssignments(assignments),
   }));
 }
 
@@ -63,9 +82,6 @@ export async function getTeacher(schoolId: number, id: number) {
   if (!teacher) throw notFound('Enseignant introuvable');
   return teacher;
 }
-
-const RECENT_GRADES_LIMIT = 10;
-const RECENT_ATTENDANCE_LIMIT = 10;
 
 /**
  * Fiche complète d'un enseignant : identité (déjà couverte par `getTeacher`,
@@ -82,6 +98,8 @@ const RECENT_ATTENDANCE_LIMIT = 10;
 export async function getTeacherDetail(schoolId: number, id: number) {
   const teacher = await getTeacher(schoolId, id);
 
+  const gradesWhere = { teacherUserId: id, schoolId };
+
   const [assignments, recentGrades, recentAttendance, totalGrades] = await Promise.all([
     prisma.teacherAssignment.findMany({
       where: { teacherUserId: id, schoolId },
@@ -95,8 +113,13 @@ export async function getTeacherDetail(schoolId: number, id: number) {
       },
     }),
     prisma.grade.findMany({
-      where: { teacherUserId: id, schoolId },
-      orderBy: { createdAt: 'desc' },
+      where: gradesWhere,
+      // Tri par id en repli : une saisie groupée (gradeBatch.service.ts) crée
+      // toutes les notes d'un lot dans la même transaction, donc avec le même
+      // `createdAt` — sans ce repli, les 10 dernières notes retournées parmi
+      // des lignes à égalité seraient arbitraires et pourraient changer d'un
+      // appel à l'autre sans qu'aucune note n'ait changé.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: RECENT_GRADES_LIMIT,
       select: {
         id: true,
@@ -110,7 +133,9 @@ export async function getTeacherDetail(schoolId: number, id: number) {
     }),
     prisma.attendance.findMany({
       where: { recordedByUserId: id, schoolId },
-      orderBy: { date: 'desc' },
+      // Même repli qu'au-dessus : une classe entière est appelée le même
+      // jour, donc avec la même `date` sur chaque ligne.
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
       take: RECENT_ATTENDANCE_LIMIT,
       select: {
         id: true,
@@ -119,25 +144,15 @@ export async function getTeacherDetail(schoolId: number, id: number) {
         student: { select: { id: true, firstName: true, lastName: true } },
       },
     }),
-    prisma.grade.count({ where: { teacherUserId: id, schoolId } }),
+    prisma.grade.count({ where: gradesWhere }),
   ]);
 
   return {
     ...teacher,
-    affectations: assignments.map((a) => ({
-      id: a.id,
-      classId: a.classId,
-      className: a.class.name,
-      level: a.class.level,
-      subjectId: a.subjectId,
-      subjectName: a.subject.name,
-    })),
+    affectations: mapAssignments(assignments),
     totalNotesSaisies: totalGrades,
     dernieresNotes: recentGrades.map((grade) => ({
-      id: grade.id,
-      value: Number(grade.value),
-      maxValue: Number(grade.maxValue),
-      createdAt: grade.createdAt,
+      ...serializeGradeAmount(grade),
       eleve: grade.student,
       matiere: grade.subject,
       type: { label: grade.gradeType.label },
@@ -389,14 +404,7 @@ async function getTeacherWithAssignments(schoolId: number, id: number) {
   const { assignments, ...rest } = teacher;
   return {
     ...rest,
-    affectations: assignments.map((a) => ({
-      id: a.id,
-      classId: a.classId,
-      className: a.class.name,
-      level: a.class.level,
-      subjectId: a.subjectId,
-      subjectName: a.subject.name,
-    })),
+    affectations: mapAssignments(assignments),
   };
 }
 
