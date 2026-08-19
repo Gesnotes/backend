@@ -8,12 +8,10 @@ import { badRequest, conflict, notFound } from '../errors/AppError';
 import { recordAudit } from './audit.service';
 import { computeAnnualAverage, computeStudentResult } from './grading/grading.service';
 import { contactFields, identityFields } from './userFields';
+import { RECENT_ATTENDANCE_LIMIT, RECENT_GRADES_LIMIT, serializeGradeAmount } from '../lib/gradeSerializers';
 import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
 import { parseCsv, toCsv, type CsvCell } from '../lib/csv';
 import { sendInvitation } from './invitation.service';
-
-const RECENT_ATTENDANCE_LIMIT = 10;
-const RECENT_GRADES_LIMIT = 10;
 
 export const STUDENTS_PAGE_SIZE = 100;
 
@@ -494,10 +492,7 @@ export async function getStudentDetail(auth: AuthPayload, id: number, termId?: n
     annualAverage,
     presence,
     dernieresNotes: recentGrades.map((grade) => ({
-      id: grade.id,
-      value: Number(grade.value),
-      maxValue: Number(grade.maxValue),
-      createdAt: grade.createdAt,
+      ...serializeGradeAmount(grade),
       matiere: grade.subject,
       type: { label: grade.gradeType.label },
       periode: grade.term,

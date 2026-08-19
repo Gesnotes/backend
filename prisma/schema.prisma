@@ -621,6 +621,7 @@ model Grade {
   @@index([studentId, termId]) // porte tout le calcul des moyennes
   @@index([schoolId, createdAt]) // porte le dashboard admin
   @@index([subjectId, termId])
+  @@index([teacherUserId, createdAt]) // porte la fiche enseignant (notes récentes + total saisi)
   @@map("grades")
 }
 
@@ -706,6 +707,7 @@ model Attendance {
   @@index([studentId, date, slotId])
   @@index([classId, date]) // porte la feuille de présence d'une classe pour un jour
   @@index([slotId, date]) // porte la feuille de présence d'un créneau pour un jour
+  @@index([recordedByUserId, date]) // porte la fiche enseignant (présences récentes)
   @@map("attendances")
 }
 
