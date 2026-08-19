@@ -3,8 +3,10 @@ import type { AttendanceStatus } from '../generated/prisma/enums';
 import type { AuthPayload } from '../types/express';
 import { badRequest, conflict, forbidden, notFound } from '../errors/AppError';
 import { emitEvent } from '../lib/events';
+import { assertCanViewClass } from './class.service';
 import { assertIsParentOf } from './parent.service';
 import { minutesToHHMM, weekdayOfIsoDate } from './schedule.service';
+import { getStudent } from './student.service';
 
 /**
  * Saisie de la présence.
@@ -330,6 +332,126 @@ export async function listChildAttendance(
     },
     orderBy: { date: 'desc' },
     take: 200,
+    select: {
+      id: true,
+      date: true,
+      status: true,
+      comment: true,
+      classId: true,
+      slot: { select: { teacherAssignment: { select: { subject: { select: { name: true } } } } } },
+    },
+  });
+
+  return records.map(({ slot, ...record }) => ({
+    ...record,
+    subjectName: slot?.teacherAssignment.subject.name ?? null,
+  }));
+}
+
+export interface ClassAttendanceSummaryRow {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  present: number;
+  absent: number;
+  late: number;
+  recorded: number;
+}
+
+/**
+ * Récap de présence d'une classe sur une période : pour chaque élève actuel
+ * de la classe, le nombre de présences/absences/retards enregistrés dans les
+ * dates de la période. Sert à repérer vite qui pose problème, avant d'ouvrir
+ * le détail d'un élève.
+ *
+ * Comme `getStudentDetail`, on ne filtre pas sur `Attendance.classId` : c'est
+ * l'historique de l'élève sur la période qui compte, pas la classe où
+ * l'appel a été fait (un élève déplacé en cours de période garde son
+ * historique).
+ */
+export async function getClassAttendanceSummary(auth: AuthPayload, classId: number, termId: number) {
+  await assertCanViewClass(auth, classId);
+
+  const term = await prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } });
+  if (!term) throw notFound('Période introuvable');
+
+  const students = await prisma.student.findMany({
+    where: { classId, schoolId: auth.schoolId, archivedAt: null },
+    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+    select: { id: true, firstName: true, lastName: true },
+  });
+
+  const grouped = students.length === 0 ? [] : await prisma.attendance.groupBy({
+    by: ['studentId', 'status'],
+    where: {
+      schoolId: auth.schoolId,
+      studentId: { in: students.map((student) => student.id) },
+      ...(term.startDate || term.endDate
+        ? {
+            date: {
+              ...(term.startDate ? { gte: term.startDate } : {}),
+              ...(term.endDate ? { lte: term.endDate } : {}),
+            },
+          }
+        : {}),
+    },
+    _count: { _all: true },
+  });
+
+  const counts = new Map<number, { present: number; absent: number; late: number }>();
+  for (const row of grouped) {
+    const entry = counts.get(row.studentId) ?? { present: 0, absent: 0, late: 0 };
+    entry[row.status] = row._count._all;
+    counts.set(row.studentId, entry);
+  }
+
+  const rows: ClassAttendanceSummaryRow[] = students.map((student) => {
+    const entry = counts.get(student.id) ?? { present: 0, absent: 0, late: 0 };
+    return {
+      studentId: student.id,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      ...entry,
+      recorded: entry.present + entry.absent + entry.late,
+    };
+  });
+
+  return { classId, termId, students: rows };
+}
+
+/**
+ * Historique complet de présence d'un élève, éventuellement borné à une
+ * période — la fiche d'absence individuelle. `getStudent` porte le contrôle
+ * d'accès (l'élève doit être dans le périmètre de l'appelant), comme pour la
+ * fiche élève.
+ */
+export async function listStudentAttendanceHistory(
+  auth: AuthPayload,
+  studentId: number,
+  filters: { termId?: number },
+) {
+  await getStudent(auth, studentId);
+
+  const term = filters.termId !== undefined
+    ? await prisma.term.findFirst({ where: { id: filters.termId, schoolId: auth.schoolId } })
+    : null;
+  if (filters.termId !== undefined && !term) throw notFound('Période introuvable');
+
+  const records = await prisma.attendance.findMany({
+    where: {
+      studentId,
+      schoolId: auth.schoolId,
+      ...(term?.startDate || term?.endDate
+        ? {
+            date: {
+              ...(term.startDate ? { gte: term.startDate } : {}),
+              ...(term.endDate ? { lte: term.endDate } : {}),
+            },
+          }
+        : {}),
+    },
+    orderBy: { date: 'desc' },
+    take: 500,
     select: {
       id: true,
       date: true,

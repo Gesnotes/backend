@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as classService from '../services/class.service';
 import { requireAuth } from '../middlewares/requireAuth';
@@ -94,6 +95,17 @@ classRoutes.get(
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
     res.json(await classService.getClassDetail(authOf(req), id, term_id));
+  },
+);
+
+/** Récap de présence de la classe sur une période : compteurs par élève. */
+classRoutes.get(
+  '/:id/attendance-summary',
+  validate({ params: idParam, query: detailQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
+    res.json(await attendanceService.getClassAttendanceSummary(authOf(req), id, term_id));
   },
 );
 

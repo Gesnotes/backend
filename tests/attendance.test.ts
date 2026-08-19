@@ -282,6 +282,90 @@ describe('GET /children/:id/attendance — historique du parent', () => {
   });
 });
 
+describe('GET /classes/:id/attendance-summary — récap admin par classe', () => {
+  it('agrège présences/absences/retards par élève sur la période', async () => {
+    const term = await prisma.term.create({
+      data: {
+        schoolId: schoolA.id,
+        label: 'Trimestre 1',
+        startDate: new Date('2026-08-01'),
+        endDate: new Date('2026-08-31'),
+      },
+    });
+
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-08-05', status: 'absent' });
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-08-06', status: 'present' });
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[1]!.id, classId: klass.id, date: '2026-08-06', status: 'late' });
+    // Hors période : ignoré par le récap.
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-09-15', status: 'absent' });
+
+    const res = await api(adminToken).get(`/classes/${klass.id}/attendance-summary?term_id=${term.id}`);
+
+    expect(res.status).toBe(200);
+    const first = res.body.students.find((s: { studentId: number }) => s.studentId === students[0]!.id);
+    expect(first).toMatchObject({ present: 1, absent: 1, late: 0, recorded: 2 });
+    const second = res.body.students.find((s: { studentId: number }) => s.studentId === students[1]!.id);
+    expect(second).toMatchObject({ present: 0, absent: 0, late: 1, recorded: 1 });
+    const third = res.body.students.find((s: { studentId: number }) => s.studentId === students[2]!.id);
+    expect(third).toMatchObject({ present: 0, absent: 0, late: 0, recorded: 0 });
+  });
+
+  it("refuse un enseignant qui n'enseigne pas dans la classe", async () => {
+    const term = await prisma.term.create({ data: { schoolId: schoolA.id, label: 'Trimestre 1' } });
+    const res = await api(otherTeacherToken).get(`/classes/${klass.id}/attendance-summary?term_id=${term.id}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('refuse une période inconnue', async () => {
+    const res = await api(adminToken).get(`/classes/${klass.id}/attendance-summary?term_id=999999`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /students/:id/attendance — fiche d'absence individuelle", () => {
+  it("renvoie l'historique complet de l'élève, plus récent d'abord", async () => {
+    await seedAttendance({
+      schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-08-05',
+      status: 'absent', comment: 'Certificat médical',
+    });
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-08-06', status: 'present' });
+
+    const res = await api(adminToken).get(`/students/${students[0]!.id}/attendance`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toMatchObject({ status: 'present' });
+    expect(res.body[1]).toMatchObject({ status: 'absent', comment: 'Certificat médical' });
+  });
+
+  it('filtre sur la période quand term_id est fourni', async () => {
+    const term = await prisma.term.create({
+      data: {
+        schoolId: schoolA.id,
+        label: 'Trimestre 1',
+        startDate: new Date('2026-08-01'),
+        endDate: new Date('2026-08-31'),
+      },
+    });
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-08-05', status: 'absent' });
+    await seedAttendance({ schoolId: schoolA.id, studentId: students[0]!.id, classId: klass.id, date: '2026-09-10', status: 'present' });
+
+    const res = await api(adminToken).get(`/students/${students[0]!.id}/attendance?term_id=${term.id}`);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0]).toMatchObject({ status: 'absent' });
+  });
+
+  it('refuse un enseignant hors de son périmètre', async () => {
+    const res = await api(otherTeacherToken).get(`/students/${students[0]!.id}/attendance`);
+    expect(res.status).toBe(404);
+  });
+
+  it('refuse un parent', async () => {
+    const res = await api(parentToken).get(`/students/${students[0]!.id}/attendance`);
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('notification des parents en cas d’absence ou de retard', () => {
   const TOKEN = 'fcm-token-test';
 

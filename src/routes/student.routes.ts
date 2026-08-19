@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as studentService from '../services/student.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
@@ -178,6 +179,18 @@ studentRoutes.get(
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const { term_id } = req.query as unknown as { term_id?: number };
     res.json(await studentService.getStudentDetail(authOf(req), id, term_id));
+  },
+);
+
+/** Fiche d'absence : historique complet de présence, filtrable par période. */
+studentRoutes.get(
+  '/:id/attendance',
+  requireRole('admin', 'teacher'),
+  validate({ params: idParam, query: z.object({ term_id: z.coerce.number().int().positive().optional() }) }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as { term_id?: number };
+    res.json(await attendanceService.listStudentAttendanceHistory(authOf(req), id, { termId: term_id }));
   },
 );
 
