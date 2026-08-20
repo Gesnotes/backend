@@ -9,6 +9,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # prisma.config.js lit DATABASE_URL au chargement (dotenv/config), y
+    # compris pour `prisma generate` qui ne touche pourtant aucune base —
+    # sans .env comme en local, la commande échoue avant même de démarrer.
+    env:
+      DATABASE_URL: postgresql://postgres:admin@localhost:5432/gesnotes_test
+
     services:
       postgres:
         image: postgres:16
