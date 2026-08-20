@@ -23,6 +23,13 @@ const loginBody = z.object({
 
 const refreshBody = z.object({ refreshToken: z.string().min(1) });
 
+const forgotBody = z.object({ email: z.email('Email invalide') });
+
+const resetBody = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8, 'Le mot de passe doit faire au moins 8 caractères'),
+});
+
 staffRoutes.post(
   '/login',
   publicRoute,
@@ -54,6 +61,32 @@ staffRoutes.post(
     const { refreshToken } = req.body as z.infer<typeof refreshBody>;
     await staffAuthService.logout(refreshToken);
     res.status(204).send();
+  },
+);
+
+staffRoutes.post(
+  '/forgot-password',
+  publicRoute,
+  credentialsLimiter,
+  validate({ body: forgotBody }),
+  async (req, res) => {
+    const { email } = req.body as z.infer<typeof forgotBody>;
+    await staffAuthService.requestPasswordReset(email);
+
+    // Réponse identique que le compte existe ou non : pas d'énumération.
+    res.json({ message: 'Si un compte existe, un email de réinitialisation a été envoyé.' });
+  },
+);
+
+staffRoutes.post(
+  '/reset-password',
+  publicRoute,
+  credentialsLimiter,
+  validate({ body: resetBody }),
+  async (req, res) => {
+    const { token, password } = req.body as z.infer<typeof resetBody>;
+    await staffAuthService.resetPassword(token, password);
+    res.json({ message: 'Mot de passe mis à jour.' });
   },
 );
 
