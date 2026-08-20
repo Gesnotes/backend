@@ -6,6 +6,7 @@ import type { SignupRequestStatus } from '../generated/prisma/enums';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail } from '../lib/normalize';
 import { sendInvitation } from './invitation.service';
+import { provisionFromLevels } from './provisioning.service';
 
 /**
  * Supervision de la plateforme par l'équipe Gesnotes : traiter les demandes
@@ -59,6 +60,12 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
         { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
       ],
     });
+
+    // Rend réels les niveaux cochés sur le formulaire d'inscription : une
+    // classe par niveau du cycle, et les matières standard qui vont avec —
+    // l'administration parle d'un établissement déjà entamé, pas d'une page
+    // blanche, dès son premier coup d'œil.
+    await provisionFromLevels(tx, school.id, request.levels);
 
     const admin = await tx.user.create({
       data: {

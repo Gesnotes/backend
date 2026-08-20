@@ -246,6 +246,11 @@ describe('GET /classes/:id/bulletin/csv', () => {
     const maths = await prisma.subject.create({
       data: { schoolId: school.id, name: 'Maths', coefficient: 4 },
     });
+    // Rattache la matière à la classe : sans ça, elle n'est attendue nulle
+    // part et le bulletin n'est jamais considéré complet.
+    await prisma.subjectCoefficient.create({
+      data: { classId: sixieme.id, subjectId: maths.id, coefficient: 4 },
+    });
     const devoir = await prisma.gradeType.create({
       data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 1, position: 1 },
     });

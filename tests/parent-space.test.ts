@@ -240,6 +240,26 @@ describe('GET /children/:id', () => {
     expect((await get(tokenParentA, `/children/${ana.id}`)).status).toBe(400);
   });
 
+  it("signale le bulletin prêt quand l'unique matière attendue de la classe est notée", async () => {
+    // noteAna (beforeEach) note déjà Maths, seule matière rattachée à la classe.
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinReady).toBe(true);
+    expect(res.body.missingSubjects).toEqual([]);
+  });
+
+  it("signale le bulletin incomplet tant qu'une matière attendue de la classe n'est pas notée", async () => {
+    const svt = await prisma.subject.create({ data: { schoolId: school.id, name: 'SVT' } });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe.id, subjectId: svt.id, coefficient: 1 },
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinReady).toBe(false);
+    expect(res.body.missingSubjects).toEqual(['SVT']);
+  });
+
   it("calcule la moyenne annuelle quand la période appartient à une année scolaire", async () => {
     const schoolYear = await prisma.schoolYear.create({
       data: { schoolId: school.id, label: '2025-2026' },
