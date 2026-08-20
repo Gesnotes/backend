@@ -36,6 +36,12 @@ beforeEach(async () => {
   const maths = await prisma.subject.create({
     data: { schoolId: school.id, name: 'Mathématiques', coefficient: 4 },
   });
+  // Rattache la matière à la classe (comme ClassSubjectsPanel côté admin) :
+  // sans ça, elle n'est « attendue » nulle part et le bulletin n'est jamais
+  // considéré complet, quel que soit le nombre de notes saisies.
+  await prisma.subjectCoefficient.create({
+    data: { classId: classe.id, subjectId: maths.id, coefficient: 4 },
+  });
   const [interro, devoir, compo] = await Promise.all([
     prisma.gradeType.create({
       data: { schoolId: school.id, code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
@@ -208,6 +214,21 @@ describe('export du bulletin individuel', () => {
     const res = await get(tokenAutreParent, `/children/${ana.id}/bulletin/export?term_id=${term.id}`);
     expect(res.status).toBe(404);
   });
+
+  it("est refusé — même à l'admin — tant qu'une matière de la classe n'est pas notée", async () => {
+    const svt = await prisma.subject.create({ data: { schoolId: school.id, name: 'SVT' } });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe.id, subjectId: svt.id, coefficient: 1 },
+    });
+
+    const parentRes = await get(tokenParent, `/children/${ana.id}/bulletin/export?term_id=${term.id}`);
+    expect(parentRes.status).toBe(409);
+    expect(parentRes.body.error.message).toMatch(/SVT/);
+
+    const adminRes = await get(tokenAdmin, `/classes/${classe.id}/bulletin/export?term_id=${term.id}`);
+    expect(adminRes.status).toBe(409);
+    expect(adminRes.body.error.message).toMatch(/SVT/);
+  });
 });
 
 describe('cohérence avec le calcul', () => {
@@ -248,6 +269,9 @@ describe('cohérence avec le calcul', () => {
     });
     const histoire = await prisma.subject.create({
       data: { schoolId: school.id, name: 'Histoire', coefficient: 1 },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { classId: mixte.id, subjectId: histoire.id, coefficient: 1 },
     });
     // Le type « devoir » existe déjà pour cette école (seedé dans le
     // beforeEach) : un type de note est propre à l'école, pas à la matière.

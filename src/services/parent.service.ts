@@ -2,7 +2,7 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { notFound } from '../errors/AppError';
 import {
-  computeAnnualAverage, computeStudentRank, computeStudentResult, computeTermTrend,
+  computeAnnualAverage, computeBulletinReadiness, computeStudentRank, computeStudentResult, computeTermTrend,
 } from './grading/grading.service';
 import { listSlotsForClassRaw } from './schedule.service';
 
@@ -102,7 +102,7 @@ export async function getChildDetail(auth: AuthPayload, studentId: number, termI
   const term = await prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } });
   if (!term) throw notFound('Période introuvable');
 
-  const [result, annualAverage, rank, termTrend] = await Promise.all([
+  const [result, annualAverage, rank, termTrend, readiness] = await Promise.all([
     computeStudentResult(auth.schoolId, studentId, termId),
     term.schoolYearId != null
       ? computeAnnualAverage(auth.schoolId, studentId, term.schoolYearId)
@@ -111,9 +111,22 @@ export async function getChildDetail(auth: AuthPayload, studentId: number, termI
     term.schoolYearId != null
       ? computeTermTrend(auth.schoolId, studentId, term.schoolYearId)
       : Promise.resolve([]),
+    // Le bulletin de la classe (pas seulement de cet enfant) doit être
+    // complet avant de proposer le téléchargement — même règle que
+    // `bulletin.service.ts::assertBulletinReady`.
+    computeBulletinReadiness(auth.schoolId, student.classId, termId),
   ]);
 
-  return { ...result, termId, termLabel: term.label, annualAverage, rank, termTrend };
+  return {
+    ...result,
+    termId,
+    termLabel: term.label,
+    annualAverage,
+    rank,
+    termTrend,
+    bulletinReady: readiness.ready,
+    missingSubjects: readiness.missingSubjects,
+  };
 }
 
 /** Historique complet des notes d'un enfant, filtrable par période. */

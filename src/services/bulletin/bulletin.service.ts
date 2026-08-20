@@ -39,7 +39,7 @@ export async function exportClassBulletin(
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
   ]);
 
-  assertHasResults(bulletin.students, bulletin.termLabel);
+  assertBulletinReady(bulletin);
 
   const context: BulletinContext = {
     schoolName: school.name,
@@ -83,13 +83,16 @@ export async function exportStudentBulletin(
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
   ]);
 
+  // Le bulletin n'est remis à une famille que lorsque toute la classe est
+  // couverte, pas seulement l'enfant concerné : même règle que l'export de
+  // classe, pour ne jamais distribuer un document à colonnes manquantes.
+  assertBulletinReady(bulletin);
+
   // Un élève archivé est exclu du bulletin de classe : on retombe alors sur le
   // calcul individuel, qui reste valable pour lui.
   const result =
     bulletin.students.find((student) => student.studentId === studentId) ??
     (await computeStudentResult(auth.schoolId, studentId, termId));
-
-  assertHasResults([result], bulletin.termLabel);
 
   const buffer = await generateStudentBulletinPdf(
     {
@@ -129,7 +132,7 @@ export async function exportClassBulletinCsv(
   await assertCanViewClass(auth, classId);
 
   const bulletin = await computeClassBulletin(auth.schoolId, classId, termId);
-  assertHasResults(bulletin.students, bulletin.termLabel);
+  assertBulletinReady(bulletin);
 
   // Le calcul ne retient que les matières notées, et chaque élève porte la même
   // liste : la lire sur le premier suffit, et éviter l'union empêche les
@@ -187,30 +190,36 @@ export async function exportClassBulletinCsv(
 }
 
 /**
- * Refuse de produire un bulletin qui n'aurait rien à montrer.
+ * Refuse de produire un bulletin tant qu'il n'est pas complet.
  *
- * Le calcul agrège les notes de toute la classe et la mise en page ouvre une
- * page par élève : sur une période sans aucune note, c'est un document vide
- * payé au prix fort, et un PDF distribué aux familles avec des tirets partout.
- * Le refus arrive après le calcul, mais avant la génération — la partie chère.
+ * Un bulletin n'est remis aux familles qu'à la fin d'une période, quand
+ * chaque matière attendue de la classe a été notée (`bulletinReady`, calculé
+ * par `computeClassBulletin`) — jamais un document à colonnes manquantes. Le
+ * refus arrive après le calcul, mais avant la génération — la partie chère.
  */
-function assertHasResults(
-  students: { subjects: unknown[] }[],
-  termLabel: string,
-) {
-  if (students.length === 0) {
+function assertBulletinReady(bulletin: {
+  students: unknown[];
+  termLabel: string;
+  bulletinReady: boolean;
+  missingSubjects: string[];
+}) {
+  if (bulletin.students.length === 0) {
     throw conflict(
       "Aucun élève dans cette classe : il n'y a pas de bulletin à produire.",
     );
   }
 
-  // Le calcul ne retient que les matières réellement notées : aucune matière
-  // sur aucun élève signifie aucune note sur la période.
-  if (students.every((student) => student.subjects.length === 0)) {
+  if (bulletin.bulletinReady) return;
+
+  if (bulletin.missingSubjects.length === 0) {
     throw conflict(
-      `Aucune note saisie sur « ${termLabel} » : le bulletin serait vide. Attendez les saisies des enseignants.`,
+      `Aucune note saisie sur « ${bulletin.termLabel} » : le bulletin serait vide. Attendez les saisies des enseignants.`,
     );
   }
+
+  throw conflict(
+    `Le bulletin de « ${bulletin.termLabel} » n'est pas encore complet : il manque les notes de ${bulletin.missingSubjects.join(', ')}. Il sera disponible une fois toutes les matières notées.`,
+  );
 }
 
 /** Nom de fichier sûr : pas d'accent, pas d'espace, pas de séparateur. */

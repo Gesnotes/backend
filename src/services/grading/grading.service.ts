@@ -38,9 +38,74 @@ export interface StudentResult {
  * avec les fonctions pures de `compute.ts`.
  */
 export async function computeClassBulletin(schoolId: number, classId: number, termId: number) {
-  const [bulletin] = await computeClassBulletins(schoolId, [classId], termId);
+  const [[bulletin], readiness] = await Promise.all([
+    computeClassBulletins(schoolId, [classId], termId),
+    computeBulletinReadiness(schoolId, classId, termId),
+  ]);
   if (!bulletin) throw notFound('Classe introuvable');
-  return bulletin;
+  return { ...bulletin, bulletinReady: readiness.ready, missingSubjects: readiness.missingSubjects };
+}
+
+/**
+ * Matières attendues d'une classe : celles qui ont un enseignant affecté ou
+ * un coefficient déclaré (même définition que `grade.service.ts::listSchoolPairs`
+ * et `ClassSubjectsPanel.tsx` côté front), sans dépendre de ce qui a déjà été
+ * noté.
+ */
+async function listExpectedSubjects(
+  schoolId: number,
+  classId: number,
+): Promise<{ id: number; name: string }[]> {
+  const [assignments, coefficients] = await Promise.all([
+    prisma.teacherAssignment.findMany({
+      where: { schoolId, classId },
+      select: { subjectId: true, subject: { select: { name: true } } },
+    }),
+    prisma.subjectCoefficient.findMany({
+      where: { classId, subject: { schoolId } },
+      select: { subjectId: true, subject: { select: { name: true } } },
+    }),
+  ]);
+
+  const seen = new Map<number, string>();
+  for (const a of assignments) seen.set(a.subjectId, a.subject.name);
+  for (const c of coefficients) seen.set(c.subjectId, c.subject.name);
+
+  return [...seen.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}
+
+/**
+ * Un bulletin n'est « prêt » — au sens où il peut être remis aux familles —
+ * que lorsque chaque matière attendue de la classe a produit au moins une
+ * note sur la période. Avant ça, le document aurait des colonnes manquantes
+ * plutôt que des tirets isolés : mieux vaut ne pas l'offrir du tout.
+ *
+ * Une classe sans aucune matière attendue (mode présence, ou pas encore
+ * configurée) n'est jamais « prête » : il n'y a rien à couvrir, donc rien à
+ * remettre.
+ */
+export async function computeBulletinReadiness(
+  schoolId: number,
+  classId: number,
+  termId: number,
+): Promise<{ ready: boolean; missingSubjects: string[] }> {
+  const [expected, graded] = await Promise.all([
+    listExpectedSubjects(schoolId, classId),
+    prisma.grade.findMany({
+      where: { schoolId, termId, student: { classId, archivedAt: null } },
+      distinct: ['subjectId'],
+      select: { subjectId: true },
+    }),
+  ]);
+
+  if (expected.length === 0) return { ready: false, missingSubjects: [] };
+
+  const gradedIds = new Set(graded.map((g) => g.subjectId));
+  const missingSubjects = expected.filter((s) => !gradedIds.has(s.id)).map((s) => s.name);
+
+  return { ready: missingSubjects.length === 0, missingSubjects };
 }
 
 /**
