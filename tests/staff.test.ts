@@ -238,6 +238,63 @@ describe('demandes d’inscription', () => {
     expect(gradeTypes.map((t) => t.code)).toEqual(['interrogation', 'devoir', 'composition']);
   });
 
+  it('provisionne les matières et une classe par niveau selon les niveaux cochés', async () => {
+    const demand = await seedRequest();
+    // La demande par défaut coche garderie + maternelle (mode présence,
+    // aucune matière à noter) : un cycle avec matières la remplace ici.
+    await prisma.signupRequest.update({
+      where: { id: demand.id },
+      data: { levels: ['collège'] },
+    });
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    expect(res.status).toBe(201);
+    const schoolId = res.body.school.id as number;
+
+    const classes = await prisma.class.findMany({ where: { schoolId }, orderBy: { level: 'asc' } });
+    expect(classes.map((c) => c.level)).toEqual(['3e', '4e', '5e', '6e']);
+    expect(classes.every((c) => c.mode === 'notes')).toBe(true);
+
+    const subjects = await prisma.subject.findMany({ where: { schoolId } });
+    expect(subjects.map((s) => s.name).sort()).toEqual(
+      ['Anglais', 'EPS', 'Français', 'Histoire-Géographie', 'Mathématiques', 'Physique-Chimie', 'SVT'].sort(),
+    );
+    expect(subjects.every((s) => Number(s.coefficient) === 1)).toBe(true);
+
+    // Chaque matière est rattachée à chacune des quatre classes du collège.
+    const coefficients = await prisma.subjectCoefficient.findMany({ where: { class: { schoolId } } });
+    expect(coefficients).toHaveLength(subjects.length * classes.length);
+  });
+
+  it('provisionne un cycle sans matières (mode présence) sans créer aucun coefficient', async () => {
+    const demand = await seedRequest(); // garderie + maternelle par défaut
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    const schoolId = res.body.school.id as number;
+
+    const classes = await prisma.class.findMany({ where: { schoolId } });
+    expect(classes.map((c) => c.level).sort()).toEqual(
+      ['Garderie', 'Grande Section', 'Moyenne Section', 'Petite Section'].sort(),
+    );
+    expect(classes.every((c) => c.mode === 'presence')).toBe(true);
+    expect(await prisma.subject.count({ where: { schoolId } })).toBe(0);
+    expect(await prisma.subjectCoefficient.count({ where: { class: { schoolId } } })).toBe(0);
+  });
+
+  it('ignore un niveau qui ne correspond à aucun gabarit connu', async () => {
+    const demand = await seedRequest();
+    await prisma.signupRequest.update({
+      where: { id: demand.id },
+      data: { levels: ['formation professionnelle'] },
+    });
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    const schoolId = res.body.school.id as number;
+
+    expect(await prisma.class.count({ where: { schoolId } })).toBe(0);
+    expect(await prisma.subject.count({ where: { schoolId } })).toBe(0);
+  });
+
   it('accepte avec un nom choisi par le staff', async () => {
     const demand = await seedRequest();
 
