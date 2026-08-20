@@ -14,10 +14,13 @@ export interface SchoolSettingsView {
   email: string | null;
   phone: string | null;
   address: string | null;
+  bulletinHeader: string | null;
+  bulletinFooter: string | null;
 }
 
 const settingsSelect = {
   name: true, passingGrade: true, email: true, phone: true, address: true,
+  bulletinHeader: true, bulletinFooter: true,
 } as const;
 
 function toView(school: {
@@ -26,6 +29,8 @@ function toView(school: {
   email: string | null;
   phone: string | null;
   address: string | null;
+  bulletinHeader: string | null;
+  bulletinFooter: string | null;
 }): SchoolSettingsView {
   return {
     name: school.name,
@@ -33,6 +38,8 @@ function toView(school: {
     email: school.email,
     phone: school.phone,
     address: school.address,
+    bulletinHeader: school.bulletinHeader,
+    bulletinFooter: school.bulletinFooter,
   };
 }
 
@@ -49,6 +56,8 @@ export interface UpdateSchoolSettingsInput {
   email?: string | null;
   phone?: string | null;
   address?: string | null;
+  bulletinHeader?: string | null;
+  bulletinFooter?: string | null;
 }
 
 export async function updateSchoolSettings(

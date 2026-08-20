@@ -17,6 +17,10 @@ export interface BulletinContext {
   level: string;
   termLabel: string;
   classAverage: number | null;
+  /** Texte libre affiché sous le nom de l'école, tel que réglé dans Paramètres. */
+  bulletinHeader?: string | null;
+  /** Texte libre affiché en pied de page, au-dessus de la mention générique. */
+  bulletinFooter?: string | null;
 }
 
 const MARGIN = 36;
@@ -41,23 +45,41 @@ function render(doc: PDFKit.PDFDocument): Promise<Buffer> {
 
 function header(doc: PDFKit.PDFDocument, context: BulletinContext, title: string) {
   doc.font('Helvetica-Bold').fontSize(15).fillColor(COLORS.text).text(context.schoolName);
+
+  if (context.bulletinHeader) {
+    doc.font('Helvetica').fontSize(8).fillColor(COLORS.text);
+    doc.text(context.bulletinHeader, { width: doc.page.width - MARGIN * 2 });
+  }
+
   doc.font('Helvetica').fontSize(10).fillColor(COLORS.muted);
   doc.text(`${title} — ${context.className} (${context.level}) — ${context.termLabel}`);
   doc.moveDown(0.8);
 }
 
-function footer(doc: PDFKit.PDFDocument) {
-  const y = doc.page.height - MARGIN - 10;
-  doc
-    .font('Helvetica')
-    .fontSize(7)
-    .fillColor(COLORS.muted)
-    .text(
-      `Généré le ${new Date().toLocaleDateString('fr-FR')} — Gesnotes. Moyennes calculées à la volée, jamais stockées.`,
-      MARGIN,
-      y,
-      { width: doc.page.width - MARGIN * 2, align: 'center' },
-    );
+const GENERIC_FOOTER_LINE =
+  'Gesnotes. Moyennes calculées à la volée, jamais stockées.';
+
+/**
+ * Pied de page : le texte propre à l'école (réglé dans Paramètres), s'il y en
+ * a un, puis toujours la mention générique en dessous — jamais l'un à la
+ * place de l'autre, la mention technique reste utile même personnalisée.
+ */
+function footer(doc: PDFKit.PDFDocument, context: BulletinContext) {
+  const width = doc.page.width - MARGIN * 2;
+  const genericLine = `Généré le ${new Date().toLocaleDateString('fr-FR')} — ${GENERIC_FOOTER_LINE}`;
+
+  let y = doc.page.height - MARGIN - 10;
+
+  if (context.bulletinFooter) {
+    doc.font('Helvetica').fontSize(8).fillColor(COLORS.text);
+    const customHeight = doc.heightOfString(context.bulletinFooter, { width });
+    y -= customHeight + 4;
+    doc.text(context.bulletinFooter, MARGIN, y, { width, align: 'center' });
+    y = doc.page.height - MARGIN - 10;
+  }
+
+  doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted);
+  doc.text(genericLine, MARGIN, y, { width, align: 'center' });
 }
 
 /** Format « une page par élève » : le document remis à la famille. */
@@ -152,14 +174,14 @@ export function generateStudentBulletinPdf(
       );
     }
 
-    footer(doc);
+    footer(doc, context);
   });
 
   if (students.length === 0) {
     header(doc, context, 'Bulletin scolaire');
     doc.font('Helvetica').fontSize(10).fillColor(COLORS.muted);
     doc.text('Aucun élève dans cette classe.');
-    footer(doc);
+    footer(doc, context);
   }
 
   return render(doc);
@@ -247,7 +269,7 @@ export function generateClassBulletinPdf(
   doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
   doc.text(`Moyenne de la classe : ${format(context.classAverage)}`, left + 4, y);
 
-  footer(doc);
+  footer(doc, context);
 
   return render(doc);
 }

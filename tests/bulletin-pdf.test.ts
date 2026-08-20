@@ -193,6 +193,29 @@ describe('export du bulletin de classe', () => {
     // Le tableau de classe expose les résultats de tous les enfants.
     expect(res.status).toBe(403);
   });
+
+  it("imprime l'en-tête et le pied de page personnalisés de l'école", async () => {
+    await prisma.school.update({
+      where: { id: school.id },
+      data: {
+        bulletinHeader: 'Ministere des Enseignements Secondaire',
+        bulletinFooter: 'Le Directeur',
+      },
+    });
+
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+
+    expect(texte).toContain('MinisteredesEnseignementsSecondaire');
+    expect(texte).toContain('LeDirecteur');
+    // La mention generique reste presente, jamais remplacee par le texte de l'ecole.
+    expect(texte).toContain('Gesnotes');
+  });
+
+  it("garde le rendu par defaut quand l'ecole n'a rien personnalise", async () => {
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+    expect(texte).toContain('Généré');
+    expect(texte).toContain('Gesnotes');
+  });
 });
 
 describe('export du bulletin individuel', () => {

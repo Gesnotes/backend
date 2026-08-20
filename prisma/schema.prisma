@@ -41,6 +41,12 @@ model School {
   email   String? @db.VarChar(150)
   phone   String? @db.VarChar(30)
   address String? @db.VarChar(255)
+  /// Personnalisation du bulletin PDF : texte libre ajouté sous le nom de
+  /// l'école (en-tête) et affiché en pied de page, au-dessus de la mention
+  /// générique (voir bulletin/pdf.ts). Optionnels : sans eux, le bulletin
+  /// garde son rendu par défaut.
+  bulletinHeader String? @map("bulletin_header") @db.Text
+  bulletinFooter String? @map("bulletin_footer") @db.Text
 
   users          User[]
   schoolYears    SchoolYear[]

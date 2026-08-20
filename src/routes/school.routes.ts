@@ -41,6 +41,8 @@ const updateBody = z
       PHONE_FORMAT_MESSAGE,
     ),
     address: nullableTrimmed(255),
+    bulletinHeader: nullableTrimmed(2000),
+    bulletinFooter: nullableTrimmed(2000),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
