@@ -41,12 +41,14 @@ model School {
   email   String? @db.VarChar(150)
   phone   String? @db.VarChar(30)
   address String? @db.VarChar(255)
-  /// Personnalisation du bulletin PDF : texte libre ajouté sous le nom de
-  /// l'école (en-tête) et affiché en pied de page, au-dessus de la mention
-  /// générique (voir bulletin/pdf.ts). Optionnels : sans eux, le bulletin
-  /// garde son rendu par défaut.
-  bulletinHeader String? @map("bulletin_header") @db.Text
-  bulletinFooter String? @map("bulletin_footer") @db.Text
+  /// Personnalisation du bulletin PDF par image téléversée (en-tête officiel,
+  /// logo, cachet... — un rendu texte ne convient pas à une mise en forme déjà
+  /// figée). PNG ou JPEG uniquement (contrainte de pdfkit, voir bulletin/pdf.ts).
+  /// Optionnelles : sans elles, le bulletin garde son rendu par défaut.
+  bulletinHeaderImage     Bytes?  @map("bulletin_header_image")
+  bulletinHeaderImageType String? @map("bulletin_header_image_type") @db.VarChar(50)
+  bulletinFooterImage     Bytes?  @map("bulletin_footer_image")
+  bulletinFooterImageType String? @map("bulletin_footer_image_type") @db.VarChar(50)
 
   users          User[]
   schoolYears    SchoolYear[]

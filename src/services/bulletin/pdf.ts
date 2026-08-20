@@ -17,10 +17,10 @@ export interface BulletinContext {
   level: string;
   termLabel: string;
   classAverage: number | null;
-  /** Texte libre affiché sous le nom de l'école, tel que réglé dans Paramètres. */
-  bulletinHeader?: string | null;
-  /** Texte libre affiché en pied de page, au-dessus de la mention générique. */
-  bulletinFooter?: string | null;
+  /** Image (PNG/JPEG) affichée à la place du nom de l'école, telle que réglée dans Paramètres. */
+  bulletinHeaderImage?: Buffer | null;
+  /** Image (PNG/JPEG) affichée en pied de page, au-dessus de la mention générique. */
+  bulletinFooterImage?: Buffer | null;
 }
 
 const MARGIN = 36;
@@ -43,12 +43,20 @@ function render(doc: PDFKit.PDFDocument): Promise<Buffer> {
   });
 }
 
-function header(doc: PDFKit.PDFDocument, context: BulletinContext, title: string) {
-  doc.font('Helvetica-Bold').fontSize(15).fillColor(COLORS.text).text(context.schoolName);
+/** Hauteur maximale réservée à l'image d'en-tête : assez pour un bandeau, pas toute la page. */
+const HEADER_IMAGE_MAX_HEIGHT = 70;
+const FOOTER_IMAGE_MAX_HEIGHT = 45;
 
-  if (context.bulletinHeader) {
-    doc.font('Helvetica').fontSize(8).fillColor(COLORS.text);
-    doc.text(context.bulletinHeader, { width: doc.page.width - MARGIN * 2 });
+function header(doc: PDFKit.PDFDocument, context: BulletinContext, title: string) {
+  const width = doc.page.width - MARGIN * 2;
+
+  if (context.bulletinHeaderImage) {
+    // L'image remplace le nom de l'école : une école qui en téléverse une a
+    // déjà son nom (et souvent son logo, un cachet officiel) dedans.
+    doc.image(context.bulletinHeaderImage, { fit: [width, HEADER_IMAGE_MAX_HEIGHT] });
+    doc.moveDown(0.4);
+  } else {
+    doc.font('Helvetica-Bold').fontSize(15).fillColor(COLORS.text).text(context.schoolName);
   }
 
   doc.font('Helvetica').fontSize(10).fillColor(COLORS.muted);
@@ -60,26 +68,25 @@ const GENERIC_FOOTER_LINE =
   'Gesnotes. Moyennes calculées à la volée, jamais stockées.';
 
 /**
- * Pied de page : le texte propre à l'école (réglé dans Paramètres), s'il y en
- * a un, puis toujours la mention générique en dessous — jamais l'un à la
+ * Pied de page : l'image propre à l'école (réglée dans Paramètres), s'il y en
+ * a une, puis toujours la mention générique en dessous — jamais l'une à la
  * place de l'autre, la mention technique reste utile même personnalisée.
  */
 function footer(doc: PDFKit.PDFDocument, context: BulletinContext) {
   const width = doc.page.width - MARGIN * 2;
   const genericLine = `Généré le ${new Date().toLocaleDateString('fr-FR')} — ${GENERIC_FOOTER_LINE}`;
 
-  let y = doc.page.height - MARGIN - 10;
+  const genericY = doc.page.height - MARGIN - 10;
 
-  if (context.bulletinFooter) {
-    doc.font('Helvetica').fontSize(8).fillColor(COLORS.text);
-    const customHeight = doc.heightOfString(context.bulletinFooter, { width });
-    y -= customHeight + 4;
-    doc.text(context.bulletinFooter, MARGIN, y, { width, align: 'center' });
-    y = doc.page.height - MARGIN - 10;
+  if (context.bulletinFooterImage) {
+    doc.image(context.bulletinFooterImage, MARGIN, genericY - FOOTER_IMAGE_MAX_HEIGHT - 4, {
+      fit: [width, FOOTER_IMAGE_MAX_HEIGHT],
+      align: 'center',
+    });
   }
 
   doc.font('Helvetica').fontSize(7).fillColor(COLORS.muted);
-  doc.text(genericLine, MARGIN, y, { width, align: 'center' });
+  doc.text(genericLine, MARGIN, genericY, { width, align: 'center' });
 }
 
 /** Format « une page par élève » : le document remis à la famille. */
