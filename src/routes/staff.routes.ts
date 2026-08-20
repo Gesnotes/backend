@@ -187,3 +187,15 @@ staffRoutes.post(
     res.status(204).send();
   },
 );
+
+/** Renvoie l'invitation au compte administrateur de l'école (email perdu, lien expiré). */
+staffRoutes.post(
+  '/schools/:id/invitation',
+  requireStaffAuth,
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    await staffService.resendAdminInvitation(id);
+    res.json({ message: 'Invitation envoyée.' });
+  },
+);

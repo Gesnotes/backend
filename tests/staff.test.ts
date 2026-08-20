@@ -577,3 +577,37 @@ describe('suspendre / restaurer / supprimer une école', () => {
     expect((await staffApi(clientToken).post(`/staff/schools/${school.id}/restore`)).status).toBe(401);
   });
 });
+
+describe('renvoyer l’invitation d’une école', () => {
+  it('renvoie l’invitation au compte administrateur (email perdu, lien expiré)', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const before = await prisma.passwordResetToken.count({ where: { userId: admin.id } });
+
+    const res = await staffApi().post(`/staff/schools/${school.id}/invitation`);
+
+    expect(res.status).toBe(200);
+    const after = await prisma.passwordResetToken.count({ where: { userId: admin.id } });
+    expect(after).toBe(before + 1);
+  });
+
+  it('refuse pour une école introuvable', async () => {
+    const res = await staffApi().post('/staff/schools/999999/invitation');
+    expect(res.status).toBe(404);
+  });
+
+  it('refuse quand l’école n’a aucun compte administrateur', async () => {
+    const school = await createSchool('ecole-a');
+    const res = await staffApi().post(`/staff/schools/${school.id}/invitation`);
+    expect(res.status).toBe(404);
+  });
+
+  it('refuse un token client', async () => {
+    const school = await createSchool('ecole-a');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const clientToken = signAccessToken({ userId: admin.id, schoolId: school.id, role: 'admin' });
+
+    const res = await staffApi(clientToken).post(`/staff/schools/${school.id}/invitation`);
+    expect(res.status).toBe(401);
+  });
+});
