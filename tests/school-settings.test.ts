@@ -117,4 +117,30 @@ describe('PATCH /school', () => {
     const res = await api(adminToken).patch('/school').send({});
     expect(res.status).toBe(400);
   });
+
+  it('modifie la personnalisation du bulletin (en-tête et pied de page)', async () => {
+    const res = await api(adminToken).patch('/school').send({
+      bulletinHeader: 'Ministère des Enseignements — Direction de Cotonou',
+      bulletinFooter: 'Le Directeur                    Visa des parents',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinHeader).toBe('Ministère des Enseignements — Direction de Cotonou');
+    expect(res.body.bulletinFooter).toBe('Le Directeur                    Visa des parents');
+
+    const relu = await api(adminToken).get('/school');
+    expect(relu.body.bulletinHeader).toBe('Ministère des Enseignements — Direction de Cotonou');
+  });
+
+  it('vaut null par défaut pour la personnalisation du bulletin', async () => {
+    const res = await api(adminToken).get('/school');
+    expect(res.body.bulletinHeader).toBeNull();
+    expect(res.body.bulletinFooter).toBeNull();
+  });
+
+  it('efface la personnalisation du bulletin avec une chaîne vide', async () => {
+    await api(adminToken).patch('/school').send({ bulletinHeader: 'Un texte' });
+    const res = await api(adminToken).patch('/school').send({ bulletinHeader: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinHeader).toBeNull();
+  });
 });

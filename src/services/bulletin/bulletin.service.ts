@@ -47,6 +47,8 @@ export async function exportClassBulletin(
     level: bulletin.level,
     termLabel: bulletin.termLabel,
     classAverage: bulletin.classAverage,
+    bulletinHeader: school.bulletinHeader,
+    bulletinFooter: school.bulletinFooter,
   };
 
   const buffer =
@@ -101,6 +103,8 @@ export async function exportStudentBulletin(
       level: bulletin.level,
       termLabel: bulletin.termLabel,
       classAverage: bulletin.classAverage,
+      bulletinHeader: school.bulletinHeader,
+      bulletinFooter: school.bulletinFooter,
     },
     [result],
   );
