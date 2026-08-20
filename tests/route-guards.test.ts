@@ -23,11 +23,12 @@ import { createApp } from '../src/app';
  * quatre routes de session (refresh, logout, forgot-password, reset-password),
  * la connexion par identifiant seul (/auth/identify — seule porte d'entrée,
  * aucune école n'est résolue au préalable), la demande de rappel
- * (avant-inscription), et les trois routes de session de l'équipe Gesnotes
- * (login/refresh/logout, hors périmètre multi-écoles). Le compte est figé
- * pour qu'en ouvrir une onzième soit un geste conscient, pas un effet de bord.
+ * (avant-inscription), et les cinq routes de session de l'équipe Gesnotes
+ * (login/refresh/logout/forgot-password/reset-password, hors périmètre
+ * multi-écoles). Le compte est figé pour qu'en ouvrir une treizième soit un
+ * geste conscient, pas un effet de bord.
  */
-const ROUTES_PUBLIQUES_ATTENDUES = 10;
+const ROUTES_PUBLIQUES_ATTENDUES = 12;
 
 interface Route {
   methode: string;

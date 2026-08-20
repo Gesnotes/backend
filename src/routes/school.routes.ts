@@ -41,8 +41,6 @@ const updateBody = z
       PHONE_FORMAT_MESSAGE,
     ),
     address: nullableTrimmed(255),
-    bulletinHeader: nullableTrimmed(2000),
-    bulletinFooter: nullableTrimmed(2000),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
@@ -54,3 +52,45 @@ schoolRoutes.patch('/', requireRole('admin'), validate({ body: updateBody }), as
   const patch = req.body as z.infer<typeof updateBody>;
   res.json(await schoolService.updateSchoolSettings(schoolIdOf(req), patch));
 });
+
+/**
+ * Image d'en-tête/pied de page du bulletin PDF (logo, cachet officiel...).
+ *
+ * Voyage en JSON (`data:image/png;base64,...`), comme le CSV d'import
+ * élèves : pas de dépendance d'upload multipart à embarquer pour des fichiers
+ * qui restent, par construction, de quelques centaines de kilo-octets.
+ */
+const imageBody = z.object({
+  image: z.string().min(1, 'Aucune image reçue.').max(3_000_000, 'Cette image est trop lourde.'),
+});
+
+const imageSlugToSlot = { 'bulletin-header-image': 'header', 'bulletin-footer-image': 'footer' } as const;
+
+for (const [path, slot] of Object.entries(imageSlugToSlot)) {
+  schoolRoutes.get(`/${path}`, async (req, res) => {
+    const image = await schoolService.getBulletinImage(schoolIdOf(req), slot);
+    if (!image) {
+      res.status(404).json({ error: { message: 'Aucune image réglée.' } });
+      return;
+    }
+    res.setHeader('Content-Type', image.contentType);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(image.data);
+  });
+
+  schoolRoutes.put(
+    `/${path}`,
+    requireRole('admin'),
+    validate({ body: imageBody }),
+    async (req, res) => {
+      const { image } = req.body as z.infer<typeof imageBody>;
+      await schoolService.setBulletinImage(schoolIdOf(req), slot, image);
+      res.json(await schoolService.getSchoolSettings(schoolIdOf(req)));
+    },
+  );
+
+  schoolRoutes.delete(`/${path}`, requireRole('admin'), async (req, res) => {
+    await schoolService.removeBulletinImage(schoolIdOf(req), slot);
+    res.json(await schoolService.getSchoolSettings(schoolIdOf(req)));
+  });
+}

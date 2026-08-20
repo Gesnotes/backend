@@ -194,21 +194,34 @@ describe('export du bulletin de classe', () => {
     expect(res.status).toBe(403);
   });
 
-  it("imprime l'en-tête et le pied de page personnalisés de l'école", async () => {
+  it("integre les images d'en-tête et de pied de page réglées par l'école", async () => {
+    // PNG 1×1 valide, minimal — suffisant pour vérifier l'intégration sans
+    // dépendre d'un vrai logo.
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
     await prisma.school.update({
       where: { id: school.id },
       data: {
-        bulletinHeader: 'Ministere des Enseignements Secondaire',
-        bulletinFooter: 'Le Directeur',
+        bulletinHeaderImage: png,
+        bulletinHeaderImageType: 'image/png',
+        bulletinFooterImage: png,
+        bulletinFooterImageType: 'image/png',
       },
     });
 
-    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+    const buffer = await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`);
+    expect(isPdf(buffer)).toBe(true);
 
-    expect(texte).toContain('MinisteredesEnseignementsSecondaire');
-    expect(texte).toContain('LeDirecteur');
-    // La mention generique reste presente, jamais remplacee par le texte de l'ecole.
-    expect(texte).toContain('Gesnotes');
+    // pdfkit intègre chaque image comme un XObject Image distinct.
+    const raw = buffer.toString('latin1');
+    expect((raw.match(/\/Subtype\s*\/Image/g) ?? []).length).toBeGreaterThanOrEqual(2);
+
+    // La mention générique reste présente, jamais remplacée par l'image.
+    expect(pdfTextOf(buffer)).toContain('Gesnotes');
   });
 
   it("garde le rendu par defaut quand l'ecole n'a rien personnalise", async () => {

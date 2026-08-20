@@ -7,6 +7,7 @@ import {
   computeClassBulletin,
   computeStudentResult,
 } from '../grading/grading.service';
+import { getBulletinImage } from '../school.service';
 import {
   type BulletinContext,
   generateAnnualClassBulletinPdf,
@@ -16,6 +17,18 @@ import {
 } from './pdf';
 import { conflict, notFound } from '../../errors/AppError';
 import { formatAverage, toCsv, type CsvCell } from '../../lib/csv';
+
+/** Images d'en-tête/pied de page réglées par l'école, prêtes pour `BulletinContext`. */
+async function loadBulletinImages(schoolId: number) {
+  const [headerImage, footerImage] = await Promise.all([
+    getBulletinImage(schoolId, 'header'),
+    getBulletinImage(schoolId, 'footer'),
+  ]);
+  return {
+    bulletinHeaderImage: headerImage?.data ?? null,
+    bulletinFooterImage: footerImage?.data ?? null,
+  };
+}
 
 export type BulletinFormat = 'classe' | 'eleves';
 
@@ -40,9 +53,10 @@ export async function exportClassBulletin(
   // classes où il enseigne, un parent n'y accède pas du tout.
   await assertCanViewClass(auth, classId);
 
-  const [bulletin, school] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+    loadBulletinImages(auth.schoolId),
   ]);
 
   assertBulletinReady(bulletin);
@@ -53,8 +67,7 @@ export async function exportClassBulletin(
     level: bulletin.level,
     termLabel: bulletin.termLabel,
     classAverage: bulletin.classAverage,
-    bulletinHeader: school.bulletinHeader,
-    bulletinFooter: school.bulletinFooter,
+    ...images,
   };
 
   const buffer =
@@ -86,9 +99,10 @@ export async function exportStudentBulletin(
   // de classe (le repère qu'attend un parent, sans exposer aucun résultat
   // individuel), le libellé de la période et le nom de la classe. Le calculer
   // deux fois par deux chemins différents les exposerait à diverger.
-  const [bulletin, school] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+    loadBulletinImages(auth.schoolId),
   ]);
 
   // Le bulletin n'est remis à une famille que lorsque toute la classe est
@@ -109,8 +123,7 @@ export async function exportStudentBulletin(
       level: bulletin.level,
       termLabel: bulletin.termLabel,
       classAverage: bulletin.classAverage,
-      bulletinHeader: school.bulletinHeader,
-      bulletinFooter: school.bulletinFooter,
+      ...images,
     },
     [result],
   );
@@ -136,9 +149,10 @@ export async function exportClassAnnualBulletin(
 ): Promise<BulletinFile> {
   await assertCanViewClass(auth, classId);
 
-  const [bulletin, school] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeAnnualClassBulletin(auth.schoolId, classId, schoolYearId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+    loadBulletinImages(auth.schoolId),
   ]);
 
   assertAnnualBulletinReady(bulletin);
@@ -149,8 +163,7 @@ export async function exportClassAnnualBulletin(
     level: bulletin.level,
     termLabel: bulletin.schoolYearLabel,
     classAverage: bulletin.classAverage,
-    bulletinHeader: school.bulletinHeader,
-    bulletinFooter: school.bulletinFooter,
+    ...images,
   };
 
   const buffer =
@@ -173,9 +186,10 @@ export async function exportStudentAnnualBulletin(
 ): Promise<BulletinFile> {
   const { classId } = await assertIsParentOf(auth, studentId);
 
-  const [bulletin, school] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeAnnualClassBulletin(auth.schoolId, classId, schoolYearId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+    loadBulletinImages(auth.schoolId),
   ]);
 
   assertAnnualBulletinReady(bulletin);
@@ -190,8 +204,7 @@ export async function exportStudentAnnualBulletin(
       level: bulletin.level,
       termLabel: bulletin.schoolYearLabel,
       classAverage: bulletin.classAverage,
-      bulletinHeader: school.bulletinHeader,
-      bulletinFooter: school.bulletinFooter,
+      ...images,
     },
     bulletin.terms,
     [result],

@@ -106,6 +106,89 @@ describe('session staff (refresh, logout)', () => {
   });
 });
 
+describe('réinitialisation de mot de passe (staff)', () => {
+  const forgot = (email: string) => request(app).post('/staff/forgot-password').send({ email });
+
+  it('répond identiquement que le compte existe ou non', async () => {
+    const known = await forgot('equipe@gesnotes.bj');
+    const unknown = await forgot('personne@gesnotes.bj');
+
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(known.body).toEqual(unknown.body);
+
+    expect(await prisma.staffPasswordResetToken.count()).toBe(1);
+  });
+
+  it('ne crée pas de token pour un compte archivé', async () => {
+    await createStaffUser({ email: 'parti@gesnotes.bj', archived: true });
+
+    await forgot('parti@gesnotes.bj');
+
+    expect(await prisma.staffPasswordResetToken.count()).toBe(0);
+  });
+
+  it('change le mot de passe et invalide les sessions en cours', async () => {
+    const login = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
+    await forgot('equipe@gesnotes.bj');
+
+    // Le token en clair n'existe qu'à l'envoi : on le rejoue ici via un
+    // token connu, en réécrivant son empreinte comme le ferait le lien email.
+    const raw = 'token-de-test-en-clair';
+    const crypto = await import('node:crypto');
+    const tokenHash = crypto.createHash('sha256').update(raw).digest('hex');
+    await prisma.staffPasswordResetToken.updateMany({ data: { tokenHash } });
+
+    const reset = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'nouveaumotdepasse' });
+    expect(reset.status).toBe(200);
+
+    const oldLogin = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
+    expect(oldLogin.status).toBe(401);
+
+    const newLogin = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: 'nouveaumotdepasse' });
+    expect(newLogin.status).toBe(200);
+
+    const reused = await request(app)
+      .post('/staff/refresh')
+      .send({ refreshToken: login.body.refreshToken });
+    expect(reused.status).toBe(401);
+  });
+
+  it('refuse un token de réinitialisation déjà utilisé', async () => {
+    await forgot('equipe@gesnotes.bj');
+    const raw = 'token-usage-unique';
+    const crypto = await import('node:crypto');
+    await prisma.staffPasswordResetToken.updateMany({
+      data: { tokenHash: crypto.createHash('sha256').update(raw).digest('hex') },
+    });
+
+    const first = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'premiermotdepasse' });
+    expect(first.status).toBe(200);
+
+    const second = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'deuxiememotdepasse' });
+    expect(second.status).toBe(401);
+  });
+
+  it('refuse un mot de passe trop court', async () => {
+    const res = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: 'peu-importe', password: 'court' });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /staff/me — isolation des deux mondes d’authentification', () => {
   it('refuse une requête sans token', async () => {
     expect((await request(app).get('/staff/me')).status).toBe(401);
