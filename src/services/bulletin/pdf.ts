@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 
-import type { StudentResult } from '../grading/grading.service';
+import type { AnnualStudentResult, StudentResult } from '../grading/grading.service';
 
 /**
  * Génération des bulletins en PDF.
@@ -268,6 +268,162 @@ export function generateClassBulletinPdf(
   y += 6;
   doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
   doc.text(`Moyenne de la classe : ${format(context.classAverage)}`, left + 4, y);
+
+  footer(doc, context);
+
+  return render(doc);
+}
+
+/**
+ * Bulletin annuel, une page par élève : la progression période par période,
+ * puis la moyenne annuelle — pas de détail par matière ici, `context.termLabel`
+ * porte le libellé de l'année scolaire (« 2025-2026 ») plutôt qu'une période.
+ */
+export function generateAnnualStudentBulletinPdf(
+  context: BulletinContext,
+  terms: { label: string }[],
+  students: AnnualStudentResult[],
+): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
+
+  students.forEach((student, index) => {
+    if (index > 0) doc.addPage();
+
+    header(doc, context, 'Bulletin annuel');
+
+    doc.font('Helvetica-Bold').fontSize(13).fillColor(COLORS.text);
+    doc.text(`${student.lastName.toUpperCase()} ${student.firstName}`);
+    doc.moveDown(0.5);
+
+    const left = MARGIN;
+    const width = doc.page.width - MARGIN * 2;
+    const columns = { period: left, average: left + width - 100 };
+
+    let y = doc.y + 4;
+    doc.rect(left, y - 3, width, 18).fill(COLORS.band);
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
+    doc.text('Période', columns.period + 4, y, { width: 300 });
+    doc.text('Moyenne', columns.average, y, { width: 96, align: 'right' });
+    y += 20;
+
+    doc.font('Helvetica').fontSize(9);
+
+    terms.forEach((term, i) => {
+      doc.fillColor(COLORS.text);
+      doc.text(term.label, columns.period + 4, y, { width: 300 });
+      doc.font('Helvetica-Bold').text(format(student.termAverages[i] ?? null), columns.average, y, {
+        width: 96,
+        align: 'right',
+      });
+      doc.font('Helvetica');
+
+      y += 18;
+      doc.moveTo(left, y - 4).lineTo(left + width, y - 4).strokeColor(COLORS.line).lineWidth(0.5).stroke();
+    });
+
+    y += 8;
+    doc.rect(left, y - 4, width, 22).fill(COLORS.band);
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.text);
+    doc.text('Moyenne annuelle', columns.period + 4, y + 2, { width: 300 });
+    doc.text(format(student.average), columns.average, y + 2, { width: 96, align: 'right' });
+
+    y += 26;
+    doc.font('Helvetica').fontSize(9).fillColor(COLORS.muted);
+    doc.text(`Moyenne annuelle de la classe : ${format(context.classAverage)}`, columns.period + 4, y);
+
+    if (student.average === null) {
+      doc.moveDown(0.6);
+      doc.fillColor(COLORS.muted).fontSize(8);
+      doc.text(
+        "Aucune moyenne n'a pu être calculée pour cet élève sur l'année. L'absence de moyenne ne vaut pas zéro.",
+        { width: width - 8 },
+      );
+    }
+
+    footer(doc, context);
+  });
+
+  if (students.length === 0) {
+    header(doc, context, 'Bulletin annuel');
+    doc.font('Helvetica').fontSize(10).fillColor(COLORS.muted);
+    doc.text('Aucun élève dans cette classe.');
+    footer(doc, context);
+  }
+
+  return render(doc);
+}
+
+/** Bulletin annuel, tableau de synthèse : une ligne par élève, une colonne par période, puis la moyenne annuelle. */
+export function generateAnnualClassBulletinPdf(
+  context: BulletinContext,
+  terms: { label: string }[],
+  students: AnnualStudentResult[],
+): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: MARGIN });
+
+  header(doc, context, 'Tableau des moyennes annuelles');
+
+  const left = MARGIN;
+  const width = doc.page.width - MARGIN * 2;
+  const nameWidth = 150;
+  const availableWidth = width - nameWidth - 70;
+  const columnWidth = terms.length > 0 ? availableWidth / terms.length : availableWidth;
+
+  const drawColumnHeader = (top: number): number => {
+    doc.rect(left, top - 3, width, 18).fill(COLORS.band);
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.text);
+    doc.text('Élève', left + 4, top, { width: nameWidth });
+    terms.forEach((term, index) => {
+      doc.text(term.label, left + nameWidth + index * columnWidth, top, {
+        width: columnWidth,
+        align: 'center',
+        ellipsis: true,
+      });
+    });
+    doc.text('Moy. annuelle', left + nameWidth + terms.length * columnWidth, top, {
+      width: 66,
+      align: 'right',
+    });
+    doc.font('Helvetica').fontSize(8);
+    return top + 20;
+  };
+
+  let y = drawColumnHeader(doc.y + 4);
+
+  for (const student of students) {
+    if (y > doc.page.height - MARGIN - 40) {
+      doc.addPage({ size: 'A4', layout: 'landscape', margin: MARGIN });
+      header(doc, context, 'Tableau des moyennes annuelles');
+      y = drawColumnHeader(doc.y + 4);
+    }
+
+    doc.fillColor(COLORS.text);
+    doc.text(`${student.lastName.toUpperCase()} ${student.firstName}`, left + 4, y, {
+      width: nameWidth,
+      ellipsis: true,
+    });
+
+    terms.forEach((_, index) => {
+      doc.text(format(student.termAverages[index] ?? null), left + nameWidth + index * columnWidth, y, {
+        width: columnWidth,
+        align: 'center',
+      });
+    });
+
+    doc.font('Helvetica-Bold');
+    doc.text(format(student.average), left + nameWidth + terms.length * columnWidth, y, {
+      width: 66,
+      align: 'right',
+    });
+    doc.font('Helvetica');
+
+    y += 16;
+    doc.moveTo(left, y - 4).lineTo(left + width, y - 4).strokeColor(COLORS.line).lineWidth(0.5).stroke();
+  }
+
+  y += 6;
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
+  doc.text(`Moyenne annuelle de la classe : ${format(context.classAverage)}`, left + 4, y);
 
   footer(doc, context);
 

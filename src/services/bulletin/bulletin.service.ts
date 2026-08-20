@@ -2,9 +2,15 @@ import prisma from '../../lib/prisma';
 import type { AuthPayload } from '../../types/express';
 import { assertCanViewClass } from '../class.service';
 import { assertIsParentOf } from '../parent.service';
-import { computeClassBulletin, computeStudentResult } from '../grading/grading.service';
+import {
+  computeAnnualClassBulletin,
+  computeClassBulletin,
+  computeStudentResult,
+} from '../grading/grading.service';
 import {
   type BulletinContext,
+  generateAnnualClassBulletinPdf,
+  generateAnnualStudentBulletinPdf,
   generateClassBulletinPdf,
   generateStudentBulletinPdf,
 } from './pdf';
@@ -117,6 +123,89 @@ export async function exportStudentBulletin(
 }
 
 /**
+ * Export PDF du bulletin annuel cumulé d'une classe : une colonne par
+ * période de l'année scolaire, plus la moyenne annuelle — voir
+ * `computeAnnualClassBulletin`. Même porte d'entrée et même distinction de
+ * format que l'export par période.
+ */
+export async function exportClassAnnualBulletin(
+  auth: AuthPayload,
+  classId: number,
+  schoolYearId: number,
+  format: BulletinFormat,
+): Promise<BulletinFile> {
+  await assertCanViewClass(auth, classId);
+
+  const [bulletin, school] = await Promise.all([
+    computeAnnualClassBulletin(auth.schoolId, classId, schoolYearId),
+    prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+  ]);
+
+  assertAnnualBulletinReady(bulletin);
+
+  const context: BulletinContext = {
+    schoolName: school.name,
+    className: bulletin.className,
+    level: bulletin.level,
+    termLabel: bulletin.schoolYearLabel,
+    classAverage: bulletin.classAverage,
+    bulletinHeader: school.bulletinHeader,
+    bulletinFooter: school.bulletinFooter,
+  };
+
+  const buffer =
+    format === 'classe'
+      ? await generateAnnualClassBulletinPdf(context, bulletin.terms, bulletin.students)
+      : await generateAnnualStudentBulletinPdf(context, bulletin.terms, bulletin.students);
+
+  return {
+    buffer,
+    filename:
+      slugify(`bulletin-annuel-${bulletin.className}-${bulletin.schoolYearLabel}-${format}`) + '.pdf',
+  };
+}
+
+/** Export PDF du bulletin annuel d'un seul élève — pendant annuel de `exportStudentBulletin`. */
+export async function exportStudentAnnualBulletin(
+  auth: AuthPayload,
+  studentId: number,
+  schoolYearId: number,
+): Promise<BulletinFile> {
+  const { classId } = await assertIsParentOf(auth, studentId);
+
+  const [bulletin, school] = await Promise.all([
+    computeAnnualClassBulletin(auth.schoolId, classId, schoolYearId),
+    prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
+  ]);
+
+  assertAnnualBulletinReady(bulletin);
+
+  const result = bulletin.students.find((student) => student.studentId === studentId);
+  if (!result) throw notFound("Élève introuvable dans le bulletin annuel de cette classe.");
+
+  const buffer = await generateAnnualStudentBulletinPdf(
+    {
+      schoolName: school.name,
+      className: bulletin.className,
+      level: bulletin.level,
+      termLabel: bulletin.schoolYearLabel,
+      classAverage: bulletin.classAverage,
+      bulletinHeader: school.bulletinHeader,
+      bulletinFooter: school.bulletinFooter,
+    },
+    bulletin.terms,
+    [result],
+  );
+
+  return {
+    buffer,
+    filename:
+      slugify(`bulletin-annuel-${result.lastName}-${result.firstName}-${bulletin.schoolYearLabel}`) +
+      '.pdf',
+  };
+}
+
+/**
  * Export tableur du bulletin d'une classe.
  *
  * Le PDF est fait pour être remis aux familles ; celui-ci est fait pour être
@@ -223,6 +312,50 @@ function assertBulletinReady(bulletin: {
 
   throw conflict(
     `Le bulletin de « ${bulletin.termLabel} » n'est pas encore complet : il manque les notes de ${bulletin.missingSubjects.join(', ')}. Il sera disponible une fois toutes les matières notées.`,
+  );
+}
+
+/**
+ * Refuse de produire un bulletin annuel tant qu'une période de l'année n'est
+ * pas complète — même principe que `assertBulletinReady`, étendu à toutes
+ * les périodes de l'année scolaire plutôt qu'à une seule.
+ */
+function assertAnnualBulletinReady(bulletin: {
+  terms: unknown[];
+  students: unknown[];
+  schoolYearLabel: string;
+  bulletinReady: boolean;
+  missingByTerm: { termLabel: string; subjects: string[] }[];
+}) {
+  // Vérifié avant l'effectif : sans période active, `computeAnnualClassBulletin`
+  // ne va même pas chercher les élèves — un effectif vide y serait trompeur,
+  // le vrai problème est l'absence de période, pas l'absence d'élèves.
+  if (bulletin.terms.length === 0) {
+    throw conflict(
+      `Aucune période active sur l'année scolaire « ${bulletin.schoolYearLabel} » : le bulletin annuel ne peut pas être calculé.`,
+    );
+  }
+
+  if (bulletin.students.length === 0) {
+    throw conflict("Aucun élève dans cette classe : il n'y a pas de bulletin annuel à produire.");
+  }
+
+  if (bulletin.bulletinReady) return;
+
+  // Une période sans aucune matière attendue (mode présence, ou pas encore
+  // configurée) ne remonte aucune entrée dans `missingByTerm` — même cas que
+  // `assertBulletinReady` pour une seule période.
+  if (bulletin.missingByTerm.length === 0) {
+    throw conflict(
+      `Le bulletin annuel « ${bulletin.schoolYearLabel} » n'est pas disponible : au moins une période de l'année n'a aucune note saisie.`,
+    );
+  }
+
+  const detail = bulletin.missingByTerm
+    .map((entry) => `${entry.termLabel} (${entry.subjects.join(', ')})`)
+    .join(' ; ');
+  throw conflict(
+    `Le bulletin annuel « ${bulletin.schoolYearLabel} » n'est pas encore complet : il manque des notes sur ${detail}. Il sera disponible une fois toutes les périodes complètes.`,
   );
 }
 

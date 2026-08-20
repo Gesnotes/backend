@@ -461,6 +461,115 @@ export async function computeTermTrend(
   );
 }
 
+export interface AnnualStudentResult {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  /** Moyenne générale de chaque période active de l'année, dans l'ordre de `terms`. */
+  termAverages: (number | null)[];
+  /** Moyenne annuelle — moyenne des moyennes brutes de chaque période, voir `computeAnnualAverage`. */
+  average: number | null;
+}
+
+/**
+ * Bulletin annuel cumulé d'une classe : une ligne par élève, une colonne par
+ * période active de l'année scolaire, plus la moyenne annuelle — même
+ * discipline « Decimal de bout en bout » que `computeAnnualAverage`, étendue
+ * à toute la classe en un seul calcul plutôt qu'élève par élève (ce qui
+ * ferait autant de requêtes que d'élèves × périodes).
+ *
+ * `terms.length === 0` (année sans période active) : bulletin jamais prêt,
+ * `missingByTerm` vide — rien à réclamer, juste rien à calculer.
+ */
+export async function computeAnnualClassBulletin(
+  schoolId: number,
+  classId: number,
+  schoolYearId: number,
+) {
+  const [klass, schoolYear] = await Promise.all([
+    prisma.class.findFirst({ where: { id: classId, schoolId } }),
+    prisma.schoolYear.findFirst({ where: { id: schoolYearId, schoolId } }),
+  ]);
+  if (!klass) throw notFound('Classe introuvable');
+  if (!schoolYear) throw notFound('Année scolaire introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    select: { id: true, label: true },
+  });
+
+  const base = {
+    classId,
+    className: klass.name,
+    level: klass.level,
+    schoolYearId,
+    schoolYearLabel: schoolYear.label,
+    terms,
+  };
+
+  if (terms.length === 0) {
+    return {
+      ...base,
+      students: [] as AnnualStudentResult[],
+      classAverage: null,
+      bulletinReady: false,
+      missingByTerm: [] as { termLabel: string; subjects: string[] }[],
+    };
+  }
+
+  const [bulletinsByTerm, readinessByTerm] = await Promise.all([
+    Promise.all(terms.map((term) => computeClassBulletins(schoolId, [classId], term.id).then((r) => r[0]))),
+    Promise.all(terms.map((term) => computeBulletinReadiness(schoolId, classId, term.id))),
+  ]);
+
+  // Effectif courant de la classe, indépendant de la période (voir
+  // `computeClassBulletins` : filtré par `classId` actuel, jamais par
+  // historique) — identique quel que soit le terme d'où on le lit.
+  const roster = bulletinsByTerm[0]?.students ?? [];
+
+  const rawAnnualAverages: (D | null)[] = [];
+
+  const students: AnnualStudentResult[] = roster.map((student) => {
+    const termAverages: (number | null)[] = [];
+    const rawPerTerm: (D | null)[] = [];
+
+    for (const bulletin of bulletinsByTerm) {
+      const index = bulletin?.students.findIndex((s) => s.studentId === student.studentId) ?? -1;
+      if (!bulletin || index === -1) {
+        termAverages.push(null);
+        rawPerTerm.push(null);
+        continue;
+      }
+      termAverages.push(bulletin.students[index]!.average);
+      rawPerTerm.push(bulletin.studentRawAverages[index] ?? null);
+    }
+
+    const rawAnnual = averageOfDecimals(rawPerTerm);
+    rawAnnualAverages.push(rawAnnual);
+
+    return {
+      studentId: student.studentId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      termAverages,
+      average: serializeAverage(rawAnnual),
+    };
+  });
+
+  const missingByTerm = terms
+    .map((term, index) => ({ termLabel: term.label, subjects: readinessByTerm[index]!.missingSubjects }))
+    .filter((entry) => entry.subjects.length > 0);
+
+  return {
+    ...base,
+    students,
+    classAverage: serializeAverage(averageOfDecimals(rawAnnualAverages)),
+    bulletinReady: readinessByTerm.every((r) => r.ready),
+    missingByTerm,
+  };
+}
+
 /**
  * Signale un doublon probable : même élève, matière, type et période, saisis
  * le même jour. Non bloquant — plusieurs interrogations le même jour sont
