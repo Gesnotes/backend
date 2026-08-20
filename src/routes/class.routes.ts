@@ -137,6 +137,37 @@ classRoutes.get(
   },
 );
 
+const schoolYearQuery = z.object({ school_year_id: z.coerce.number().int().positive() });
+
+/**
+ * Export PDF du bulletin annuel cumulé — même distinction de format que
+ * l'export par période, une colonne par période de l'année scolaire au lieu
+ * d'une colonne par matière.
+ */
+classRoutes.get(
+  '/:id/bulletin/annual/export',
+  validate({
+    params: idParam,
+    query: schoolYearQuery.extend({
+      format: z.enum(['eleves', 'classe']).default('eleves'),
+    }),
+  }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { school_year_id, format } = req.query as unknown as {
+      school_year_id: number;
+      format: 'eleves' | 'classe';
+    };
+
+    const file = await bulletinService.exportClassAnnualBulletin(authOf(req), id, school_year_id, format);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Length', String(file.buffer.length));
+    res.send(file.buffer);
+  },
+);
+
 /**
  * Export tableur. Route distincte de l'export PDF : ce n'est pas une variante
  * de mise en page mais un autre usage — le PDF se remet aux familles, le CSV se
