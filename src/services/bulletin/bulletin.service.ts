@@ -6,10 +6,13 @@ import {
   computeAnnualClassBulletin,
   computeClassBulletin,
   computeStudentResult,
+  rankStudents,
+  type StudentResult,
 } from '../grading/grading.service';
 import { getBulletinImage } from '../school.service';
 import {
   type BulletinContext,
+  type BulletinStudentRow,
   generateAnnualClassBulletinPdf,
   generateAnnualStudentBulletinPdf,
   generateClassBulletinPdf,
@@ -28,6 +31,65 @@ async function loadBulletinImages(schoolId: number) {
     bulletinHeaderImage: headerImage?.data ?? null,
     bulletinFooterImage: footerImage?.data ?? null,
   };
+}
+
+/**
+ * Élèves « redoublants » d'une classe : ceux dont la dernière décision de
+ * réinscription qui les a amenés dans cette classe est un redoublement (voir
+ * `EnrollmentDecision`). Pas un champ sur `Student` — l'information existe
+ * déjà comme un événement d'historique, la dupliquer en drapeau statique
+ * risquerait de diverger dès la réinscription suivante.
+ */
+async function repeatingStudentIds(schoolId: number, classId: number): Promise<Set<number>> {
+  const decisions = await prisma.enrollmentDecision.findMany({
+    where: { schoolId, toClassId: classId },
+    orderBy: { createdAt: 'desc' },
+    select: { studentId: true, decision: true },
+  });
+
+  const latestByStudent = new Map<number, string>();
+  for (const d of decisions) {
+    if (!latestByStudent.has(d.studentId)) latestByStudent.set(d.studentId, d.decision);
+  }
+
+  return new Set(
+    [...latestByStudent].filter(([, decision]) => decision === 'redoublement').map(([id]) => id),
+  );
+}
+
+/** Plus forte / plus faible moyenne générale d'une liste de résultats élève. */
+function classExtremes(students: { average: number | null }[]): {
+  highest: number | null;
+  lowest: number | null;
+} {
+  const averages = students.map((s) => s.average).filter((a): a is number => a !== null);
+  return {
+    highest: averages.length > 0 ? Math.max(...averages) : null,
+    lowest: averages.length > 0 ? Math.min(...averages) : null,
+  };
+}
+
+/**
+ * Enrichit les résultats à rendre des deux informations propres au bulletin
+ * imprimé (rang, redoublement). Le rang vient toujours du classement de
+ * `fullRoster` (l'effectif complet de la classe sur la période), jamais de
+ * `toRender` : un export à un seul élève (bulletin d'un enfant côté parent)
+ * ne doit pas se classer 1er sur 1 par construction.
+ */
+async function toBulletinRows(
+  schoolId: number,
+  classId: number,
+  fullRoster: StudentResult[],
+  toRender: StudentResult[],
+): Promise<BulletinStudentRow[]> {
+  const repeating = await repeatingStudentIds(schoolId, classId);
+  const rank = rankStudents(fullRoster);
+
+  return toRender.map((student) => ({
+    ...student,
+    repeating: repeating.has(student.studentId),
+    rank: rank.get(student.studentId) ?? null,
+  }));
 }
 
 export type BulletinFormat = 'classe' | 'eleves';
@@ -61,19 +123,28 @@ export async function exportClassBulletin(
 
   assertBulletinReady(bulletin);
 
+  const { highest, lowest } = classExtremes(bulletin.students);
+
   const context: BulletinContext = {
     schoolName: school.name,
     className: bulletin.className,
     level: bulletin.level,
     termLabel: bulletin.termLabel,
+    schoolYearLabel: bulletin.schoolYearLabel,
+    effectif: bulletin.students.length,
     classAverage: bulletin.classAverage,
+    classHighestAverage: highest,
+    classLowestAverage: lowest,
     ...images,
   };
 
   const buffer =
     format === 'classe'
       ? await generateClassBulletinPdf(context, bulletin.students)
-      : await generateStudentBulletinPdf(context, bulletin.students);
+      : await generateStudentBulletinPdf(
+          context,
+          await toBulletinRows(auth.schoolId, classId, bulletin.students, bulletin.students),
+        );
 
   return {
     buffer,
@@ -116,16 +187,23 @@ export async function exportStudentBulletin(
     bulletin.students.find((student) => student.studentId === studentId) ??
     (await computeStudentResult(auth.schoolId, studentId, termId));
 
+  const { highest, lowest } = classExtremes(bulletin.students);
+  const rows = await toBulletinRows(auth.schoolId, classId, bulletin.students, [result]);
+
   const buffer = await generateStudentBulletinPdf(
     {
       schoolName: school.name,
       className: bulletin.className,
       level: bulletin.level,
       termLabel: bulletin.termLabel,
+      schoolYearLabel: bulletin.schoolYearLabel,
+      effectif: bulletin.students.length,
       classAverage: bulletin.classAverage,
+      classHighestAverage: highest,
+      classLowestAverage: lowest,
       ...images,
     },
-    [result],
+    rows,
   );
 
   return {

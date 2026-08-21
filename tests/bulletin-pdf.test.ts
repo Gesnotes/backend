@@ -287,13 +287,13 @@ describe('cohérence avec le calcul', () => {
     expect(texte).toContain('Moyennedelaclasse:12,50');
   });
 
-  it('imprime le détail par catégorie et le coefficient — la promesse d\'auditabilité', async () => {
+  it('imprime le détail par catégorie — la promesse d\'auditabilité', async () => {
     const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
 
-    // Un parent doit pouvoir refaire le calcul : (12 + 2×15 + 3×16) / 6 = 15.
-    expect(texte).toContain('Interrogation×1:12,00');
-    expect(texte).toContain('Composition×3:16,00');
-    expect(texte).toContain('Mathématiques');
+    // Un parent doit pouvoir refaire le calcul : (12 + 2×15 + 3×16) / 6 = 15,
+    // à partir des trois colonnes Interro. / Devoir / Composition imprimées
+    // pour Mathématiques (coef. 4), sans avoir besoin du poids affiché.
+    expect(texte).toContain('Mathématiques412,0015,0016,0015,00');
     expect(texte).toContain('Collège Sainte-Marie'.replace(/\s+/g, ''));
   });
 
