@@ -4,7 +4,7 @@ import { z } from 'zod';
 import * as staffAuthService from '../services/staff-auth.service';
 import * as staffService from '../services/staff.service';
 import { requireStaffAuth } from '../middlewares/requireStaffAuth';
-import { credentialsLimiter, sessionLimiter } from '../middlewares/rateLimit';
+import { sessionLimiter, staffCredentialsLimiter } from '../middlewares/rateLimit';
 import { publicRoute } from '../middlewares/publicRoute';
 import { validate } from '../middlewares/validate';
 
@@ -33,7 +33,7 @@ const resetBody = z.object({
 staffRoutes.post(
   '/login',
   publicRoute,
-  credentialsLimiter,
+  staffCredentialsLimiter,
   validate({ body: loginBody }),
   async (req, res) => {
     const { email, password } = req.body as z.infer<typeof loginBody>;
@@ -67,7 +67,7 @@ staffRoutes.post(
 staffRoutes.post(
   '/forgot-password',
   publicRoute,
-  credentialsLimiter,
+  staffCredentialsLimiter,
   validate({ body: forgotBody }),
   async (req, res) => {
     const { email } = req.body as z.infer<typeof forgotBody>;
@@ -81,7 +81,7 @@ staffRoutes.post(
 staffRoutes.post(
   '/reset-password',
   publicRoute,
-  credentialsLimiter,
+  staffCredentialsLimiter,
   validate({ body: resetBody }),
   async (req, res) => {
     const { token, password } = req.body as z.infer<typeof resetBody>;

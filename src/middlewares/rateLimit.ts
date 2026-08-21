@@ -6,25 +6,35 @@ import { tooManyRequests } from '../errors/AppError';
 const isTest = env.NODE_ENV === 'test';
 
 /**
- * Budget anti-bruteforce, réservé aux routes qui vérifient un secret :
- * /auth/identify, /auth/forgot-password et /auth/reset-password.
- *
- * Ne jamais l'appliquer aux routes de session (/refresh, /logout) : un client
- * actif rafraîchit son token toutes les 15 minutes, et plusieurs familles
- * derrière la même IP publique (NAT d'un établissement) épuiseraient le budget
- * sans qu'aucune attaque n'ait lieu.
+ * Fabrique un budget anti-bruteforce indépendant à chaque appel — jamais une
+ * instance unique partagée entre plusieurs mondes d'authentification.
+ * `credentialsLimiter` et `staffCredentialsLimiter` comptent chacun sur leur
+ * propre compteur : sans ça, bombarder /auth/identify depuis une IP donnée
+ * épuisait aussi le budget de /staff/login pour cette même IP, alors que ce
+ * sont deux systèmes de comptes délibérément isolés (voir
+ * `requireStaffAuth`) — une IP qui martèle la connexion école ne doit jamais
+ * pouvoir, même par effet de bord, verrouiller l'équipe Gesnotes hors de son
+ * propre tableau de bord.
  */
-export const credentialsLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  // Désactivé en test pour ne pas rendre la suite dépendante de l'ordre des cas.
-  skip: () => isTest,
-  handler: (_req, _res, next) => next(tooManyRequests(
-      'Trop de tentatives de connexion. Patientez quelques minutes avant de réessayer.',
-    )),
-});
+function makeCredentialsLimiter() {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    // Désactivé en test pour ne pas rendre la suite dépendante de l'ordre des cas.
+    skip: () => isTest,
+    handler: (_req, _res, next) => next(tooManyRequests(
+        'Trop de tentatives de connexion. Patientez quelques minutes avant de réessayer.',
+      )),
+  });
+}
+
+/** /auth/identify, /auth/forgot-password, /auth/reset-password — comptes école. */
+export const credentialsLimiter = makeCredentialsLimiter();
+
+/** /staff/login, /staff/forgot-password, /staff/reset-password — équipe Gesnotes. */
+export const staffCredentialsLimiter = makeCredentialsLimiter();
 
 /**
  * Limite large sur les routes de session : arrête une boucle emballée sans

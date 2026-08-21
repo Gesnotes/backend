@@ -88,6 +88,25 @@ const ALLOWED_IMAGE_TYPES: Record<string, string> = {
 };
 
 /**
+ * Signature d'octets réelle de chaque format accepté. Le type MIME déclaré
+ * dans le data URL n'est qu'une prétention du client, jamais une preuve : un
+ * fichier quelconque renommé « image/png » passait auparavant tel quel et ne
+ * faisait planter la génération du bulletin (pdfkit, « Unknown image
+ * format ») que bien plus tard, pour toute l'école à la fois — jamais à
+ * l'upload, où l'erreur aurait été utile.
+ */
+const MAGIC_BYTES: Record<string, Buffer> = {
+  'image/png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  'image/jpeg': Buffer.from([0xff, 0xd8, 0xff]),
+};
+
+function hasMagicBytes(data: Buffer, contentType: string): boolean {
+  const signature = MAGIC_BYTES[contentType];
+  if (!signature) return false;
+  return data.length >= signature.length && data.subarray(0, signature.length).equals(signature);
+}
+
+/**
  * PNG ou JPEG uniquement : ce sont les deux seuls formats que pdfkit sait
  * intégrer directement (voir bulletin/pdf.ts) — un SVG ou un WebP téléversés
  * échoueraient silencieusement à la génération du PDF, bien après que
@@ -111,6 +130,9 @@ function parseImageDataUrl(value: string): BulletinImage {
   }
   if (data.length > MAX_BULLETIN_IMAGE_BYTES) {
     throw badRequest('Image trop lourde : 1,5 Mo maximum.');
+  }
+  if (!hasMagicBytes(data, contentType)) {
+    throw badRequest('Image invalide : le fichier ne correspond pas au format déclaré.');
   }
 
   return { data, contentType };
