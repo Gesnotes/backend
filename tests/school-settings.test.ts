@@ -171,6 +171,23 @@ describe('images du bulletin (en-tête et pied de page)', () => {
     expect(res.status).toBe(400);
   });
 
+  /**
+   * Le type MIME du data URL n'est qu'une prétention du client, jamais une
+   * preuve : sans vérifier les octets réels, ce texte passait pour un PNG
+   * valide et ne faisait planter la génération du bulletin (pdfkit) que
+   * plus tard, pour toute l'école à la fois.
+   */
+  it("refuse un fichier dont le contenu ne correspond pas au type déclaré", async () => {
+    const fakePng = Buffer.from("ceci n'est pas un PNG").toString('base64');
+    const res = await api(adminToken)
+      .put('/school/bulletin-header-image')
+      .send({ image: `data:image/png;base64,${fakePng}` });
+    expect(res.status).toBe(400);
+    expect(await prisma.school.findUniqueOrThrow({ where: { id: school.id } })).toMatchObject({
+      bulletinHeaderImage: null,
+    });
+  });
+
   it('supprime une image réglée', async () => {
     await api(adminToken).put('/school/bulletin-header-image').send({ image: TINY_PNG_DATA_URL });
     const del = await api(adminToken).delete('/school/bulletin-header-image');
