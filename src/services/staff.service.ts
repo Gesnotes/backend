@@ -92,6 +92,25 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
   return { school, adminEmail: admin.email };
 }
 
+/**
+ * Renvoie l'invitation au compte administrateur d'une école (email perdu,
+ * lien expiré). Un seul admin est créé à l'acceptation de la demande
+ * (`acceptSignupRequest`) : c'est le sien qu'on renvoie, jamais un nouveau
+ * compte.
+ */
+export async function resendAdminInvitation(schoolId: number): Promise<void> {
+  const school = await prisma.school.findUnique({ where: { id: schoolId } });
+  if (!school) throw notFound('École introuvable');
+
+  const admin = await prisma.user.findFirst({
+    where: { schoolId, role: 'admin', archivedAt: null },
+    orderBy: { id: 'asc' },
+  });
+  if (!admin) throw notFound('Aucun compte administrateur pour cette école.');
+
+  await sendInvitation(admin.id, admin.email, 'admin');
+}
+
 /** Écarte une demande sans créer d'école (doublon, injoignable, hors cible…). */
 export async function declineSignupRequest(id: number): Promise<void> {
   const request = await prisma.signupRequest.findUnique({ where: { id } });
