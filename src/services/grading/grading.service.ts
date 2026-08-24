@@ -18,13 +18,21 @@ export interface SubjectResult {
   coefficient: number;
   average: number | null;
   /** Détail par catégorie : c'est la pièce que les parents contestent. */
-  categories: { gradeTypeId: number; label: string; weight: number; average: number | null }[];
+  categories: {
+    gradeTypeId: number;
+    /** "interrogation" | "devoir" | "composition" — fixe par école, contrairement à `label`. */
+    code: string;
+    label: string;
+    weight: number;
+    average: number | null;
+  }[];
 }
 
 export interface StudentResult {
   studentId: number;
   firstName: string;
   lastName: string;
+  sex: 'M' | 'F' | null;
   average: number | null;
   subjects: SubjectResult[];
 }
@@ -121,7 +129,10 @@ export async function computeClassBulletins(
   classIds: number[],
   termId: number,
 ) {
-  const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
+  const term = await prisma.term.findFirst({
+    where: { id: termId, schoolId },
+    include: { schoolYear: { select: { label: true } } },
+  });
   if (!term) throw notFound('Période introuvable');
 
   const [classes, allStudents, allGrades, allCoefficients] = await Promise.all([
@@ -129,7 +140,7 @@ export async function computeClassBulletins(
     prisma.student.findMany({
       where: { classId: { in: classIds }, schoolId, archivedAt: null },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      select: { id: true, classId: true, firstName: true, lastName: true },
+      select: { id: true, classId: true, firstName: true, lastName: true, sex: true },
     }),
     prisma.grade.findMany({
       // Ancrée à `evaluation.classId`, jamais à `student.classId` : une note
@@ -165,11 +176,29 @@ export async function computeClassBulletins(
 }
 
 /**
- * Rang de l'élève dans sa classe sur une période — même tri que
- * `class.service.ts::getClassDetail` (nulls en fin de classement, égalité
- * départagée par nom) pour que le rang annoncé au parent corresponde
- * exactement à celui vu côté classe. Ne renvoie qu'un nombre : jamais les
- * autres élèves, qui n'ont pas à être exposés au parent.
+ * Classement d'une liste de résultats élève par moyenne décroissante — même
+ * tri que `class.service.ts::getClassDetail` (nulls en fin de classement,
+ * égalité départagée par nom) partout où un rang est affiché, pour qu'il
+ * corresponde toujours à celui vu côté classe. Un élève sans moyenne n'a pas
+ * d'entrée dans la carte renvoyée plutôt qu'un rang trompeur.
+ */
+export function rankStudents<T extends { studentId: number; lastName: string; average: number | null }>(
+  students: T[],
+): Map<number, { position: number; total: number }> {
+  const ranked = [...students].sort((a, b) => {
+    if (a.average === null && b.average === null) return a.lastName.localeCompare(b.lastName, 'fr');
+    if (a.average === null) return 1;
+    if (b.average === null) return -1;
+    return b.average - a.average;
+  });
+  const noted = ranked.filter((s) => s.average !== null);
+
+  return new Map(noted.map((s, index) => [s.studentId, { position: index + 1, total: noted.length }]));
+}
+
+/**
+ * Rang de l'élève dans sa classe sur une période. Ne renvoie qu'un nombre :
+ * jamais les autres élèves, qui n'ont pas à être exposés au parent.
  */
 export async function computeStudentRank(
   schoolId: number,
@@ -178,23 +207,13 @@ export async function computeStudentRank(
   termId: number,
 ): Promise<{ position: number; total: number } | null> {
   const bulletin = await computeClassBulletin(schoolId, classId, termId);
-
-  const ranked = [...bulletin.students].sort((a, b) => {
-    if (a.average === null && b.average === null) return a.lastName.localeCompare(b.lastName, 'fr');
-    if (a.average === null) return 1;
-    if (b.average === null) return -1;
-    return b.average - a.average;
-  });
-  const noted = ranked.filter((s) => s.average !== null);
-
-  const position = noted.findIndex((s) => s.studentId === studentId);
-  return position === -1 ? null : { position: position + 1, total: noted.length };
+  return rankStudents(bulletin.students).get(studentId) ?? null;
 }
 
 function buildBulletin(
   klass: { id: number; name: string; level: string },
-  term: { id: number; label: string },
-  students: { id: number; firstName: string; lastName: string }[],
+  term: { id: number; label: string; schoolYear: { label: string } | null },
+  students: { id: number; firstName: string; lastName: string; sex: 'M' | 'F' | null }[],
   grades: {
     studentId: number;
     subjectId: number;
@@ -277,6 +296,7 @@ function buildBulletin(
       studentId: student.id,
       firstName: student.firstName,
       lastName: student.lastName,
+      sex: student.sex,
       average: serializeAverage(generalAvg),
       subjects,
     };
@@ -288,6 +308,7 @@ function buildBulletin(
     level: klass.level,
     termId,
     termLabel: term.label,
+    schoolYearLabel: term.schoolYear?.label ?? null,
     students: results,
     classAverage: serializeAverage(averageOfDecimals(rawAverages)),
     /**
@@ -372,7 +393,7 @@ export async function computeStudentResult(
 ): Promise<StudentResult> {
   const student = await prisma.student.findFirst({
     where: { id: studentId, schoolId },
-    select: { id: true, firstName: true, lastName: true, classId: true, archivedAt: true },
+    select: { id: true, firstName: true, lastName: true, sex: true, classId: true, archivedAt: true },
   });
   if (!student) throw notFound('Élève introuvable');
 
@@ -387,6 +408,7 @@ export async function computeStudentResult(
     studentId: student.id,
     firstName: student.firstName,
     lastName: student.lastName,
+    sex: student.sex,
     average: serializeAverage(rawAverage),
     subjects,
   };
@@ -622,13 +644,17 @@ function categoriesOf(
     gradeTypeId: number;
     value: D;
     maxValue: D;
-    gradeType: { id: number; label: string; weight: D; position: number };
+    gradeType: { id: number; code: string; label: string; weight: D; position: number };
   }[],
 ) {
-  const byType = new Map<number, { label: string; weight: D; position: number; values: D[] }>();
+  const byType = new Map<
+    number,
+    { code: string; label: string; weight: D; position: number; values: D[] }
+  >();
 
   for (const grade of grades) {
     const entry = byType.get(grade.gradeTypeId) ?? {
+      code: grade.gradeType.code,
       label: grade.gradeType.label,
       weight: grade.gradeType.weight,
       position: grade.gradeType.position,
@@ -642,6 +668,7 @@ function categoriesOf(
     .sort((a, b) => a[1].position - b[1].position)
     .map(([gradeTypeId, entry]) => ({
       gradeTypeId,
+      code: entry.code,
       label: entry.label,
       weight: Number(entry.weight),
       average: serializeAverage(

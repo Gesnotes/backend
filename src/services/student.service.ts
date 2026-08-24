@@ -532,7 +532,7 @@ async function loadStudent(
 
 export async function createStudent(
   schoolId: number,
-  data: { firstName: string; lastName: string; classId: number; birthDate?: string },
+  data: { firstName: string; lastName: string; classId: number; birthDate?: string; sex?: 'M' | 'F' },
 ) {
   await assertClassInSchool(schoolId, data.classId);
 
@@ -543,6 +543,7 @@ export async function createStudent(
       firstName: data.firstName,
       lastName: data.lastName,
       birthDate: data.birthDate ? new Date(data.birthDate) : null,
+      sex: data.sex ?? null,
     },
   });
 
@@ -552,7 +553,13 @@ export async function createStudent(
 export async function updateStudent(
   auth: AuthPayload,
   id: number,
-  data: { firstName?: string; lastName?: string; classId?: number; birthDate?: string | null },
+  data: {
+    firstName?: string;
+    lastName?: string;
+    classId?: number;
+    birthDate?: string | null;
+    sex?: 'M' | 'F' | null;
+  },
 ) {
   const before = await getStudentForAdmin(auth.schoolId, id);
   if (data.classId !== undefined) await assertClassInSchool(auth.schoolId, data.classId);
@@ -566,6 +573,7 @@ export async function updateStudent(
       ...(data.birthDate !== undefined
         ? { birthDate: data.birthDate ? new Date(data.birthDate) : null }
         : {}),
+      ...(data.sex !== undefined ? { sex: data.sex } : {}),
     },
   });
 

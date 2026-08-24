@@ -17,6 +17,13 @@ enum Role {
   @@map("role")
 }
 
+enum Sex {
+  M
+  F
+
+  @@map("sex")
+}
+
 // Établissements
 model School {
   id        Int       @id @default(autoincrement())
@@ -480,6 +487,9 @@ model Student {
   firstName  String    @map("first_name") @db.VarChar(100)
   lastName   String    @map("last_name") @db.VarChar(100)
   birthDate  DateTime? @map("birth_date") @db.Date
+  // Optionnel : sert au bulletin (case « Sexe »), jamais requis pour créer
+  // un élève — les écoles qui ne le renseignent pas voient juste un champ vide.
+  sex        Sex?
   archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
   school              School               @relation(fields: [schoolId], references: [id])

@@ -58,6 +58,7 @@ const createBody = z.object({
   lastName: z.string().trim().min(1).max(100),
   classId: z.coerce.number().int().positive(),
   birthDate: z.iso.date().optional(),
+  sex: z.enum(['M', 'F']).optional(),
 });
 
 const updateBody = z
@@ -66,6 +67,7 @@ const updateBody = z
     lastName: z.string().trim().min(1).max(100).optional(),
     classId: z.coerce.number().int().positive().optional(),
     birthDate: z.iso.date().nullable().optional(),
+    sex: z.enum(['M', 'F']).nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
