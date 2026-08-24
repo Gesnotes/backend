@@ -5,7 +5,10 @@ import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { recordAudit } from './audit.service';
+import { computeAnnualAverage, computeStudentResult } from './grading/grading.service';
 import { contactFields, identityFields } from './userFields';
+import { RECENT_ATTENDANCE_LIMIT, RECENT_GRADES_LIMIT, serializeGradeAmount } from '../lib/gradeSerializers';
 import { labelKey, normalizeEmail, normalizePhone } from '../lib/normalize';
 import { parseCsv, toCsv, type CsvCell } from '../lib/csv';
 import { sendInvitation } from './invitation.service';
@@ -49,14 +52,23 @@ const parentSelectFor = (auth: AuthPayload) =>
 
 export async function listStudents(
   auth: AuthPayload,
-  filters: { classId?: number; includeArchived?: boolean; page?: number },
+  filters: { classId?: number; includeArchived?: boolean; page?: number; search?: string },
 ) {
   const page = Math.max(1, filters.page ?? 1);
+  const search = filters.search?.trim();
 
   const where = {
     schoolId: auth.schoolId,
     ...(await scopeFor(auth, filters.classId)),
     ...(filters.includeArchived ? {} : { archivedAt: null }),
+    ...(search
+      ? {
+          OR: [
+            { firstName: { contains: search, mode: 'insensitive' as const } },
+            { lastName: { contains: search, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
   };
 
   const [total, students] = await Promise.all([
@@ -423,6 +435,72 @@ export async function getStudent(auth: AuthPayload, id: number) {
 }
 
 /**
+ * Fiche complète d'un élève : identité, classe, parents (déjà couverts par
+ * `getStudent`, qui porte aussi le contrôle d'accès — un enseignant n'obtient
+ * la suite que s'il a le droit de voir cet élève), moyennes par matière sur
+ * la période choisie, présence et notes les plus récentes.
+ *
+ * `termId` omis : aucune période n'est encore ouverte, ou aucune n'est
+ * sélectionnée côté client — le bulletin vaut alors `null` plutôt que
+ * d'échouer, comme le reste du tableau de bord (`dashboard.service.ts`).
+ *
+ * `annualAverage` : moyenne des périodes actives de l'année scolaire à
+ * laquelle appartient `termId`, `null` si la période n'est rattachée à
+ * aucune année scolaire (voir `computeAnnualAverage`).
+ *
+ * Les notes/moyennes ne sont pas bornées aux matières de l'enseignant
+ * appelant : `computeStudentResult` fait déjà de même pour le bulletin de
+ * classe (`bulletin.service.ts`), accessible à qui peut voir la classe — la
+ * fiche élève suit la même règle plutôt que d'en inventer une nouvelle.
+ */
+export async function getStudentDetail(auth: AuthPayload, id: number, termId?: number) {
+  const identity = await getStudent(auth, id);
+
+  const [bulletin, term, presence, recentGrades] = await Promise.all([
+    termId !== undefined ? computeStudentResult(auth.schoolId, id, termId) : null,
+    termId !== undefined
+      ? prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId }, select: { schoolYearId: true } })
+      : null,
+    prisma.attendance.findMany({
+      where: { studentId: id, schoolId: auth.schoolId },
+      orderBy: { date: 'desc' },
+      take: RECENT_ATTENDANCE_LIMIT,
+      select: { id: true, date: true, status: true, comment: true },
+    }),
+    prisma.grade.findMany({
+      where: { studentId: id, schoolId: auth.schoolId },
+      orderBy: { createdAt: 'desc' },
+      take: RECENT_GRADES_LIMIT,
+      select: {
+        id: true,
+        value: true,
+        maxValue: true,
+        createdAt: true,
+        subject: { select: { id: true, name: true } },
+        gradeType: { select: { label: true } },
+        term: { select: { id: true, label: true } },
+      },
+    }),
+  ]);
+
+  const annualAverage =
+    term?.schoolYearId != null ? await computeAnnualAverage(auth.schoolId, id, term.schoolYearId) : null;
+
+  return {
+    ...identity,
+    bulletin,
+    annualAverage,
+    presence,
+    dernieresNotes: recentGrades.map((grade) => ({
+      ...serializeGradeAmount(grade),
+      matiere: grade.subject,
+      type: { label: grade.gradeType.label },
+      periode: grade.term,
+    })),
+  };
+}
+
+/**
  * Lecture non restreinte, pour les opérations d'écriture réservées à
  * l'administration : la route porte déjà `requireRole('admin')`.
  */
@@ -454,7 +532,7 @@ async function loadStudent(
 
 export async function createStudent(
   schoolId: number,
-  data: { firstName: string; lastName: string; classId: number; birthDate?: string },
+  data: { firstName: string; lastName: string; classId: number; birthDate?: string; sex?: 'M' | 'F' },
 ) {
   await assertClassInSchool(schoolId, data.classId);
 
@@ -465,6 +543,7 @@ export async function createStudent(
       firstName: data.firstName,
       lastName: data.lastName,
       birthDate: data.birthDate ? new Date(data.birthDate) : null,
+      sex: data.sex ?? null,
     },
   });
 
@@ -472,12 +551,18 @@ export async function createStudent(
 }
 
 export async function updateStudent(
-  schoolId: number,
+  auth: AuthPayload,
   id: number,
-  data: { firstName?: string; lastName?: string; classId?: number; birthDate?: string | null },
+  data: {
+    firstName?: string;
+    lastName?: string;
+    classId?: number;
+    birthDate?: string | null;
+    sex?: 'M' | 'F' | null;
+  },
 ) {
-  await getStudentForAdmin(schoolId, id);
-  if (data.classId !== undefined) await assertClassInSchool(schoolId, data.classId);
+  const before = await getStudentForAdmin(auth.schoolId, id);
+  if (data.classId !== undefined) await assertClassInSchool(auth.schoolId, data.classId);
 
   await prisma.student.update({
     where: { id },
@@ -488,10 +573,33 @@ export async function updateStudent(
       ...(data.birthDate !== undefined
         ? { birthDate: data.birthDate ? new Date(data.birthDate) : null }
         : {}),
+      ...(data.sex !== undefined ? { sex: data.sex } : {}),
     },
   });
 
-  return getStudentForAdmin(schoolId, id);
+  const after = await getStudentForAdmin(auth.schoolId, id);
+
+  // Un changement de classe déplace l'élève d'un contexte pédagogique à un
+  // autre (enseignants, présence, bulletin) — les autres champs (nom,
+  // date de naissance) sont de simples corrections, sans intérêt d'audit.
+  if (data.classId !== undefined && data.classId !== before.classe.id) {
+    await recordAudit({
+      schoolId: auth.schoolId,
+      actorUserId: auth.userId,
+      action: 'student.moved',
+      targetType: 'student',
+      targetId: id,
+      targetLabel: `${after.firstName} ${after.lastName}`,
+      metadata: {
+        fromClassId: before.classe.id,
+        fromClassName: before.classe.name,
+        toClassId: after.classe.id,
+        toClassName: after.classe.name,
+      },
+    });
+  }
+
+  return after;
 }
 
 /**
@@ -598,7 +706,7 @@ export async function attachParent(
   });
   if (already) throw conflict('Ce parent est déjà associé à cet élève.');
 
-  await prisma.studentParent.create({ data: { studentId, parentUserId: parent.id } });
+  await prisma.studentParent.create({ data: { schoolId, studentId, parentUserId: parent.id } });
 
   return getStudentForAdmin(schoolId, studentId);
 }

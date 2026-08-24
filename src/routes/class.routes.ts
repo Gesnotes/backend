@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as bulletinService from '../services/bulletin/bulletin.service';
 import * as classService from '../services/class.service';
 import { requireAuth } from '../middlewares/requireAuth';
@@ -97,6 +98,17 @@ classRoutes.get(
   },
 );
 
+/** Récap de présence de la classe sur une période : compteurs par élève. */
+classRoutes.get(
+  '/:id/attendance-summary',
+  validate({ params: idParam, query: detailQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as z.infer<typeof detailQuery>;
+    res.json(await attendanceService.getClassAttendanceSummary(authOf(req), id, term_id));
+  },
+);
+
 /**
  * Export PDF. `format=eleves` (défaut) : une page par élève, le document
  * remis aux familles. `format=classe` : le tableau de synthèse.
@@ -117,6 +129,37 @@ classRoutes.get(
     };
 
     const file = await bulletinService.exportClassBulletin(authOf(req), id, term_id, format);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Length', String(file.buffer.length));
+    res.send(file.buffer);
+  },
+);
+
+const schoolYearQuery = z.object({ school_year_id: z.coerce.number().int().positive() });
+
+/**
+ * Export PDF du bulletin annuel cumulé — même distinction de format que
+ * l'export par période, une colonne par période de l'année scolaire au lieu
+ * d'une colonne par matière.
+ */
+classRoutes.get(
+  '/:id/bulletin/annual/export',
+  validate({
+    params: idParam,
+    query: schoolYearQuery.extend({
+      format: z.enum(['eleves', 'classe']).default('eleves'),
+    }),
+  }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { school_year_id, format } = req.query as unknown as {
+      school_year_id: number;
+      format: 'eleves' | 'classe';
+    };
+
+    const file = await bulletinService.exportClassAnnualBulletin(authOf(req), id, school_year_id, format);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);

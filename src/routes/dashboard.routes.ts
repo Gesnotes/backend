@@ -26,6 +26,11 @@ const recentQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+const absencesQuery = z.object({
+  days: z.coerce.number().int().min(7).max(60).default(14),
+  date: z.iso.date().optional(),
+});
+
 dashboardRoutes.get('/', validate({ query: dashboardQuery }), async (req, res) => {
   const { term_id, date } = req.query as unknown as z.infer<typeof dashboardQuery>;
   res.json(await dashboardService.getDashboard(schoolIdOf(req), term_id, date));
@@ -34,4 +39,9 @@ dashboardRoutes.get('/', validate({ query: dashboardQuery }), async (req, res) =
 dashboardRoutes.get('/recent-grades', validate({ query: recentQuery }), async (req, res) => {
   const { limit } = req.query as unknown as z.infer<typeof recentQuery>;
   res.json(await dashboardService.getRecentGrades(schoolIdOf(req), limit));
+});
+
+dashboardRoutes.get('/absences', validate({ query: absencesQuery }), async (req, res) => {
+  const { days, date } = req.query as unknown as z.infer<typeof absencesQuery>;
+  res.json(await dashboardService.getAbsenceTrend(schoolIdOf(req), days, date));
 });

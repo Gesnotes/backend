@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma';
 import { computeClassBulletins } from './grading/grading.service';
 import { serializeAverage } from './grading/compute';
+import { minutesToHHMM, weekdayOfIsoDate } from './schedule.service';
 import { Prisma } from '../generated/prisma/client';
 
 const JOURS_ACTIVITE = 7;
@@ -27,7 +28,7 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
       : await prisma.term.findFirst({ where: { id: termId, schoolId } });
   const periodeValide = term ? term.id : undefined;
 
-  const [school, eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, presence] =
+  const [school, eleves, classes, enseignants, matieres, parents, notesRecentes, totalNotes, appel] =
     await Promise.all([
       prisma.school.findUniqueOrThrow({ where: { id: schoolId }, select: { name: true } }),
       prisma.student.count({ where: { schoolId, archivedAt: null } }),
@@ -41,6 +42,7 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
       }),
       getAttendanceSummary(schoolId, date),
     ]);
+  const { presence, creneaux, ferie } = appel;
 
   const effectifs = { eleves, classes, enseignants, matieres, parents };
   const activite = { notesDerniers7Jours: notesRecentes, notesTotal: totalNotes };
@@ -49,15 +51,17 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
    * Forme de réponse unique quelle que soit la requête : toutes les clés sont
    * toujours présentes, à `null` ou vides. Faire disparaître `extremes` selon
    * les paramètres obligerait le front-end à tester son existence, et le ferait
-   * planter le jour où il oublie. `presence` ne dépend d'aucune période — la
-   * présence se prend au jour le jour — elle vaut donc toujours ce chiffre,
-   * même sans période sélectionnée.
+   * planter le jour où il oublie. `presence`/`creneaux` ne dépendent d'aucune
+   * période — la présence se prend au jour le jour — elles valent donc
+   * toujours ces chiffres, même sans période sélectionnée.
    */
   const vide = {
     school,
     effectifs,
     activite,
     presence,
+    creneaux,
+    ferie,
     periode: null,
     moyenneEcole: null,
     classes: [],
@@ -124,6 +128,8 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
     effectifs,
     activite,
     presence,
+    creneaux,
+    ferie,
     periode: { id: term.id, label: term.label },
     moyenneEcole,
     classes: parClasse,
@@ -143,10 +149,11 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
 }
 
 /**
- * Présence du jour, toute l'école : combien de classes ont fait l'appel,
- * combien d'absents et de retards, et lesquelles n'ont encore rien saisi.
- * La présence n'est pas réservée aux classes en mode présence — n'importe
- * quelle classe peut y être suivie — donc aucun filtre sur `mode` ici.
+ * Appel du jour, toute l'école, en deux volets selon `Class.mode` :
+ * - `presence` : combien de classes ont fait l'appel, combien d'absents et
+ *   de retards, et lesquelles n'ont encore rien saisi.
+ * - `creneaux` (mode `notes`) : même chose, mais par créneau de l'emploi du
+ *   temps plutôt que par classe — chaque enseignant y fait son propre appel.
  *
  * `date` vient du navigateur (son jour local), comme pour la saisie de
  * présence elle-même (`getAttendanceSheet`/`saveAttendanceBatch`). Sans
@@ -155,31 +162,114 @@ export async function getDashboard(schoolId: number, termId?: number, date?: str
  * l'est de Greenwich dans la fenêtre entre minuit local et minuit UTC.
  */
 async function getAttendanceSummary(schoolId: number, date?: string) {
-  const today = date ? new Date(date) : new Date(new Date().toISOString().slice(0, 10));
+  const todayIso = date ?? new Date().toISOString().slice(0, 10);
+  const today = new Date(todayIso);
 
-  const classes = await prisma.class.findMany({
-    where: { schoolId, archivedAt: null },
-    select: { id: true, name: true },
-    orderBy: [{ level: 'asc' }, { name: 'asc' }],
-  });
-  const classIds = classes.map((klass) => klass.id);
+  const [presenceClasses, todaysSlots, holidayToday] = await Promise.all([
+    prisma.class.findMany({
+      where: { schoolId, archivedAt: null, mode: 'presence' },
+      select: { id: true, name: true },
+      orderBy: [{ level: 'asc' }, { name: 'asc' }],
+    }),
+    prisma.timetableSlot.findMany({
+      where: { schoolId, archivedAt: null, dayOfWeek: weekdayOfIsoDate(todayIso) },
+      select: {
+        id: true,
+        startMinute: true,
+        endMinute: true,
+        teacherAssignment: {
+          select: { class: { select: { name: true } }, subject: { select: { name: true } } },
+        },
+      },
+    }),
+    // « Classes sans appel » n'a rien d'alarmant un jour férié : personne
+    // n'est censé faire l'appel. On expose le libellé plutôt qu'un simple
+    // booléen, pour que le client puisse l'afficher tel quel.
+    prisma.holiday.findFirst({
+      where: { schoolId, archivedAt: null, date: today },
+      select: { label: true },
+    }),
+  ]);
 
-  const records = await prisma.attendance.findMany({
-    where: { schoolId, classId: { in: classIds }, date: today },
-    select: { classId: true, status: true },
-  });
+  const [presenceRecords, slotRecords] = await Promise.all([
+    prisma.attendance.findMany({
+      where: { schoolId, classId: { in: presenceClasses.map((k) => k.id) }, date: today, slotId: null },
+      select: { classId: true, status: true },
+    }),
+    prisma.attendance.findMany({
+      where: { schoolId, slotId: { in: todaysSlots.map((s) => s.id) }, date: today },
+      select: { slotId: true, status: true },
+    }),
+  ]);
 
-  const classesAvecAppel = new Set(records.map((record) => record.classId));
-
-  return {
+  const classesAvecAppel = new Set(presenceRecords.map((record) => record.classId));
+  const presence = {
     classesAvecAppel: classesAvecAppel.size,
-    classesTotal: classes.length,
-    absents: records.filter((record) => record.status === 'absent').length,
-    retards: records.filter((record) => record.status === 'late').length,
-    classesSansAppel: classes
+    classesTotal: presenceClasses.length,
+    absents: presenceRecords.filter((record) => record.status === 'absent').length,
+    retards: presenceRecords.filter((record) => record.status === 'late').length,
+    classesSansAppel: presenceClasses
       .filter((klass) => !classesAvecAppel.has(klass.id))
       .map((klass) => klass.name),
   };
+
+  const creneauxCouverts = new Set(slotRecords.map((record) => record.slotId));
+  const creneaux = {
+    creneauxCouverts: creneauxCouverts.size,
+    creneauxTotal: todaysSlots.length,
+    absents: slotRecords.filter((record) => record.status === 'absent').length,
+    retards: slotRecords.filter((record) => record.status === 'late').length,
+    creneauxNonCouverts: todaysSlots
+      .filter((slot) => !creneauxCouverts.has(slot.id))
+      .map((slot) => ({
+        slotId: slot.id,
+        className: slot.teacherAssignment.class.name,
+        subjectName: slot.teacherAssignment.subject.name,
+        startTime: minutesToHHMM(slot.startMinute),
+        endTime: minutesToHHMM(slot.endMinute),
+      })),
+  };
+
+  return { presence, creneaux, ferie: holidayToday ? { label: holidayToday.label } : null };
+}
+
+/**
+ * Absences et retards des `days` derniers jours, un point par jour.
+ *
+ * Tous modes de présence confondus (`presence` par classe et `notes` par
+ * créneau) : la courbe répond à « l'absentéisme augmente-t-il ? », une
+ * question qui ne dépend pas de la façon dont chaque classe fait l'appel.
+ * Chaque jour de la plage apparaît, même à zéro — un trou dans la série
+ * romprait la courbe côté client sans qu'on sache si c'est une vraie absence
+ * de données ou une semaine sans aucune absence.
+ */
+export async function getAbsenceTrend(schoolId: number, days: number, date?: string) {
+  const todayIso = date ?? new Date().toISOString().slice(0, 10);
+  const end = new Date(todayIso);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+
+  const records = await prisma.attendance.groupBy({
+    by: ['date', 'status'],
+    where: { schoolId, date: { gte: start, lte: end } },
+    _count: { _all: true },
+  });
+
+  const parJour = new Map<string, { absents: number; retards: number }>();
+  for (let i = 0; i < days; i += 1) {
+    const jour = new Date(start);
+    jour.setUTCDate(jour.getUTCDate() + i);
+    parJour.set(jour.toISOString().slice(0, 10), { absents: 0, retards: 0 });
+  }
+
+  for (const record of records) {
+    const entry = parJour.get(record.date.toISOString().slice(0, 10));
+    if (!entry) continue;
+    if (record.status === 'absent') entry.absents += record._count._all;
+    if (record.status === 'late') entry.retards += record._count._all;
+  }
+
+  return Array.from(parJour.entries()).map(([date, counts]) => ({ date, ...counts }));
 }
 
 /** Flux d'activité : dernières notes saisies dans l'établissement. */

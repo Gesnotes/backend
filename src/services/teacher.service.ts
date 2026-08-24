@@ -2,8 +2,11 @@ import crypto from 'node:crypto';
 import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
+import type { Prisma } from '../generated/prisma/client';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { RECENT_ATTENDANCE_LIMIT, RECENT_GRADES_LIMIT, serializeGradeAmount } from '../lib/gradeSerializers';
 import { normalizeEmail, normalizePhone } from '../lib/normalize';
+import { recordAudit } from './audit.service';
 import { revokeAllSessions } from './auth.service';
 import { sendInvitation } from './invitation.service';
 
@@ -25,6 +28,31 @@ const publicFields = {
   createdAt: true,
 } as const;
 
+/**
+ * Forme API commune d'une affectation classe × matière — partagée par
+ * `listTeachers`, `getTeacherWithAssignments` et `getTeacherDetail`, qui la
+ * recopiaient chacune sans qu'un changement de forme n'ait de garde-fou pour
+ * rester synchronisé entre les trois.
+ */
+function mapAssignments(
+  assignments: {
+    id: number;
+    classId: number;
+    class: { name: string; level: string };
+    subjectId: number;
+    subject: { name: string };
+  }[],
+) {
+  return assignments.map((a) => ({
+    id: a.id,
+    classId: a.classId,
+    className: a.class.name,
+    level: a.class.level,
+    subjectId: a.subjectId,
+    subjectName: a.subject.name,
+  }));
+}
+
 export async function listTeachers(schoolId: number, includeArchived = false) {
   const teachers = await prisma.user.findMany({
     where: { schoolId, role: 'teacher', ...(includeArchived ? {} : { archivedAt: null }) },
@@ -42,14 +70,7 @@ export async function listTeachers(schoolId: number, includeArchived = false) {
 
   return teachers.map(({ assignments, ...teacher }) => ({
     ...teacher,
-    affectations: assignments.map((a) => ({
-      id: a.id,
-      classId: a.classId,
-      className: a.class.name,
-      level: a.class.level,
-      subjectId: a.subjectId,
-      subjectName: a.subject.name,
-    })),
+    affectations: mapAssignments(assignments),
   }));
 }
 
@@ -60,6 +81,89 @@ export async function getTeacher(schoolId: number, id: number) {
   });
   if (!teacher) throw notFound('Enseignant introuvable');
   return teacher;
+}
+
+/**
+ * Fiche complète d'un enseignant : identité (déjà couverte par `getTeacher`,
+ * qui porte aussi le contrôle d'accès), affectations classe × matière,
+ * dernières notes saisies et dernières présences enregistrées par ce compte —
+ * le pendant de `getStudentDetail` (student.service.ts), mais pour un
+ * enseignant plutôt qu'un élève.
+ *
+ * Une note ou une présence saisie par l'administration au nom d'un
+ * enseignant n'a pas `teacherUserId`/`recordedByUserId` égal à son id : elle
+ * n'apparaît donc pas ici, ce qui est le comportement voulu — cette fiche
+ * retrace ce que CE compte a lui-même saisi.
+ */
+export async function getTeacherDetail(schoolId: number, id: number) {
+  const teacher = await getTeacher(schoolId, id);
+
+  const gradesWhere = { teacherUserId: id, schoolId };
+
+  const [assignments, recentGrades, recentAttendance, totalGrades] = await Promise.all([
+    prisma.teacherAssignment.findMany({
+      where: { teacherUserId: id, schoolId },
+      orderBy: [{ class: { name: 'asc' } }, { subject: { name: 'asc' } }],
+      select: {
+        id: true,
+        classId: true,
+        class: { select: { name: true, level: true } },
+        subjectId: true,
+        subject: { select: { name: true } },
+      },
+    }),
+    prisma.grade.findMany({
+      where: gradesWhere,
+      // Tri par id en repli : une saisie groupée (gradeBatch.service.ts) crée
+      // toutes les notes d'un lot dans la même transaction, donc avec le même
+      // `createdAt` — sans ce repli, les 10 dernières notes retournées parmi
+      // des lignes à égalité seraient arbitraires et pourraient changer d'un
+      // appel à l'autre sans qu'aucune note n'ait changé.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: RECENT_GRADES_LIMIT,
+      select: {
+        id: true,
+        value: true,
+        maxValue: true,
+        createdAt: true,
+        student: { select: { id: true, firstName: true, lastName: true } },
+        subject: { select: { id: true, name: true } },
+        gradeType: { select: { label: true } },
+      },
+    }),
+    prisma.attendance.findMany({
+      where: { recordedByUserId: id, schoolId },
+      // Même repli qu'au-dessus : une classe entière est appelée le même
+      // jour, donc avec la même `date` sur chaque ligne.
+      orderBy: [{ date: 'desc' }, { id: 'desc' }],
+      take: RECENT_ATTENDANCE_LIMIT,
+      select: {
+        id: true,
+        date: true,
+        status: true,
+        student: { select: { id: true, firstName: true, lastName: true } },
+      },
+    }),
+    prisma.grade.count({ where: gradesWhere }),
+  ]);
+
+  return {
+    ...teacher,
+    affectations: mapAssignments(assignments),
+    totalNotesSaisies: totalGrades,
+    dernieresNotes: recentGrades.map((grade) => ({
+      ...serializeGradeAmount(grade),
+      eleve: grade.student,
+      matiere: grade.subject,
+      type: { label: grade.gradeType.label },
+    })),
+    dernieresPresences: recentAttendance.map((record) => ({
+      id: record.id,
+      date: record.date,
+      status: record.status,
+      eleve: record.student,
+    })),
+  };
 }
 
 /**
@@ -105,15 +209,7 @@ export async function createTeacher(
     });
 
     if (data.assignments?.length) {
-      await tx.teacherAssignment.createMany({
-        data: data.assignments.map((a) => ({
-          schoolId,
-          teacherUserId: created.id,
-          classId: a.classId,
-          subjectId: a.subjectId,
-        })),
-        skipDuplicates: true,
-      });
+      await reconcileAssignments(tx, schoolId, created.id, data.assignments);
     }
 
     return created;
@@ -128,9 +224,13 @@ export async function createTeacher(
  * Modifie les informations et, si `assignments` est fourni, remplace
  * intégralement les affectations.
  *
- * Remplacement et non fusion : c'est ce qu'attend un écran d'édition qui
- * envoie la liste complète des classes cochées. Ne pas fournir le champ laisse
- * les affectations inchangées.
+ * Remplacement et non fusion côté résultat : c'est ce qu'attend un écran
+ * d'édition qui envoie la liste complète des classes cochées. Ne pas fournir
+ * le champ laisse les affectations inchangées. `reconcileAssignments` fait
+ * ce remplacement en ne touchant que ce qui change (voir sa documentation) :
+ * une affectation déjà présente garde son `id`, qu'un futur créneau
+ * d'emploi du temps pourra référencer sans craindre qu'une simple
+ * modification du téléphone de l'enseignant ne l'efface.
  */
 export async function updateTeacher(
   schoolId: number,
@@ -169,18 +269,7 @@ export async function updateTeacher(
     });
 
     if (data.assignments) {
-      await tx.teacherAssignment.deleteMany({ where: { teacherUserId: id } });
-      if (data.assignments.length) {
-        await tx.teacherAssignment.createMany({
-          data: data.assignments.map((a) => ({
-            schoolId,
-            teacherUserId: id,
-            classId: a.classId,
-            subjectId: a.subjectId,
-          })),
-          skipDuplicates: true,
-        });
-      }
+      await reconcileAssignments(tx, schoolId, id, data.assignments);
     }
   });
 
@@ -195,8 +284,8 @@ export async function updateTeacher(
  * désactivé garderait son accès jusqu'à l'expiration de son access token,
  * soit 30 jours.
  */
-export async function archiveTeacher(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
+export async function archiveTeacher(schoolId: number, id: number, actingUserId: number) {
+  const existing = await getTeacher(schoolId, id);
 
   const maintenant = new Date();
 
@@ -216,16 +305,36 @@ export async function archiveTeacher(schoolId: number, id: number) {
     }),
   ]);
 
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.archived',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${existing.firstName ?? ''} ${existing.lastName ?? ''}`.trim() || existing.email,
+  });
+
   return teacher;
 }
 
-export async function restoreTeacher(schoolId: number, id: number) {
-  await getTeacher(schoolId, id);
-  return prisma.user.update({
+export async function restoreTeacher(schoolId: number, id: number, actingUserId: number) {
+  const existing = await getTeacher(schoolId, id);
+  const teacher = await prisma.user.update({
     where: { id },
     data: { archivedAt: null },
     select: publicFields,
   });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.restored',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${existing.firstName ?? ''} ${existing.lastName ?? ''}`.trim() || existing.email,
+  });
+
+  return teacher;
 }
 
 /**
@@ -242,7 +351,8 @@ export async function restoreTeacher(schoolId: number, id: number) {
 export async function deleteTeacherPermanently(
   schoolId: number,
   id: number,
-  expectedName = '',
+  expectedName: string,
+  actingUserId: number,
 ) {
   const teacher = await getTeacher(schoolId, id);
 
@@ -265,6 +375,15 @@ export async function deleteTeacherPermanently(
     });
     await tx.user.delete({ where: { id } });
   });
+
+  await recordAudit({
+    schoolId,
+    actorUserId: actingUserId,
+    action: 'account.permanently_deleted',
+    targetType: 'user',
+    targetId: id,
+    targetLabel: `${teacher.firstName ?? ''} ${teacher.lastName ?? ''}`.trim() || teacher.email,
+  });
 }
 
 async function getTeacherWithAssignments(schoolId: number, id: number) {
@@ -285,14 +404,7 @@ async function getTeacherWithAssignments(schoolId: number, id: number) {
   const { assignments, ...rest } = teacher;
   return {
     ...rest,
-    affectations: assignments.map((a) => ({
-      id: a.id,
-      classId: a.classId,
-      className: a.class.name,
-      level: a.class.level,
-      subjectId: a.subjectId,
-      subjectName: a.subject.name,
-    })),
+    affectations: mapAssignments(assignments),
   };
 }
 
@@ -314,4 +426,52 @@ async function assertAssignmentsBelongToSchool(schoolId: number, assignments: As
 
   if (classCount !== classIds.length) throw notFound('Classe introuvable dans cette école');
   if (subjectCount !== subjectIds.length) throw notFound('Matière introuvable dans cette école');
+}
+
+/**
+ * Fait converger les `TeacherAssignment` d'un enseignant vers `desired`, en
+ * ne touchant que ce qui change — retire ce qui n'y est plus, ajoute ce qui
+ * manque, laisse intactes (même `id`) les affectations déjà présentes.
+ *
+ * Un simple delete-all/create-all serait plus court, mais `TeacherModal`
+ * renvoie la liste complète des affectations à chaque sauvegarde, même pour
+ * ne changer que le téléphone : ça recréerait systématiquement toutes les
+ * lignes avec de nouveaux `id`. Inoffensif tant que rien ne les référence,
+ * mais un créneau d'emploi du temps (`TimetableSlot.teacherAssignmentId`)
+ * s'ancre justement à cet `id` — le perdre à chaque édition de fiche
+ * enseignant supprimerait en cascade tout son planning. On refuse aussi de
+ * retirer une affectation qui a encore des créneaux actifs : la classe
+ * doit d'abord être vidée de son emploi du temps depuis sa propre fiche.
+ */
+async function reconcileAssignments(
+  tx: Prisma.TransactionClient,
+  schoolId: number,
+  teacherUserId: number,
+  desired: AssignmentInput[],
+): Promise<void> {
+  const existing = await tx.teacherAssignment.findMany({ where: { teacherUserId, schoolId } });
+  const key = (a: { classId: number; subjectId: number }) => `${a.classId}:${a.subjectId}`;
+  const desiredKeys = new Set(desired.map(key));
+
+  const toRemove = existing.filter((a) => !desiredKeys.has(key(a)));
+  if (toRemove.length) {
+    const withSlots = await tx.timetableSlot.count({
+      where: { teacherAssignmentId: { in: toRemove.map((a) => a.id) }, archivedAt: null },
+    });
+    if (withSlots > 0) {
+      throw conflict(
+        "Impossible de retirer cette affectation : elle a des créneaux dans l'emploi du temps. Supprimez-les d'abord depuis la fiche de la classe.",
+      );
+    }
+    await tx.teacherAssignment.deleteMany({ where: { id: { in: toRemove.map((a) => a.id) } } });
+  }
+
+  const existingKeys = new Set(existing.map(key));
+  const toCreate = desired.filter((a) => !existingKeys.has(key(a)));
+  if (toCreate.length) {
+    await tx.teacherAssignment.createMany({
+      data: toCreate.map((a) => ({ schoolId, teacherUserId, classId: a.classId, subjectId: a.subjectId })),
+      skipDuplicates: true,
+    });
+  }
 }

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import * as staffAuthService from '../services/staff-auth.service';
 import * as staffService from '../services/staff.service';
 import { requireStaffAuth } from '../middlewares/requireStaffAuth';
-import { credentialsLimiter, sessionLimiter } from '../middlewares/rateLimit';
+import { sessionLimiter, staffCredentialsLimiter } from '../middlewares/rateLimit';
 import { publicRoute } from '../middlewares/publicRoute';
 import { validate } from '../middlewares/validate';
 
@@ -23,10 +23,17 @@ const loginBody = z.object({
 
 const refreshBody = z.object({ refreshToken: z.string().min(1) });
 
+const forgotBody = z.object({ email: z.email('Email invalide') });
+
+const resetBody = z.object({
+  token: z.string().min(1),
+  password: z.string().min(8, 'Le mot de passe doit faire au moins 8 caractères'),
+});
+
 staffRoutes.post(
   '/login',
   publicRoute,
-  credentialsLimiter,
+  staffCredentialsLimiter,
   validate({ body: loginBody }),
   async (req, res) => {
     const { email, password } = req.body as z.infer<typeof loginBody>;
@@ -54,6 +61,32 @@ staffRoutes.post(
     const { refreshToken } = req.body as z.infer<typeof refreshBody>;
     await staffAuthService.logout(refreshToken);
     res.status(204).send();
+  },
+);
+
+staffRoutes.post(
+  '/forgot-password',
+  publicRoute,
+  staffCredentialsLimiter,
+  validate({ body: forgotBody }),
+  async (req, res) => {
+    const { email } = req.body as z.infer<typeof forgotBody>;
+    await staffAuthService.requestPasswordReset(email);
+
+    // Réponse identique que le compte existe ou non : pas d'énumération.
+    res.json({ message: 'Si un compte existe, un email de réinitialisation a été envoyé.' });
+  },
+);
+
+staffRoutes.post(
+  '/reset-password',
+  publicRoute,
+  staffCredentialsLimiter,
+  validate({ body: resetBody }),
+  async (req, res) => {
+    const { token, password } = req.body as z.infer<typeof resetBody>;
+    await staffAuthService.resetPassword(token, password);
+    res.json({ message: 'Mot de passe mis à jour.' });
   },
 );
 
@@ -152,5 +185,17 @@ staffRoutes.post(
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     await staffService.restoreSchool(id);
     res.status(204).send();
+  },
+);
+
+/** Renvoie l'invitation au compte administrateur de l'école (email perdu, lien expiré). */
+staffRoutes.post(
+  '/schools/:id/invitation',
+  requireStaffAuth,
+  validate({ params: idParam }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    await staffService.resendAdminInvitation(id);
+    res.json({ message: 'Invitation envoyée.' });
   },
 );

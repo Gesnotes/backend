@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
+import * as attendanceService from '../services/attendance.service';
 import * as studentService from '../services/student.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
@@ -29,6 +30,7 @@ const listQuery = z.object({
   class_id: z.coerce.number().int().positive().optional(),
   include_archived: boolFlag,
   page: z.coerce.number().int().positive().default(1),
+  search: z.string().trim().max(200).optional(),
 });
 
 const exportQuery = z.object({
@@ -56,6 +58,7 @@ const createBody = z.object({
   lastName: z.string().trim().min(1).max(100),
   classId: z.coerce.number().int().positive(),
   birthDate: z.iso.date().optional(),
+  sex: z.enum(['M', 'F']).optional(),
 });
 
 const updateBody = z
@@ -64,6 +67,7 @@ const updateBody = z
     lastName: z.string().trim().min(1).max(100).optional(),
     classId: z.coerce.number().int().positive().optional(),
     birthDate: z.iso.date().nullable().optional(),
+    sex: z.enum(['M', 'F']).nullable().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'Aucun champ à modifier' });
 
@@ -146,12 +150,13 @@ studentRoutes.get(
   requireRole('admin', 'teacher'),
   validate({ query: listQuery }),
   async (req, res) => {
-    const { class_id, include_archived, page } = req.query as unknown as z.infer<typeof listQuery>;
+    const { class_id, include_archived, page, search } = req.query as unknown as z.infer<typeof listQuery>;
     res.json(
       await studentService.listStudents(authOf(req), {
         classId: class_id,
         includeArchived: include_archived,
         page,
+        search,
       }),
     );
   },
@@ -167,6 +172,30 @@ studentRoutes.get(
   },
 );
 
+/** Fiche complète : identité, parents, bulletin de la période, présence et notes récentes. */
+studentRoutes.get(
+  '/:id/detail',
+  requireRole('admin', 'teacher'),
+  validate({ params: idParam, query: z.object({ term_id: z.coerce.number().int().positive().optional() }) }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as { term_id?: number };
+    res.json(await studentService.getStudentDetail(authOf(req), id, term_id));
+  },
+);
+
+/** Fiche d'absence : historique complet de présence, filtrable par période. */
+studentRoutes.get(
+  '/:id/attendance',
+  requireRole('admin', 'teacher'),
+  validate({ params: idParam, query: z.object({ term_id: z.coerce.number().int().positive().optional() }) }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { term_id } = req.query as unknown as { term_id?: number };
+    res.json(await attendanceService.listStudentAttendanceHistory(authOf(req), id, { termId: term_id }));
+  },
+);
+
 studentRoutes.post('/', requireRole('admin'), validate({ body: createBody }), async (req, res) => {
   const data = req.body as z.infer<typeof createBody>;
   res.status(201).json(await studentService.createStudent(schoolIdOf(req), data));
@@ -179,7 +208,7 @@ studentRoutes.patch(
   async (req, res) => {
     const { id } = req.params as unknown as z.infer<typeof idParam>;
     const data = req.body as z.infer<typeof updateBody>;
-    res.json(await studentService.updateStudent(schoolIdOf(req), id, data));
+    res.json(await studentService.updateStudent(authOf(req), id, data));
   },
 );
 

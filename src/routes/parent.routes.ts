@@ -27,6 +27,7 @@ gradeDetailRoutes.use(requireAuth, requireRole(...ALL_ROLES));
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const termQuery = z.object({ term_id: z.coerce.number().int().positive() });
+const schoolYearQuery = z.object({ school_year_id: z.coerce.number().int().positive() });
 const optionalTermQuery = z.object({
   term_id: z.coerce.number().int().positive().optional(),
   subject_id: z.coerce.number().int().positive().optional(),
@@ -92,6 +93,23 @@ childrenRoutes.get(
   },
 );
 
+/** Bulletin annuel cumulé d'un seul enfant — pendant annuel de l'export ci-dessus. */
+childrenRoutes.get(
+  '/:id/bulletin/annual/export',
+  validate({ params: idParam, query: schoolYearQuery }),
+  async (req, res) => {
+    const { id } = req.params as unknown as z.infer<typeof idParam>;
+    const { school_year_id } = req.query as unknown as z.infer<typeof schoolYearQuery>;
+
+    const file = await bulletinService.exportStudentAnnualBulletin(authOf(req), id, school_year_id);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);
+    res.setHeader('Content-Length', String(file.buffer.length));
+    res.send(file.buffer);
+  },
+);
+
 childrenRoutes.get(
   '/:id/grades',
   validate({ params: idParam, query: optionalTermQuery }),
@@ -115,6 +133,12 @@ gradeDetailRoutes.get('/:id', validate({ params: idParam }), async (req, res) =>
 const attendanceHistoryQuery = z.object({
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),
+});
+
+/** Emploi du temps de la classe de l'enfant — matière et horaire, pas seulement présent/absent. */
+childrenRoutes.get('/:id/schedule', validate({ params: idParam }), async (req, res) => {
+  const { id } = req.params as unknown as z.infer<typeof idParam>;
+  res.json(await parentService.getChildSchedule(authOf(req), id));
 });
 
 childrenRoutes.get(

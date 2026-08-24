@@ -347,6 +347,19 @@ describe('GET /teachers/me/classes — administration (école entière)', () => 
     const res = await api(tokenAdmin).get('/teachers/me/classes');
     expect((res.body as { className: string }[]).some((row) => row.className === 'Garderie')).toBe(false);
   });
+
+  it("propose une matière rattachée par un simple coefficient, sans enseignant assigné", async () => {
+    const physique = await prisma.subject.create({ data: { schoolId: school.id, name: 'Physique' } });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe6.id, subjectId: physique.id, coefficient: 1 },
+    });
+
+    const res = await api(tokenAdmin).get('/teachers/me/classes');
+    const row = (res.body as { subjectName: string; className: string }[]).find(
+      (r) => r.subjectName === 'Physique' && r.className === '6e A',
+    );
+    expect(row).toBeDefined();
+  });
 });
 
 describe('grille de saisie et historique', () => {

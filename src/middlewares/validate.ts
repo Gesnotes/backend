@@ -74,11 +74,17 @@ const FIELD_LABELS: Record<string, string> = {
   page: 'Page',
   assignments: 'Affectations',
   entries: 'Notes saisies',
+  teacherAssignmentId: 'Affectation',
+  dayOfWeek: 'Jour',
+  startTime: 'Heure de début',
+  endTime: 'Heure de fin',
+  slotId: 'Créneau',
   schoolName: "Nom de l'école",
   contactName: 'Votre nom',
   city: 'Ville',
   levels: 'Niveaux',
   q: 'Recherche',
+  days: 'Nombre de jours',
 };
 
 function labelOf(field: string): string {

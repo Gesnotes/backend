@@ -139,6 +139,124 @@ describe('POST /auth/identify — connexion, sans sous-domaine ni en-tête', () 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('BAD_REQUEST');
   });
+
+  it('ne renvoie aucun autre compte quand un seul existe', async () => {
+    const res = await identify('parent@a.test', TEST_PASSWORD);
+    expect(res.body.otherAccounts).toEqual([]);
+  });
+
+  it("liste dans otherAccounts l'autre école où le même mot de passe est valable", async () => {
+    const other = await createSchool('ecole-b');
+    const autre = await createUser({ schoolId: other.id, email: 'parent@a.test', role: 'parent' });
+
+    // L'école d'origine est ambiguë par construction (deux comptes matchent) :
+    // on termine la connexion sur l'école A pour observer otherAccounts.
+    const res = await identify('parent@a.test', TEST_PASSWORD, school.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.otherAccounts).toHaveLength(1);
+    expect(res.body.otherAccounts[0]).toMatchObject({
+      userId: autre.id,
+      schoolId: other.id,
+      schoolName: 'École ecole-b',
+      role: 'parent',
+    });
+    expect(res.body.otherAccounts[0].refreshToken).toBeTruthy();
+  });
+
+  it("le refreshToken d'un autre compte permet de basculer sans redonner le mot de passe", async () => {
+    const other = await createSchool('ecole-b');
+    await createUser({ schoolId: other.id, email: 'parent@a.test', role: 'parent' });
+
+    const res = await identify('parent@a.test', TEST_PASSWORD, school.id);
+    const otherToken = res.body.otherAccounts[0].refreshToken;
+
+    const switched = await request(app).post('/auth/refresh').send({ refreshToken: otherToken });
+    expect(switched.status).toBe(200);
+
+    const decoded = JSON.parse(
+      Buffer.from(switched.body.accessToken.split('.')[1], 'base64url').toString(),
+    );
+    expect(decoded.schoolId).toBe(other.id);
+  });
+});
+
+describe('POST /auth/link-account — liaison explicite de deux comptes', () => {
+  const link = (token: string, identifier: string, password: string) =>
+    request(app)
+      .post('/auth/link-account')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ identifier, password });
+
+  it("lie deux comptes aux identifiants différents et rend l'un accessible depuis l'autre", async () => {
+    const login = await identify('parent@a.test', TEST_PASSWORD);
+    const teacher = await createUser({
+      schoolId: school.id,
+      email: 'prof@a.test',
+      role: 'teacher',
+      password: 'motdepasseprof',
+    });
+
+    const res = await link(login.body.accessToken, 'prof@a.test', 'motdepasseprof');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ userId: teacher.id, schoolId: school.id, role: 'teacher' });
+    expect(res.body.refreshToken).toBeTruthy();
+
+    // La liaison est symétrique : le compte parent apparaît dans otherAccounts
+    // au prochain login de chacun des deux comptes.
+    const parentLogin = await identify('parent@a.test', TEST_PASSWORD);
+    expect(parentLogin.body.otherAccounts).toEqual([
+      expect.objectContaining({ userId: teacher.id, role: 'teacher' }),
+    ]);
+
+    const teacherLogin = await identify('prof@a.test', 'motdepasseprof');
+    expect(teacherLogin.body.otherAccounts).toEqual([
+      expect.objectContaining({ userId: login.body.user.id, role: 'parent' }),
+    ]);
+  });
+
+  it('refuse sans authentification', async () => {
+    const res = await request(app)
+      .post('/auth/link-account')
+      .send({ identifier: 'prof@a.test', password: 'x' });
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse un mauvais mot de passe', async () => {
+    const login = await identify('parent@a.test', TEST_PASSWORD);
+    await createUser({ schoolId: school.id, email: 'prof@a.test', role: 'teacher' });
+
+    const res = await link(login.body.accessToken, 'prof@a.test', 'mauvais');
+    expect(res.status).toBe(401);
+  });
+
+  it('refuse de lier un compte à lui-même', async () => {
+    const login = await identify('parent@a.test', TEST_PASSWORD);
+    const res = await link(login.body.accessToken, 'parent@a.test', TEST_PASSWORD);
+    expect(res.status).toBe(400);
+  });
+
+  it('refuse une seconde liaison identique', async () => {
+    const login = await identify('parent@a.test', TEST_PASSWORD);
+    await createUser({ schoolId: school.id, email: 'prof@a.test', role: 'teacher', password: 'x12345678' });
+
+    await link(login.body.accessToken, 'prof@a.test', 'x12345678');
+    const second = await link(login.body.accessToken, 'prof@a.test', 'x12345678');
+    expect(second.status).toBe(409);
+  });
+});
+
+describe('GET /me', () => {
+  it("renvoie le nom de l'école, pas seulement son id", async () => {
+    const login = await identify('parent@a.test', TEST_PASSWORD);
+
+    const res = await request(app)
+      .get('/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ schoolId: school.id, schoolName: 'École ecole-a' });
+  });
 });
 
 describe('cycle refresh / logout', () => {

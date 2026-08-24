@@ -6,6 +6,7 @@ import type { SignupRequestStatus } from '../generated/prisma/enums';
 import { badRequest, conflict, notFound } from '../errors/AppError';
 import { normalizeEmail } from '../lib/normalize';
 import { sendInvitation } from './invitation.service';
+import { provisionFromLevels } from './provisioning.service';
 
 /**
  * Supervision de la plateforme par l'équipe Gesnotes : traiter les demandes
@@ -60,6 +61,12 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
       ],
     });
 
+    // Rend réels les niveaux cochés sur le formulaire d'inscription : une
+    // classe par niveau du cycle, et les matières standard qui vont avec —
+    // l'administration parle d'un établissement déjà entamé, pas d'une page
+    // blanche, dès son premier coup d'œil.
+    await provisionFromLevels(tx, school.id, request.levels);
+
     const admin = await tx.user.create({
       data: {
         schoolId: school.id,
@@ -83,6 +90,25 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
   await sendInvitation(admin.id, admin.email, 'admin');
 
   return { school, adminEmail: admin.email };
+}
+
+/**
+ * Renvoie l'invitation au compte administrateur d'une école (email perdu,
+ * lien expiré). Un seul admin est créé à l'acceptation de la demande
+ * (`acceptSignupRequest`) : c'est le sien qu'on renvoie, jamais un nouveau
+ * compte.
+ */
+export async function resendAdminInvitation(schoolId: number): Promise<void> {
+  const school = await prisma.school.findUnique({ where: { id: schoolId } });
+  if (!school) throw notFound('École introuvable');
+
+  const admin = await prisma.user.findFirst({
+    where: { schoolId, role: 'admin', archivedAt: null },
+    orderBy: { id: 'asc' },
+  });
+  if (!admin) throw notFound('Aucun compte administrateur pour cette école.');
+
+  await sendInvitation(admin.id, admin.email, 'admin');
 }
 
 /** Écarte une demande sans créer d'école (doublon, injoignable, hors cible…). */

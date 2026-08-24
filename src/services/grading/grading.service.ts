@@ -18,13 +18,21 @@ export interface SubjectResult {
   coefficient: number;
   average: number | null;
   /** Détail par catégorie : c'est la pièce que les parents contestent. */
-  categories: { gradeTypeId: number; label: string; weight: number; average: number | null }[];
+  categories: {
+    gradeTypeId: number;
+    /** "interrogation" | "devoir" | "composition" — fixe par école, contrairement à `label`. */
+    code: string;
+    label: string;
+    weight: number;
+    average: number | null;
+  }[];
 }
 
 export interface StudentResult {
   studentId: number;
   firstName: string;
   lastName: string;
+  sex: 'M' | 'F' | null;
   average: number | null;
   subjects: SubjectResult[];
 }
@@ -38,9 +46,74 @@ export interface StudentResult {
  * avec les fonctions pures de `compute.ts`.
  */
 export async function computeClassBulletin(schoolId: number, classId: number, termId: number) {
-  const [bulletin] = await computeClassBulletins(schoolId, [classId], termId);
+  const [[bulletin], readiness] = await Promise.all([
+    computeClassBulletins(schoolId, [classId], termId),
+    computeBulletinReadiness(schoolId, classId, termId),
+  ]);
   if (!bulletin) throw notFound('Classe introuvable');
-  return bulletin;
+  return { ...bulletin, bulletinReady: readiness.ready, missingSubjects: readiness.missingSubjects };
+}
+
+/**
+ * Matières attendues d'une classe : celles qui ont un enseignant affecté ou
+ * un coefficient déclaré (même définition que `grade.service.ts::listSchoolPairs`
+ * et `ClassSubjectsPanel.tsx` côté front), sans dépendre de ce qui a déjà été
+ * noté.
+ */
+async function listExpectedSubjects(
+  schoolId: number,
+  classId: number,
+): Promise<{ id: number; name: string }[]> {
+  const [assignments, coefficients] = await Promise.all([
+    prisma.teacherAssignment.findMany({
+      where: { schoolId, classId },
+      select: { subjectId: true, subject: { select: { name: true } } },
+    }),
+    prisma.subjectCoefficient.findMany({
+      where: { classId, subject: { schoolId } },
+      select: { subjectId: true, subject: { select: { name: true } } },
+    }),
+  ]);
+
+  const seen = new Map<number, string>();
+  for (const a of assignments) seen.set(a.subjectId, a.subject.name);
+  for (const c of coefficients) seen.set(c.subjectId, c.subject.name);
+
+  return [...seen.entries()]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+}
+
+/**
+ * Un bulletin n'est « prêt » — au sens où il peut être remis aux familles —
+ * que lorsque chaque matière attendue de la classe a produit au moins une
+ * note sur la période. Avant ça, le document aurait des colonnes manquantes
+ * plutôt que des tirets isolés : mieux vaut ne pas l'offrir du tout.
+ *
+ * Une classe sans aucune matière attendue (mode présence, ou pas encore
+ * configurée) n'est jamais « prête » : il n'y a rien à couvrir, donc rien à
+ * remettre.
+ */
+export async function computeBulletinReadiness(
+  schoolId: number,
+  classId: number,
+  termId: number,
+): Promise<{ ready: boolean; missingSubjects: string[] }> {
+  const [expected, graded] = await Promise.all([
+    listExpectedSubjects(schoolId, classId),
+    prisma.grade.findMany({
+      where: { schoolId, termId, student: { classId, archivedAt: null } },
+      distinct: ['subjectId'],
+      select: { subjectId: true },
+    }),
+  ]);
+
+  if (expected.length === 0) return { ready: false, missingSubjects: [] };
+
+  const gradedIds = new Set(graded.map((g) => g.subjectId));
+  const missingSubjects = expected.filter((s) => !gradedIds.has(s.id)).map((s) => s.name);
+
+  return { ready: missingSubjects.length === 0, missingSubjects };
 }
 
 /**
@@ -56,7 +129,10 @@ export async function computeClassBulletins(
   classIds: number[],
   termId: number,
 ) {
-  const term = await prisma.term.findFirst({ where: { id: termId, schoolId } });
+  const term = await prisma.term.findFirst({
+    where: { id: termId, schoolId },
+    include: { schoolYear: { select: { label: true } } },
+  });
   if (!term) throw notFound('Période introuvable');
 
   const [classes, allStudents, allGrades, allCoefficients] = await Promise.all([
@@ -64,17 +140,23 @@ export async function computeClassBulletins(
     prisma.student.findMany({
       where: { classId: { in: classIds }, schoolId, archivedAt: null },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-      select: { id: true, classId: true, firstName: true, lastName: true },
+      select: { id: true, classId: true, firstName: true, lastName: true, sex: true },
     }),
     prisma.grade.findMany({
-      where: { schoolId, termId, student: { classId: { in: classIds }, archivedAt: null } },
+      // Ancrée à `evaluation.classId`, jamais à `student.classId` : une note
+      // reste attachée à la classe où elle a été saisie, pas à la classe
+      // courante de l'élève (voir le commentaire de Grade dans schema.prisma).
+      // Un élève déplacé en cours de période ne doit ni perdre son historique
+      // dans son ancienne classe, ni le voir apparaître à tort dans la
+      // nouvelle.
+      where: { schoolId, termId, student: { archivedAt: null }, evaluation: { classId: { in: classIds } } },
       select: {
         studentId: true,
         subjectId: true,
         gradeTypeId: true,
         value: true,
         maxValue: true,
-        student: { select: { classId: true } },
+        evaluation: { select: { classId: true } },
         gradeType: { select: { id: true, code: true, label: true, weight: true, position: true } },
         subject: { select: { id: true, name: true, coefficient: true } },
       },
@@ -87,16 +169,51 @@ export async function computeClassBulletins(
       klass,
       term,
       allStudents.filter((s) => s.classId === klass.id),
-      allGrades.filter((g) => g.student.classId === klass.id),
+      allGrades.filter((g) => g.evaluation.classId === klass.id),
       allCoefficients.filter((c) => c.classId === klass.id),
     ),
   );
 }
 
+/**
+ * Classement d'une liste de résultats élève par moyenne décroissante — même
+ * tri que `class.service.ts::getClassDetail` (nulls en fin de classement,
+ * égalité départagée par nom) partout où un rang est affiché, pour qu'il
+ * corresponde toujours à celui vu côté classe. Un élève sans moyenne n'a pas
+ * d'entrée dans la carte renvoyée plutôt qu'un rang trompeur.
+ */
+export function rankStudents<T extends { studentId: number; lastName: string; average: number | null }>(
+  students: T[],
+): Map<number, { position: number; total: number }> {
+  const ranked = [...students].sort((a, b) => {
+    if (a.average === null && b.average === null) return a.lastName.localeCompare(b.lastName, 'fr');
+    if (a.average === null) return 1;
+    if (b.average === null) return -1;
+    return b.average - a.average;
+  });
+  const noted = ranked.filter((s) => s.average !== null);
+
+  return new Map(noted.map((s, index) => [s.studentId, { position: index + 1, total: noted.length }]));
+}
+
+/**
+ * Rang de l'élève dans sa classe sur une période. Ne renvoie qu'un nombre :
+ * jamais les autres élèves, qui n'ont pas à être exposés au parent.
+ */
+export async function computeStudentRank(
+  schoolId: number,
+  studentId: number,
+  classId: number,
+  termId: number,
+): Promise<{ position: number; total: number } | null> {
+  const bulletin = await computeClassBulletin(schoolId, classId, termId);
+  return rankStudents(bulletin.students).get(studentId) ?? null;
+}
+
 function buildBulletin(
   klass: { id: number; name: string; level: string },
-  term: { id: number; label: string },
-  students: { id: number; firstName: string; lastName: string }[],
+  term: { id: number; label: string; schoolYear: { label: string } | null },
+  students: { id: number; firstName: string; lastName: string; sex: 'M' | 'F' | null }[],
   grades: {
     studentId: number;
     subjectId: number;
@@ -179,6 +296,7 @@ function buildBulletin(
       studentId: student.id,
       firstName: student.firstName,
       lastName: student.lastName,
+      sex: student.sex,
       average: serializeAverage(generalAvg),
       subjects,
     };
@@ -190,6 +308,7 @@ function buildBulletin(
     level: klass.level,
     termId,
     termLabel: term.label,
+    schoolYearLabel: term.schoolYear?.label ?? null,
     students: results,
     classAverage: serializeAverage(averageOfDecimals(rawAverages)),
     /**
@@ -202,18 +321,18 @@ function buildBulletin(
   };
 }
 
-/** Résultats d'un élève sur une période (espace parent, détail classe). */
-export async function computeStudentResult(
+/**
+ * Notes, moyennes par matière et moyenne générale (pleine précision) d'un
+ * élève sur une période — cœur partagé par `computeStudentResult` (un seul
+ * terme, arrondi à la sérialisation) et `computeAnnualAverage` (plusieurs
+ * termes de la même année scolaire, moyennés avant tout arrondi).
+ */
+async function studentSubjectsAndAverage(
   schoolId: number,
   studentId: number,
+  classId: number,
   termId: number,
-): Promise<StudentResult> {
-  const student = await prisma.student.findFirst({
-    where: { id: studentId, schoolId },
-    select: { id: true, firstName: true, lastName: true, classId: true, archivedAt: true },
-  });
-  if (!student) throw notFound('Élève introuvable');
-
+): Promise<{ subjects: SubjectResult[]; rawAverage: D | null }> {
   const [grades, coefficients] = await Promise.all([
     prisma.grade.findMany({
       where: { schoolId, studentId, termId },
@@ -227,7 +346,7 @@ export async function computeStudentResult(
         subject: { select: { id: true, name: true, coefficient: true } },
       },
     }),
-    prisma.subjectCoefficient.findMany({ where: { classId: student.classId } }),
+    prisma.subjectCoefficient.findMany({ where: { classId } }),
   ]);
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
@@ -263,12 +382,213 @@ export async function computeStudentResult(
 
   subjects.sort((a, b) => a.subjectName.localeCompare(b.subjectName, 'fr'));
 
+  return { subjects, rawAverage: generalAverage(forGeneral) };
+}
+
+/** Résultats d'un élève sur une période (espace parent, détail classe). */
+export async function computeStudentResult(
+  schoolId: number,
+  studentId: number,
+  termId: number,
+): Promise<StudentResult> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, firstName: true, lastName: true, sex: true, classId: true, archivedAt: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const { subjects, rawAverage } = await studentSubjectsAndAverage(
+    schoolId,
+    studentId,
+    student.classId,
+    termId,
+  );
+
   return {
     studentId: student.id,
     firstName: student.firstName,
     lastName: student.lastName,
-    average: serializeAverage(generalAverage(forGeneral)),
+    sex: student.sex,
+    average: serializeAverage(rawAverage),
     subjects,
+  };
+}
+
+/**
+ * Moyenne annuelle : moyenne simple des moyennes générales (pleine
+ * précision) de chaque période active de l'année scolaire — même discipline
+ * que la moyenne de classe (`averageOfDecimals`) pour éviter de dériver en
+ * moyennant des moyennes déjà arrondies à 2 décimales. Une période sans
+ * moyenne (élève pas encore noté ce terme-là) est simplement absente du
+ * calcul, jamais comptée 0. `null` si l'année scolaire n'a aucune période
+ * active.
+ */
+export async function computeAnnualAverage(
+  schoolId: number,
+  studentId: number,
+  schoolYearId: number,
+): Promise<number | null> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, classId: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    select: { id: true },
+  });
+  if (terms.length === 0) return null;
+
+  const rawAverages = await Promise.all(
+    terms.map((term) =>
+      studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id).then(
+        (r) => r.rawAverage,
+      ),
+    ),
+  );
+
+  return serializeAverage(averageOfDecimals(rawAverages));
+}
+
+/**
+ * Moyenne générale de chaque période active de l'année scolaire, dans
+ * l'ordre chronologique — la « tendance » côté parent, adaptée à notre
+ * découpage par trimestre plutôt qu'au mensuel qui ne correspond à rien dans
+ * ce modèle. Un seul point (ou aucun) n'est pas une tendance : c'est au
+ * client de décider s'il affiche quelque chose en dessous de deux.
+ */
+export async function computeTermTrend(
+  schoolId: number,
+  studentId: number,
+  schoolYearId: number,
+): Promise<{ termId: number; termLabel: string; average: number | null }[]> {
+  const student = await prisma.student.findFirst({
+    where: { id: studentId, schoolId },
+    select: { id: true, classId: true },
+  });
+  if (!student) throw notFound('Élève introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    select: { id: true, label: true },
+  });
+
+  return Promise.all(
+    terms.map(async (term) => {
+      const { rawAverage } = await studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id);
+      return { termId: term.id, termLabel: term.label, average: serializeAverage(rawAverage) };
+    }),
+  );
+}
+
+export interface AnnualStudentResult {
+  studentId: number;
+  firstName: string;
+  lastName: string;
+  /** Moyenne générale de chaque période active de l'année, dans l'ordre de `terms`. */
+  termAverages: (number | null)[];
+  /** Moyenne annuelle — moyenne des moyennes brutes de chaque période, voir `computeAnnualAverage`. */
+  average: number | null;
+}
+
+/**
+ * Bulletin annuel cumulé d'une classe : une ligne par élève, une colonne par
+ * période active de l'année scolaire, plus la moyenne annuelle — même
+ * discipline « Decimal de bout en bout » que `computeAnnualAverage`, étendue
+ * à toute la classe en un seul calcul plutôt qu'élève par élève (ce qui
+ * ferait autant de requêtes que d'élèves × périodes).
+ *
+ * `terms.length === 0` (année sans période active) : bulletin jamais prêt,
+ * `missingByTerm` vide — rien à réclamer, juste rien à calculer.
+ */
+export async function computeAnnualClassBulletin(
+  schoolId: number,
+  classId: number,
+  schoolYearId: number,
+) {
+  const [klass, schoolYear] = await Promise.all([
+    prisma.class.findFirst({ where: { id: classId, schoolId } }),
+    prisma.schoolYear.findFirst({ where: { id: schoolYearId, schoolId } }),
+  ]);
+  if (!klass) throw notFound('Classe introuvable');
+  if (!schoolYear) throw notFound('Année scolaire introuvable');
+
+  const terms = await prisma.term.findMany({
+    where: { schoolId, schoolYearId, archivedAt: null },
+    orderBy: [{ startDate: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    select: { id: true, label: true },
+  });
+
+  const base = {
+    classId,
+    className: klass.name,
+    level: klass.level,
+    schoolYearId,
+    schoolYearLabel: schoolYear.label,
+    terms,
+  };
+
+  if (terms.length === 0) {
+    return {
+      ...base,
+      students: [] as AnnualStudentResult[],
+      classAverage: null,
+      bulletinReady: false,
+      missingByTerm: [] as { termLabel: string; subjects: string[] }[],
+    };
+  }
+
+  const [bulletinsByTerm, readinessByTerm] = await Promise.all([
+    Promise.all(terms.map((term) => computeClassBulletins(schoolId, [classId], term.id).then((r) => r[0]))),
+    Promise.all(terms.map((term) => computeBulletinReadiness(schoolId, classId, term.id))),
+  ]);
+
+  // Effectif courant de la classe, indépendant de la période (voir
+  // `computeClassBulletins` : filtré par `classId` actuel, jamais par
+  // historique) — identique quel que soit le terme d'où on le lit.
+  const roster = bulletinsByTerm[0]?.students ?? [];
+
+  const rawAnnualAverages: (D | null)[] = [];
+
+  const students: AnnualStudentResult[] = roster.map((student) => {
+    const termAverages: (number | null)[] = [];
+    const rawPerTerm: (D | null)[] = [];
+
+    for (const bulletin of bulletinsByTerm) {
+      const index = bulletin?.students.findIndex((s) => s.studentId === student.studentId) ?? -1;
+      if (!bulletin || index === -1) {
+        termAverages.push(null);
+        rawPerTerm.push(null);
+        continue;
+      }
+      termAverages.push(bulletin.students[index]!.average);
+      rawPerTerm.push(bulletin.studentRawAverages[index] ?? null);
+    }
+
+    const rawAnnual = averageOfDecimals(rawPerTerm);
+    rawAnnualAverages.push(rawAnnual);
+
+    return {
+      studentId: student.studentId,
+      firstName: student.firstName,
+      lastName: student.lastName,
+      termAverages,
+      average: serializeAverage(rawAnnual),
+    };
+  });
+
+  const missingByTerm = terms
+    .map((term, index) => ({ termLabel: term.label, subjects: readinessByTerm[index]!.missingSubjects }))
+    .filter((entry) => entry.subjects.length > 0);
+
+  return {
+    ...base,
+    students,
+    classAverage: serializeAverage(averageOfDecimals(rawAnnualAverages)),
+    bulletinReady: readinessByTerm.every((r) => r.ready),
+    missingByTerm,
   };
 }
 
@@ -324,13 +644,17 @@ function categoriesOf(
     gradeTypeId: number;
     value: D;
     maxValue: D;
-    gradeType: { id: number; label: string; weight: D; position: number };
+    gradeType: { id: number; code: string; label: string; weight: D; position: number };
   }[],
 ) {
-  const byType = new Map<number, { label: string; weight: D; position: number; values: D[] }>();
+  const byType = new Map<
+    number,
+    { code: string; label: string; weight: D; position: number; values: D[] }
+  >();
 
   for (const grade of grades) {
     const entry = byType.get(grade.gradeTypeId) ?? {
+      code: grade.gradeType.code,
       label: grade.gradeType.label,
       weight: grade.gradeType.weight,
       position: grade.gradeType.position,
@@ -344,6 +668,7 @@ function categoriesOf(
     .sort((a, b) => a[1].position - b[1].position)
     .map(([gradeTypeId, entry]) => ({
       gradeTypeId,
+      code: entry.code,
       label: entry.label,
       weight: Number(entry.weight),
       average: serializeAverage(

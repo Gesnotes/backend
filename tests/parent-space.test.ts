@@ -66,8 +66,8 @@ beforeEach(async () => {
     data: { schoolId: school.id, classId: classe.id, firstName: 'Ben', lastName: 'Beta' },
   });
 
-  await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parentA.id } });
-  await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: parentB.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ana.id, parentUserId: parentA.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ben.id, parentUserId: parentB.id } });
 
   noteAna = await seedGrade({
     schoolId: school.id,
@@ -88,6 +88,47 @@ afterAll(async () => {
 
 const get = (token: string, path: string) =>
   request(app).get(path).set('Authorization', `Bearer ${token}`);
+
+describe('GET /children/:id/schedule', () => {
+  it("un parent voit l'emploi du temps de la classe de son enfant", async () => {
+    const assignment = await prisma.teacherAssignment.findFirstOrThrow({
+      where: { schoolId: school.id, classId: classe.id, subjectId: maths.id },
+    });
+    await prisma.timetableSlot.create({
+      data: {
+        schoolId: school.id, teacherAssignmentId: assignment.id, dayOfWeek: 'lundi', startMinute: 480, endMinute: 540,
+      },
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}/schedule`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].subjectName).toBe('Maths');
+    expect(res.body[0].startTime).toBe('08:00');
+  });
+
+  it("un parent d'un autre enfant est refusé (404)", async () => {
+    const res = await get(tokenParentB, `/children/${ana.id}/schedule`);
+    expect(res.status).toBe(404);
+  });
+
+  it('renvoie un tableau vide pour une classe en mode présence', async () => {
+    const presenceClass = await prisma.class.create({
+      data: { schoolId: school.id, name: 'Petite section', level: 'maternelle', mode: 'presence' },
+    });
+    const kid = await prisma.student.create({
+      data: { schoolId: school.id, classId: presenceClass.id, firstName: 'Kim', lastName: 'Gamma' },
+    });
+    const parentAUser = await prisma.user.findFirstOrThrow({ where: { schoolId: school.id, email: 'pa@a.test' } });
+    await prisma.studentParent.create({
+      data: { schoolId: school.id, studentId: kid.id, parentUserId: parentAUser.id },
+    });
+
+    const res = await get(tokenParentA, `/children/${kid.id}/schedule`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
 
 /**
  * Garde-fou symétrique de celui des enseignants : un parent ne voit que ses
@@ -197,6 +238,110 @@ describe('GET /children/:id', () => {
 
   it('exige une période', async () => {
     expect((await get(tokenParentA, `/children/${ana.id}`)).status).toBe(400);
+  });
+
+  it("signale le bulletin prêt quand l'unique matière attendue de la classe est notée", async () => {
+    // noteAna (beforeEach) note déjà Maths, seule matière rattachée à la classe.
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinReady).toBe(true);
+    expect(res.body.missingSubjects).toEqual([]);
+  });
+
+  it("signale le bulletin incomplet tant qu'une matière attendue de la classe n'est pas notée", async () => {
+    const svt = await prisma.subject.create({ data: { schoolId: school.id, name: 'SVT' } });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe.id, subjectId: svt.id, coefficient: 1 },
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.bulletinReady).toBe(false);
+    expect(res.body.missingSubjects).toEqual(['SVT']);
+  });
+
+  it("calcule la moyenne annuelle quand la période appartient à une année scolaire", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    const term2 = await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // noteAna (composition, 15) + un devoir à 15 (beforeEach) passent le
+    // trimestre 1 à 15 ; le trimestre 2 est noté à 19.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: compoId, termId: term2.id, value: 19,
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term2.id, value: 19,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.average).toBe(15);
+    // (15 + 19) / 2 = 17
+    expect(res.body.annualAverage).toBe(17);
+  });
+
+  it("ne calcule pas de moyenne annuelle si la période n'est rattachée à aucune année scolaire", async () => {
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.annualAverage).toBeNull();
+  });
+
+  it('renvoie le rang de l\'enfant dans sa classe, sans exposer les autres élèves', async () => {
+    // Devoir ajouté à la même valeur que la composition du beforeEach :
+    // passe le seuil de publication (devoir + composition). Ben n'a aucune
+    // note ce terme-là : exclu du classement.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.rank).toEqual({ position: 1, total: 1 });
+    expect(JSON.stringify(res.body)).not.toContain('Beta');
+  });
+
+  it("renvoie la tendance par période de l'année scolaire", async () => {
+    const schoolYear = await prisma.schoolYear.create({
+      data: { schoolId: school.id, label: '2025-2026' },
+    });
+    await prisma.term.update({ where: { id: term.id }, data: { schoolYearId: schoolYear.id } });
+    await prisma.term.create({
+      data: { schoolId: school.id, label: 'Trimestre 2', schoolYearId: schoolYear.id },
+    });
+    // noteAna (composition à 15, beforeEach) est la seule note de T1 pour Ana ;
+    // devoir manquant : pas de moyenne matière publiée sur ce seul terme.
+    const devoir = await prisma.gradeType.create({
+      data: { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 1 },
+    });
+    await seedGrade({
+      schoolId: school.id, studentId: ana.id, subjectId: maths.id, gradeTypeId: devoir.id, termId: term.id, value: 15,
+    });
+
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.termTrend).toEqual([
+      { termId: term.id, termLabel: 'Trimestre 1', average: 15 },
+      { termId: expect.any(Number), termLabel: 'Trimestre 2', average: null },
+    ]);
+  });
+
+  it("renvoie une tendance vide si la période n'est rattachée à aucune année scolaire", async () => {
+    const res = await get(tokenParentA, `/children/${ana.id}?term_id=${term.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.termTrend).toEqual([]);
   });
 
   it('reste accessible au professeur de la classe et à l\'admin', async () => {

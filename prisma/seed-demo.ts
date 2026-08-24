@@ -280,7 +280,7 @@ async function main() {
       await prisma.studentParent.upsert({
         where: { studentId_parentUserId: { studentId: student.id, parentUserId: parent.id } },
         update: {},
-        create: { studentId: student.id, parentUserId: parent.id },
+        create: { schoolId: school.id, studentId: student.id, parentUserId: parent.id },
       });
     }
   }

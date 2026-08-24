@@ -1,7 +1,8 @@
 import argon2 from 'argon2';
 
 import prisma from '../lib/prisma';
-import { env } from '../lib/env';
+import { env, webAppUrl } from '../lib/env';
+import { mailer } from '../lib/mailer';
 import { normalizeEmail } from '../lib/normalize';
 import { signStaffAccessToken } from '../lib/jwt';
 import { generateToken, hashToken } from '../lib/tokens';
@@ -48,6 +49,68 @@ export async function login(email: string, password: string): Promise<StaffLogin
   const refreshToken = await issueRefreshToken(staff.id);
 
   return { accessToken, refreshToken, staff: toPublicStaff(staff) };
+}
+
+/**
+ * Demande de réinitialisation. Ne révèle jamais si le compte existe : la
+ * réponse du contrôleur est identique dans tous les cas (voir
+ * `auth.service.ts`, dont c'est le miroir — un seul compte staff par email
+ * possible, pas de boucle multi-écoles ici).
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const staff = await prisma.staffUser.findUnique({
+    where: { email: normalizeEmail(email) },
+  });
+  if (!staff || staff.archivedAt) return;
+
+  const rawToken = generateToken(32);
+
+  await prisma.staffPasswordResetToken.create({
+    data: {
+      staffUserId: staff.id,
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + env.RESET_TOKEN_TTL_MINUTES * 60_000),
+    },
+  });
+
+  const link = `${webAppUrl}/equipe/reinitialiser-mot-de-passe?token=${rawToken}`;
+  await mailer.send(
+    staff.email,
+    'Réinitialisation de votre mot de passe Gesnotes',
+    `<p>Bonjour,</p>
+     <p>Vous avez demandé la réinitialisation du mot de passe de votre compte équipe Gesnotes.</p>
+     <p><a href="${link}">Définir un nouveau mot de passe</a></p>
+     <p>Ce lien expire dans ${env.RESET_TOKEN_TTL_MINUTES} minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>`,
+  );
+}
+
+/** Valide le token du lien et change le mot de passe. Token à usage unique. */
+export async function resetPassword(rawToken: string, newPassword: string): Promise<void> {
+  const stored = await prisma.staffPasswordResetToken.findUnique({
+    where: { tokenHash: hashToken(rawToken) },
+    include: { staffUser: true },
+  });
+
+  const linkInvalid =
+    "Ce lien n'est plus valable : il a déjà servi, ou il est trop ancien. Demandez-en un nouveau depuis « Mot de passe oublié ».";
+  if (!stored || stored.usedAt || stored.expiresAt < new Date()) throw unauthorized(linkInvalid);
+  if (stored.staffUser.archivedAt) throw unauthorized(linkInvalid);
+
+  const passwordHash = await argon2.hash(newPassword);
+
+  // Changer le mot de passe déconnecte partout : les refresh tokens existants
+  // ne doivent pas survivre à une réinitialisation.
+  await prisma.$transaction([
+    prisma.staffUser.update({
+      where: { id: stored.staffUserId },
+      data: { passwordHash, sessionsRevokedAt: new Date() },
+    }),
+    prisma.staffPasswordResetToken.update({ where: { id: stored.id }, data: { usedAt: new Date() } }),
+    prisma.staffRefreshToken.updateMany({
+      where: { staffUserId: stored.staffUserId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
 }
 
 /** Rotation : l'ancien refresh token est révoqué, un nouveau est émis. */

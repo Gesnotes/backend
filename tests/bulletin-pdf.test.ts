@@ -36,6 +36,12 @@ beforeEach(async () => {
   const maths = await prisma.subject.create({
     data: { schoolId: school.id, name: 'Mathématiques', coefficient: 4 },
   });
+  // Rattache la matière à la classe (comme ClassSubjectsPanel côté admin) :
+  // sans ça, elle n'est « attendue » nulle part et le bulletin n'est jamais
+  // considéré complet, quel que soit le nombre de notes saisies.
+  await prisma.subjectCoefficient.create({
+    data: { classId: classe.id, subjectId: maths.id, coefficient: 4 },
+  });
   const [interro, devoir, compo] = await Promise.all([
     prisma.gradeType.create({
       data: { schoolId: school.id, code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
@@ -55,8 +61,8 @@ beforeEach(async () => {
     data: { schoolId: school.id, classId: classe.id, firstName: 'Ben', lastName: 'Beta' },
   });
 
-  await prisma.studentParent.create({ data: { studentId: ana.id, parentUserId: parent.id } });
-  await prisma.studentParent.create({ data: { studentId: ben.id, parentUserId: autre.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ana.id, parentUserId: parent.id } });
+  await prisma.studentParent.create({ data: { schoolId: school.id, studentId: ben.id, parentUserId: autre.id } });
 
   // Devoir aligné sur la moyenne finale de chaque élève (15 pour Ana, 10 pour
   // Ben) : ajouter cette catégorie ne fait que passer le seuil de publication
@@ -187,6 +193,42 @@ describe('export du bulletin de classe', () => {
     // Le tableau de classe expose les résultats de tous les enfants.
     expect(res.status).toBe(403);
   });
+
+  it("integre les images d'en-tête et de pied de page réglées par l'école", async () => {
+    // PNG 1×1 valide, minimal — suffisant pour vérifier l'intégration sans
+    // dépendre d'un vrai logo.
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    await prisma.school.update({
+      where: { id: school.id },
+      data: {
+        bulletinHeaderImage: png,
+        bulletinHeaderImageType: 'image/png',
+        bulletinFooterImage: png,
+        bulletinFooterImageType: 'image/png',
+      },
+    });
+
+    const buffer = await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`);
+    expect(isPdf(buffer)).toBe(true);
+
+    // pdfkit intègre chaque image comme un XObject Image distinct.
+    const raw = buffer.toString('latin1');
+    expect((raw.match(/\/Subtype\s*\/Image/g) ?? []).length).toBeGreaterThanOrEqual(2);
+
+    // La mention générique reste présente, jamais remplacée par l'image.
+    expect(pdfTextOf(buffer)).toContain('Gesnotes');
+  });
+
+  it("garde le rendu par defaut quand l'ecole n'a rien personnalise", async () => {
+    const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
+    expect(texte).toContain('Généré');
+    expect(texte).toContain('Gesnotes');
+  });
 });
 
 describe('export du bulletin individuel', () => {
@@ -207,6 +249,21 @@ describe('export du bulletin individuel', () => {
   it("est refusé au parent d'un autre élève", async () => {
     const res = await get(tokenAutreParent, `/children/${ana.id}/bulletin/export?term_id=${term.id}`);
     expect(res.status).toBe(404);
+  });
+
+  it("est refusé — même à l'admin — tant qu'une matière de la classe n'est pas notée", async () => {
+    const svt = await prisma.subject.create({ data: { schoolId: school.id, name: 'SVT' } });
+    await prisma.subjectCoefficient.create({
+      data: { classId: classe.id, subjectId: svt.id, coefficient: 1 },
+    });
+
+    const parentRes = await get(tokenParent, `/children/${ana.id}/bulletin/export?term_id=${term.id}`);
+    expect(parentRes.status).toBe(409);
+    expect(parentRes.body.error.message).toMatch(/SVT/);
+
+    const adminRes = await get(tokenAdmin, `/classes/${classe.id}/bulletin/export?term_id=${term.id}`);
+    expect(adminRes.status).toBe(409);
+    expect(adminRes.body.error.message).toMatch(/SVT/);
   });
 });
 
@@ -230,13 +287,13 @@ describe('cohérence avec le calcul', () => {
     expect(texte).toContain('Moyennedelaclasse:12,50');
   });
 
-  it('imprime le détail par catégorie et le coefficient — la promesse d\'auditabilité', async () => {
+  it('imprime le détail par catégorie — la promesse d\'auditabilité', async () => {
     const texte = pdfTextOf(await pdfBody(`/classes/${classe.id}/bulletin/export?term_id=${term.id}`));
 
-    // Un parent doit pouvoir refaire le calcul : (12 + 2×15 + 3×16) / 6 = 15.
-    expect(texte).toContain('Interrogation×1:12,00');
-    expect(texte).toContain('Composition×3:16,00');
-    expect(texte).toContain('Mathématiques');
+    // Un parent doit pouvoir refaire le calcul : (12 + 2×15 + 3×16) / 6 = 15,
+    // à partir des trois colonnes Interro. / Devoir / Composition imprimées
+    // pour Mathématiques (coef. 4), sans avoir besoin du poids affiché.
+    expect(texte).toContain('Mathématiques412,0015,0016,0015,00');
     expect(texte).toContain('Collège Sainte-Marie'.replace(/\s+/g, ''));
   });
 
@@ -248,6 +305,9 @@ describe('cohérence avec le calcul', () => {
     });
     const histoire = await prisma.subject.create({
       data: { schoolId: school.id, name: 'Histoire', coefficient: 1 },
+    });
+    await prisma.subjectCoefficient.create({
+      data: { classId: mixte.id, subjectId: histoire.id, coefficient: 1 },
     });
     // Le type « devoir » existe déjà pour cette école (seedé dans le
     // beforeEach) : un type de note est propre à l'école, pas à la matière.

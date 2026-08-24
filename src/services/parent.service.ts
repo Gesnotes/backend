@@ -1,7 +1,10 @@
 import prisma from '../lib/prisma';
 import type { AuthPayload } from '../types/express';
 import { notFound } from '../errors/AppError';
-import { computeStudentResult } from './grading/grading.service';
+import {
+  computeAnnualAverage, computeBulletinReadiness, computeStudentRank, computeStudentResult, computeTermTrend,
+} from './grading/grading.service';
+import { listSlotsForClassRaw } from './schedule.service';
 
 /**
  * Garde-fou de l'espace parent, symétrique de `assertCanGrade`.
@@ -39,6 +42,23 @@ export async function assertIsParentOf(auth: AuthPayload, studentId: number) {
   return student;
 }
 
+/**
+ * Emploi du temps de la classe de mon enfant — tableau vide si la classe est
+ * en mode `presence` (maternelle/garderie), qui n'a pas de notion de créneau
+ * par matière (voir schedule.service.ts).
+ */
+export async function getChildSchedule(auth: AuthPayload, studentId: number) {
+  const student = await assertIsParentOf(auth, studentId);
+
+  const klass = await prisma.class.findFirst({
+    where: { id: student.classId },
+    select: { mode: true },
+  });
+  if (!klass || klass.mode !== 'notes') return [];
+
+  return listSlotsForClassRaw(auth.schoolId, student.classId);
+}
+
 /** Mes enfants, avec leur classe et leur moyenne sur la période demandée. */
 export async function listMyChildren(auth: AuthPayload, termId?: number) {
   const links = await prisma.studentParent.findMany({
@@ -64,15 +84,49 @@ export async function listMyChildren(auth: AuthPayload, termId?: number) {
   );
 }
 
-/** Détail d'un enfant : moyenne générale et moyenne par matière. */
+/**
+ * Détail d'un enfant : moyenne générale et moyenne par matière sur la
+ * période, plus :
+ * - `annualAverage` — moyenne des périodes actives de l'année scolaire de
+ *   `termId`, `null` si cette période n'est rattachée à aucune année
+ *   scolaire (voir `computeAnnualAverage`) ;
+ * - `rank` — position de l'élève dans sa classe sur cette période, `null`
+ *   si l'élève n'a pas de moyenne ce terme-là ;
+ * - `termTrend` — moyenne générale de chaque période de la même année
+ *   scolaire, dans l'ordre chronologique, tableau vide si `termId` n'est
+ *   rattaché à aucune année scolaire.
+ */
 export async function getChildDetail(auth: AuthPayload, studentId: number, termId: number) {
-  await assertIsParentOf(auth, studentId);
+  const student = await assertIsParentOf(auth, studentId);
 
   const term = await prisma.term.findFirst({ where: { id: termId, schoolId: auth.schoolId } });
   if (!term) throw notFound('Période introuvable');
 
-  const result = await computeStudentResult(auth.schoolId, studentId, termId);
-  return { ...result, termId, termLabel: term.label };
+  const [result, annualAverage, rank, termTrend, readiness] = await Promise.all([
+    computeStudentResult(auth.schoolId, studentId, termId),
+    term.schoolYearId != null
+      ? computeAnnualAverage(auth.schoolId, studentId, term.schoolYearId)
+      : Promise.resolve(null),
+    computeStudentRank(auth.schoolId, studentId, student.classId, termId),
+    term.schoolYearId != null
+      ? computeTermTrend(auth.schoolId, studentId, term.schoolYearId)
+      : Promise.resolve([]),
+    // Le bulletin de la classe (pas seulement de cet enfant) doit être
+    // complet avant de proposer le téléchargement — même règle que
+    // `bulletin.service.ts::assertBulletinReady`.
+    computeBulletinReadiness(auth.schoolId, student.classId, termId),
+  ]);
+
+  return {
+    ...result,
+    termId,
+    termLabel: term.label,
+    annualAverage,
+    rank,
+    termTrend,
+    bulletinReady: readiness.ready,
+    missingSubjects: readiness.missingSubjects,
+  };
 }
 
 /** Historique complet des notes d'un enfant, filtrable par période. */

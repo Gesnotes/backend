@@ -11,6 +11,7 @@ import { corsAllowedHost, env, isProduction } from './lib/env';
 import { httpLogger } from './lib/httpLogger';
 import { logger } from './lib/logger';
 import { attendanceMeRoutes } from './routes/attendance.routes';
+import { auditRoutes } from './routes/audit.routes';
 import { authRoutes } from './routes/auth.routes';
 import { classRoutes } from './routes/class.routes';
 import { dashboardRoutes } from './routes/dashboard.routes';
@@ -18,8 +19,10 @@ import { enrollmentRoutes } from './routes/enrollment.routes';
 import { evaluationMeRoutes, evaluationRoutes } from './routes/evaluation.routes';
 import { gradeRoutes, teacherMeRoutes } from './routes/grade.routes';
 import { gradeTypeRoutes } from './routes/gradeType.routes';
+import { holidayRoutes } from './routes/holiday.routes';
 import { identifyRoutes } from './routes/identify.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
+import { scheduleMeRoutes, scheduleRoutes } from './routes/schedule.routes';
 import { schoolRoutes } from './routes/school.routes';
 import { schoolYearRoutes } from './routes/schoolYear.routes';
 import { staffRoutes } from './routes/staff.routes';
@@ -38,6 +41,7 @@ import { publicRoute } from './middlewares/publicRoute';
 import { registerNotificationHandlers } from './services/notification.service';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
+import { userRoutes } from './routes/user.routes';
 
 // Abonne les notifications aux événements de saisie (lot 9 → lot 11).
 registerNotificationHandlers();
@@ -147,13 +151,21 @@ export function createApp() {
   app.use('/school-years', schoolYearRoutes);
   app.use('/terms', termRoutes);
   app.use('/grade-types', gradeTypeRoutes);
+  app.use('/holidays', holidayRoutes);
   app.use('/classes', classRoutes);
+  // Avant enrollmentRoutes : sa garde de rôle (admin+enseignant) est plus
+  // large que celle d'enrollmentRoutes (admin seul), qui intercepterait sinon
+  // en 403 tout enseignant sur un chemin /classes/:id/... qu'elle ne gère
+  // pas elle-même (son `.use(requireRole('admin'))` n'est pas scopé à ses
+  // seules routes).
+  app.use('/classes', scheduleRoutes);
   app.use('/classes', enrollmentRoutes);
   app.use('/subjects', subjectRoutes);
   app.use('/students', studentRoutes);
   app.use('/parents/me', parentMeRoutes);
   app.use('/parents', parentSearchRoutes);
   app.use('/admin/dashboard', dashboardRoutes);
+  app.use('/admin/audit-logs', auditRoutes);
   app.use('/children', childrenRoutes);
   // Lecture avant écriture : GET /grades/:id est ouvert au parent, alors que
   // le reste de /grades est réservé aux enseignants.
@@ -164,11 +176,23 @@ export function createApp() {
   app.use('/teachers/me', teacherMeRoutes);
   app.use('/teachers/me', evaluationMeRoutes);
   app.use('/teachers/me', attendanceMeRoutes);
+  app.use('/teachers/me', scheduleMeRoutes);
   app.use('/teachers', teacherRoutes);
+  app.use('/users', userRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
-  app.get('/me', requireAuth, requireRole(...ALL_ROLES), (req, res) => {
-    res.json(req.auth);
+  //
+  // `schoolName` n'est pas dans le JWT (il porte seulement `schoolId`) et
+  // n'est renvoyé par `/auth/identify` qu'au moment de la connexion, jamais
+  // conservé côté client : sans cette requête, le nom de l'école disparaît
+  // au premier rechargement de page pour l'enseignant et le parent, qui
+  // n'ont pas d'autre endroit où le lire.
+  app.get('/me', requireAuth, requireRole(...ALL_ROLES), async (req, res) => {
+    const school = await prisma.school.findUniqueOrThrow({
+      where: { id: req.auth!.schoolId },
+      select: { name: true },
+    });
+    res.json({ ...req.auth, schoolName: school.name });
   });
 
   app.use(notFoundHandler);

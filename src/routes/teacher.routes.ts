@@ -4,7 +4,7 @@ import { z } from 'zod';
 import * as teacherService from '../services/teacher.service';
 import { requireAuth } from '../middlewares/requireAuth';
 import { requireRole } from '../middlewares/requireRole';
-import { schoolIdOf } from '../lib/requestContext';
+import { authOf, schoolIdOf } from '../lib/requestContext';
 import { isValidPhone, PHONE_FORMAT_MESSAGE } from '../lib/normalize';
 import { validate } from '../middlewares/validate';
 
@@ -74,6 +74,12 @@ teacherRoutes.post('/', validate({ body: createBody }), async (req, res) => {
   res.status(201).json(await teacherService.createTeacher(schoolIdOf(req), data));
 });
 
+/** Fiche complète : identité, affectations, dernières notes et présences saisies par ce compte. */
+teacherRoutes.get('/:id/detail', validate({ params: idParam }), async (req, res) => {
+  const { id } = req.params as unknown as z.infer<typeof idParam>;
+  res.json(await teacherService.getTeacherDetail(schoolIdOf(req), id));
+});
+
 teacherRoutes.patch(
   '/:id',
   validate({ params: idParam, body: updateBody }),
@@ -97,9 +103,9 @@ teacherRoutes.delete(
     const { permanent, confirm_label } = req.query as unknown as z.infer<typeof deleteQuery>;
 
     if (permanent) {
-      await teacherService.deleteTeacherPermanently(schoolIdOf(req), id, confirm_label ?? '');
+      await teacherService.deleteTeacherPermanently(schoolIdOf(req), id, confirm_label ?? '', authOf(req).userId);
     } else {
-      await teacherService.archiveTeacher(schoolIdOf(req), id);
+      await teacherService.archiveTeacher(schoolIdOf(req), id, authOf(req).userId);
     }
     res.status(204).send();
   },
@@ -107,7 +113,7 @@ teacherRoutes.delete(
 
 teacherRoutes.post('/:id/restore', validate({ params: idParam }), async (req, res) => {
   const { id } = req.params as unknown as z.infer<typeof idParam>;
-  res.json(await teacherService.restoreTeacher(schoolIdOf(req), id));
+  res.json(await teacherService.restoreTeacher(schoolIdOf(req), id, authOf(req).userId));
 });
 
 /** Renvoie une nouvelle invitation (email perdu, lien expiré). */

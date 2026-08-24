@@ -106,6 +106,89 @@ describe('session staff (refresh, logout)', () => {
   });
 });
 
+describe('réinitialisation de mot de passe (staff)', () => {
+  const forgot = (email: string) => request(app).post('/staff/forgot-password').send({ email });
+
+  it('répond identiquement que le compte existe ou non', async () => {
+    const known = await forgot('equipe@gesnotes.bj');
+    const unknown = await forgot('personne@gesnotes.bj');
+
+    expect(known.status).toBe(200);
+    expect(unknown.status).toBe(200);
+    expect(known.body).toEqual(unknown.body);
+
+    expect(await prisma.staffPasswordResetToken.count()).toBe(1);
+  });
+
+  it('ne crée pas de token pour un compte archivé', async () => {
+    await createStaffUser({ email: 'parti@gesnotes.bj', archived: true });
+
+    await forgot('parti@gesnotes.bj');
+
+    expect(await prisma.staffPasswordResetToken.count()).toBe(0);
+  });
+
+  it('change le mot de passe et invalide les sessions en cours', async () => {
+    const login = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
+    await forgot('equipe@gesnotes.bj');
+
+    // Le token en clair n'existe qu'à l'envoi : on le rejoue ici via un
+    // token connu, en réécrivant son empreinte comme le ferait le lien email.
+    const raw = 'token-de-test-en-clair';
+    const crypto = await import('node:crypto');
+    const tokenHash = crypto.createHash('sha256').update(raw).digest('hex');
+    await prisma.staffPasswordResetToken.updateMany({ data: { tokenHash } });
+
+    const reset = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'nouveaumotdepasse' });
+    expect(reset.status).toBe(200);
+
+    const oldLogin = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: TEST_PASSWORD });
+    expect(oldLogin.status).toBe(401);
+
+    const newLogin = await request(app)
+      .post('/staff/login')
+      .send({ email: 'equipe@gesnotes.bj', password: 'nouveaumotdepasse' });
+    expect(newLogin.status).toBe(200);
+
+    const reused = await request(app)
+      .post('/staff/refresh')
+      .send({ refreshToken: login.body.refreshToken });
+    expect(reused.status).toBe(401);
+  });
+
+  it('refuse un token de réinitialisation déjà utilisé', async () => {
+    await forgot('equipe@gesnotes.bj');
+    const raw = 'token-usage-unique';
+    const crypto = await import('node:crypto');
+    await prisma.staffPasswordResetToken.updateMany({
+      data: { tokenHash: crypto.createHash('sha256').update(raw).digest('hex') },
+    });
+
+    const first = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'premiermotdepasse' });
+    expect(first.status).toBe(200);
+
+    const second = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: raw, password: 'deuxiememotdepasse' });
+    expect(second.status).toBe(401);
+  });
+
+  it('refuse un mot de passe trop court', async () => {
+    const res = await request(app)
+      .post('/staff/reset-password')
+      .send({ token: 'peu-importe', password: 'court' });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /staff/me — isolation des deux mondes d’authentification', () => {
   it('refuse une requête sans token', async () => {
     expect((await request(app).get('/staff/me')).status).toBe(401);
@@ -236,6 +319,63 @@ describe('demandes d’inscription', () => {
       orderBy: { position: 'asc' },
     });
     expect(gradeTypes.map((t) => t.code)).toEqual(['interrogation', 'devoir', 'composition']);
+  });
+
+  it('provisionne les matières et une classe par niveau selon les niveaux cochés', async () => {
+    const demand = await seedRequest();
+    // La demande par défaut coche garderie + maternelle (mode présence,
+    // aucune matière à noter) : un cycle avec matières la remplace ici.
+    await prisma.signupRequest.update({
+      where: { id: demand.id },
+      data: { levels: ['collège'] },
+    });
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    expect(res.status).toBe(201);
+    const schoolId = res.body.school.id as number;
+
+    const classes = await prisma.class.findMany({ where: { schoolId }, orderBy: { level: 'asc' } });
+    expect(classes.map((c) => c.level)).toEqual(['3e', '4e', '5e', '6e']);
+    expect(classes.every((c) => c.mode === 'notes')).toBe(true);
+
+    const subjects = await prisma.subject.findMany({ where: { schoolId } });
+    expect(subjects.map((s) => s.name).sort()).toEqual(
+      ['Anglais', 'EPS', 'Français', 'Histoire-Géographie', 'Mathématiques', 'Physique-Chimie', 'SVT'].sort(),
+    );
+    expect(subjects.every((s) => Number(s.coefficient) === 1)).toBe(true);
+
+    // Chaque matière est rattachée à chacune des quatre classes du collège.
+    const coefficients = await prisma.subjectCoefficient.findMany({ where: { class: { schoolId } } });
+    expect(coefficients).toHaveLength(subjects.length * classes.length);
+  });
+
+  it('provisionne un cycle sans matières (mode présence) sans créer aucun coefficient', async () => {
+    const demand = await seedRequest(); // garderie + maternelle par défaut
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    const schoolId = res.body.school.id as number;
+
+    const classes = await prisma.class.findMany({ where: { schoolId } });
+    expect(classes.map((c) => c.level).sort()).toEqual(
+      ['Garderie', 'Grande Section', 'Moyenne Section', 'Petite Section'].sort(),
+    );
+    expect(classes.every((c) => c.mode === 'presence')).toBe(true);
+    expect(await prisma.subject.count({ where: { schoolId } })).toBe(0);
+    expect(await prisma.subjectCoefficient.count({ where: { class: { schoolId } } })).toBe(0);
+  });
+
+  it('ignore un niveau qui ne correspond à aucun gabarit connu', async () => {
+    const demand = await seedRequest();
+    await prisma.signupRequest.update({
+      where: { id: demand.id },
+      data: { levels: ['formation professionnelle'] },
+    });
+
+    const res = await staffApi().post(`/staff/signup-requests/${demand.id}/accept`);
+    const schoolId = res.body.school.id as number;
+
+    expect(await prisma.class.count({ where: { schoolId } })).toBe(0);
+    expect(await prisma.subject.count({ where: { schoolId } })).toBe(0);
   });
 
   it('accepte avec un nom choisi par le staff', async () => {
@@ -435,5 +575,39 @@ describe('suspendre / restaurer / supprimer une école', () => {
 
     expect((await staffApi(clientToken).delete(`/staff/schools/${school.id}`)).status).toBe(401);
     expect((await staffApi(clientToken).post(`/staff/schools/${school.id}/restore`)).status).toBe(401);
+  });
+});
+
+describe('renvoyer l’invitation d’une école', () => {
+  it('renvoie l’invitation au compte administrateur (email perdu, lien expiré)', async () => {
+    const school = await createSchool('ecole-a', 'École Alpha');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const before = await prisma.passwordResetToken.count({ where: { userId: admin.id } });
+
+    const res = await staffApi().post(`/staff/schools/${school.id}/invitation`);
+
+    expect(res.status).toBe(200);
+    const after = await prisma.passwordResetToken.count({ where: { userId: admin.id } });
+    expect(after).toBe(before + 1);
+  });
+
+  it('refuse pour une école introuvable', async () => {
+    const res = await staffApi().post('/staff/schools/999999/invitation');
+    expect(res.status).toBe(404);
+  });
+
+  it('refuse quand l’école n’a aucun compte administrateur', async () => {
+    const school = await createSchool('ecole-a');
+    const res = await staffApi().post(`/staff/schools/${school.id}/invitation`);
+    expect(res.status).toBe(404);
+  });
+
+  it('refuse un token client', async () => {
+    const school = await createSchool('ecole-a');
+    const admin = await createUser({ schoolId: school.id, email: 'admin@a.test', role: 'admin' });
+    const clientToken = signAccessToken({ userId: admin.id, schoolId: school.id, role: 'admin' });
+
+    const res = await staffApi(clientToken).post(`/staff/schools/${school.id}/invitation`);
+    expect(res.status).toBe(401);
   });
 });
