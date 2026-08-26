@@ -4,7 +4,7 @@
   "description": "Backend de Gesnotes, plateforme numérique de suivi des notes scolaires \r connectant enseignants, parents et administration.",
   "main": "dist/index.js",
   "scripts": {
-    "prepare": "git config core.hooksPath .githooks",
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
