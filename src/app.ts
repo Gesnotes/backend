@@ -38,13 +38,16 @@ import {
 } from './routes/parent.routes';
 import { parentSearchRoutes, studentRoutes } from './routes/student.routes';
 import { publicRoute } from './middlewares/publicRoute';
-import { registerNotificationHandlers } from './services/notification.service';
+import { registerNotificationHandlers, registerNotificationCreatedHandler } from './services/notification.service';
 import { subjectRoutes } from './routes/subject.routes';
 import { teacherRoutes } from './routes/teacher.routes';
 import { userRoutes } from './routes/user.routes';
+import notificationRoutes from './routes/notification.routes';
 
 // Abonne les notifications aux événements de saisie (lot 9 → lot 11).
 registerNotificationHandlers();
+// Abonne le système d'annonces/convocations/incidents à l'événement notification.created
+registerNotificationCreatedHandler();
 
 /**
  * Liste blanche CORS.
@@ -179,6 +182,9 @@ export function createApp() {
   app.use('/teachers/me', scheduleMeRoutes);
   app.use('/teachers', teacherRoutes);
   app.use('/users', userRoutes);
+
+  // Système de notifications (annonces, convocations, incidents)
+  app.use('/notifications', notificationRoutes);
 
   // Profil de l'utilisateur connecté — sert aussi de route témoin des gardes.
   //

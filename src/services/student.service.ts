@@ -44,11 +44,18 @@ async function scopeFor(auth: AuthPayload, classId?: number): Promise<Prisma.Stu
 }
 
 /**
- * Les coordonnées des familles sont réservées à l'administration. Un
- * enseignant voit le nom des parents, pas leur email ni leur téléphone.
+ * Dans la liste des élèves : seul l'admin voit les coordonnées des parents.
+ * Un enseignant voit le nom uniquement (sécurité des données personnelles en masse).
  */
 const parentSelectFor = (auth: AuthPayload) =>
   auth.role === 'admin' ? contactFields : identityFields;
+
+/**
+ * Sur la fiche individuelle d'un élève : l'enseignant (qui enseigne à l'élève)
+ * peut voir les coordonnées du/des parent(s) pour le contacter si nécessaire.
+ */
+const parentSelectForDetail = (auth: AuthPayload) =>
+  auth.role === 'admin' || auth.role === 'teacher' ? contactFields : identityFields;
 
 export async function listStudents(
   auth: AuthPayload,
@@ -431,7 +438,7 @@ function contactOf(parent: object): string {
 }
 
 export async function getStudent(auth: AuthPayload, id: number) {
-  return loadStudent(auth.schoolId, id, parentSelectFor(auth), await scopeFor(auth));
+  return loadStudent(auth.schoolId, id, parentSelectForDetail(auth), await scopeFor(auth));
 }
 
 /**

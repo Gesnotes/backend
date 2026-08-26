@@ -21,13 +21,21 @@ export interface AttendanceEvent {
   status: 'absent' | 'late';
 }
 
+export interface NotificationCreatedEvent {
+  notificationId: number;
+}
+
 interface Events {
   'grade.created': GradeEvent;
   'grade.updated': GradeEvent;
   'attendance.marked': AttendanceEvent;
+  'notification.created': NotificationCreatedEvent;
 }
 
 const emitter = new EventEmitter();
+
+// Exporter l'événement pour les consommateurs
+export const events = emitter;
 
 /**
  * Bus d'événements interne.

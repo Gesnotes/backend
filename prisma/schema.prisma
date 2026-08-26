@@ -67,6 +67,8 @@ model School {
   signupRequests SignupRequest[]
   holidays       Holiday[]
   auditLogs      AuditLog[]
+  notifications  Notification[]
+  notificationRecipients NotificationRecipient[]
 
   @@index([archivedAt])
   @@map("schools")
@@ -218,6 +220,8 @@ model User {
   linkedAccounts      AccountLink[]        @relation("AccountLinkOwner")
   linkedBy            AccountLink[]        @relation("AccountLinkLinked")
   auditLogsAsActor    AuditLog[]
+  notificationsCreated Notification[]
+  notificationRecipients NotificationRecipient[] @relation("NotificationRecipients")
 
   // Unicité par école, pas globalement : la même personne peut être parent
   // dans deux établissements clients distincts, et une collision d'email
@@ -779,4 +783,82 @@ model EnrollmentDecision {
   @@index([fromClassId, createdAt]) // porte l'historique d'une classe qui a préparé sa rentrée
   @@index([studentId])
   @@map("enrollment_decisions")
+}
+
+// Système de notifications : annonces, convocations, incidents destinées aux parents
+// Une notification peut cibler un parent unique, tous les parents d'une classe, ou toute l'école.
+// Elle déclenche un push FCM immédiate et reste affichée jusqu'à marquage « lu ».
+
+enum NotificationType {
+  annonce     // Basse urgence (réunion parents, info générale)
+  convocation // Moyenne urgence (mauvaise note, avertissement)
+  incident    // Haute urgence (incident disciplinaire, danger)
+
+  @@map("notification_type")
+}
+
+enum NotificationResourceType {
+  grade      // Mauvaise note
+  student    // Incident sur élève
+  attendance // Absence
+  enrollment // Inscription
+  other
+
+  @@map("notification_resource_type")
+}
+
+enum NotificationTargetType {
+  parent          // Parent unique
+  class_parents   // Tous les parents d'une classe
+  school_parents  // Tous les parents de l'école
+
+  @@map("notification_target_type")
+}
+
+// Notification créée par admin ou enseignant, envoyée à un ou plusieurs parents
+model Notification {
+  id               Int                      @id @default(autoincrement())
+  schoolId         Int                      @map("school_id")
+  creatorUserId    Int                      @map("creator_user_id")
+  title            String                   @db.VarChar(200)
+  body             String                   @db.Text
+  type             NotificationType
+  severity         Int                      @default(0) // 0=annonce, 1=convocation, 2=incident
+  targetType       NotificationTargetType   @map("target_type")
+  targetId         Int?                     @map("target_id") // classId ou parentUserId selon targetType
+  resourceType     NotificationResourceType? @map("resource_type")
+  resourceId       Int?                     @map("resource_id")
+  metadata         Json?
+  createdAt        DateTime?                @default(now()) @map("created_at") @db.Timestamp(6)
+  archivedAt       DateTime?                @map("archived_at") @db.Timestamp(6)
+
+  school    School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  creator   User                    @relation(fields: [creatorUserId], references: [id], onDelete: Restrict)
+  recipients NotificationRecipient[]
+
+  @@index([schoolId, createdAt])
+  @@index([schoolId, type])
+  @@index([creatorUserId])
+  @@map("notifications")
+}
+
+// Liaison notification ↔ parent destinataire, avec marquage « lu »
+// Un parent peut recevoir la même notification qu'un autre, indépendamment
+model NotificationRecipient {
+  id               Int       @id @default(autoincrement())
+  schoolId         Int       @map("school_id")
+  notificationId   Int       @map("notification_id")
+  parentUserId     Int       @map("parent_user_id")
+  readAt           DateTime? @map("read_at") @db.Timestamp(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  archivedAt       DateTime? @map("archived_at") @db.Timestamp(6)
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  parent       User         @relation("NotificationRecipients", fields: [parentUserId], references: [id], onDelete: Cascade)
+  school       School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, parentUserId])
+  @@index([schoolId, parentUserId, readAt])
+  @@index([notificationId])
+  @@map("notification_recipients")
 }
