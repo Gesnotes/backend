@@ -1,4 +1,4 @@
-name: Deploy Backend
+name: Deploy 
 
 on:
   push:
@@ -16,8 +16,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd ~/gesnotes/backend
-            git pull
+            git pull origin main
             cd ~/gesnotes
             docker compose up -d --build backend
-            sleep 5
             docker compose exec -T backend npx prisma migrate deploy
