@@ -17,15 +17,13 @@ const INTERRO = 1;
 const DEVOIR = 2;
 const COMPO = 3;
 
-const CODES: Record<number, string> = {
-  [INTERRO]: 'interrogation',
-  [DEVOIR]: 'devoir',
-  [COMPO]: 'composition',
-};
+// Types obligatoires par défaut (seed d'école) : devoir et composition. Un
+// type obligatoire est identifié par son `gradeTypeId`, pas par un code
+// littéral — voir `subjectAverage` dans compute.ts.
+const DEFAULT_REQUIRED = new Set([DEVOIR, COMPO]);
 
 const grade = (gradeTypeId: number, value: number, maxValue = 20): GradeInput => ({
   gradeTypeId,
-  code: CODES[gradeTypeId] ?? 'interrogation',
   weight: D(gradeTypeId), // l'id vaut le poids dans ces jeux d'essai
   value: D(value),
   maxValue: D(maxValue),
@@ -58,79 +56,122 @@ describe('moyenne par matière', () => {
   it("applique l'exemple du plan : interros 12/15/9, devoir 14, compo 16", () => {
     // M_interro = (12+15+9)/3 = 12
     // (12 + 2×14 + 3×16) / 6 = (12 + 28 + 48) / 6 = 88/6 = 14.666...
-    const average = subjectAverage([
-      grade(INTERRO, 12),
-      grade(INTERRO, 15),
-      grade(INTERRO, 9),
-      grade(DEVOIR, 14),
-      grade(COMPO, 16),
-    ]);
+    const average = subjectAverage(
+      [
+        grade(INTERRO, 12),
+        grade(INTERRO, 15),
+        grade(INTERRO, 9),
+        grade(DEVOIR, 14),
+        grade(COMPO, 16),
+      ],
+      DEFAULT_REQUIRED,
+    );
     expect(round(average)).toBe(14.67);
   });
 
   it('cumule les interrogations en une seule note avant pondération', () => {
     // Trois interros identiques ne doivent pas peser trois fois plus. Devoir
     // et composition ajoutés pour passer le seuil de publication.
-    const trois = subjectAverage([
-      grade(INTERRO, 10),
-      grade(INTERRO, 10),
-      grade(INTERRO, 10),
-      grade(DEVOIR, 12),
-      grade(COMPO, 20),
-    ]);
-    const une = subjectAverage([grade(INTERRO, 10), grade(DEVOIR, 12), grade(COMPO, 20)]);
+    const trois = subjectAverage(
+      [
+        grade(INTERRO, 10),
+        grade(INTERRO, 10),
+        grade(INTERRO, 10),
+        grade(DEVOIR, 12),
+        grade(COMPO, 20),
+      ],
+      DEFAULT_REQUIRED,
+    );
+    const une = subjectAverage(
+      [grade(INTERRO, 10), grade(DEVOIR, 12), grade(COMPO, 20)],
+      DEFAULT_REQUIRED,
+    );
     expect(round(trois)).toBe(round(une));
   });
 
-  it('ne publie aucune moyenne sans devoir ET composition — choix de l\'établissement', () => {
+  it('ne publie aucune moyenne sans note de chaque type obligatoire — choix de l\'établissement', () => {
     // Interros seules, ou interro + devoir sans composition : quelques
-    // interrogations ne suffisent pas à juger un trimestre.
-    expect(subjectAverage([grade(INTERRO, 12)])).toBeNull();
-    expect(subjectAverage([grade(INTERRO, 12), grade(DEVOIR, 14)])).toBeNull();
-    expect(subjectAverage([grade(COMPO, 16)])).toBeNull();
+    // interrogations ne suffisent pas à juger un trimestre (devoir et
+    // composition sont les 2 types obligatoires par défaut).
+    expect(subjectAverage([grade(INTERRO, 12)], DEFAULT_REQUIRED)).toBeNull();
+    expect(subjectAverage([grade(INTERRO, 12), grade(DEVOIR, 14)], DEFAULT_REQUIRED)).toBeNull();
+    expect(subjectAverage([grade(COMPO, 16)], DEFAULT_REQUIRED)).toBeNull();
   });
 
   it('publie la moyenne dès que devoir et composition sont tous deux présents', () => {
     // (2×14 + 3×16) / 5 = (28+48)/5 = 15.2 — l'interrogation n'est pas requise.
-    const average = subjectAverage([grade(DEVOIR, 14), grade(COMPO, 16)]);
+    const average = subjectAverage([grade(DEVOIR, 14), grade(COMPO, 16)], DEFAULT_REQUIRED);
     expect(round(average)).toBe(15.2);
   });
 
   it('gère plusieurs devoirs et plusieurs compositions', () => {
     // M_devoir = (10+14)/2 = 12 ; M_compo = (15+17)/2 = 16
     // (2×12 + 3×16) / 5 = (24+48)/5 = 14.4
-    const average = subjectAverage([
-      grade(DEVOIR, 10),
-      grade(DEVOIR, 14),
-      grade(COMPO, 15),
-      grade(COMPO, 17),
-    ]);
+    const average = subjectAverage(
+      [grade(DEVOIR, 10), grade(DEVOIR, 14), grade(COMPO, 15), grade(COMPO, 17)],
+      DEFAULT_REQUIRED,
+    );
     expect(round(average)).toBe(14.4);
   });
 
   it('normalise avant de pondérer', () => {
     // Devoir 8/10 = 16/20, composition 16/20.
-    const average = subjectAverage([grade(DEVOIR, 8, 10), grade(COMPO, 16)]);
+    const average = subjectAverage([grade(DEVOIR, 8, 10), grade(COMPO, 16)], DEFAULT_REQUIRED);
     expect(round(average)).toBe(16);
   });
 
   it('renvoie null sans aucune note, jamais 0', () => {
-    expect(subjectAverage([])).toBeNull();
-    expect(round(subjectAverage([]))).toBeNull();
+    expect(subjectAverage([], DEFAULT_REQUIRED)).toBeNull();
+    expect(round(subjectAverage([], DEFAULT_REQUIRED))).toBeNull();
   });
 
   it('renvoie null si toutes les catégories ont un poids nul', () => {
-    const zeroDevoir: GradeInput = { gradeTypeId: DEVOIR, code: 'devoir', weight: D(0), value: D(12), maxValue: D(20) };
-    const zeroCompo: GradeInput = { gradeTypeId: COMPO, code: 'composition', weight: D(0), value: D(15), maxValue: D(20) };
-    expect(subjectAverage([zeroDevoir, zeroCompo])).toBeNull();
+    const zeroDevoir: GradeInput = { gradeTypeId: DEVOIR, weight: D(0), value: D(12), maxValue: D(20) };
+    const zeroCompo: GradeInput = { gradeTypeId: COMPO, weight: D(0), value: D(15), maxValue: D(20) };
+    expect(subjectAverage([zeroDevoir, zeroCompo], DEFAULT_REQUIRED)).toBeNull();
   });
 
   it('accepte une note de 0 sans la confondre avec une absence de note', () => {
-    const average = subjectAverage([grade(DEVOIR, 12), grade(COMPO, 0)]);
+    const average = subjectAverage([grade(DEVOIR, 12), grade(COMPO, 0)], DEFAULT_REQUIRED);
     // (2×12 + 3×0) / 5 = 4.8 — la composition à 0 pèse bien dans le calcul,
     // elle n'est pas traitée comme une absence de note.
     expect(round(average)).toBe(4.8);
     expect(average).not.toBeNull();
+  });
+});
+
+describe('types de note obligatoires configurables (école, pas code littéral)', () => {
+  it('sans aucun type obligatoire, une seule note suffit à publier une moyenne', () => {
+    // Une école qui ne marque rien "obligatoire" n'a plus de seuil de
+    // publication — le gate est piloté par la config, plus par des codes fixes.
+    const average = subjectAverage([grade(INTERRO, 12)], new Set());
+    expect(round(average)).toBe(12);
+  });
+
+  it('reconnaît deux devoirs distincts comme deux types obligatoires indépendants', () => {
+    // Ex. concret de la fonctionnalité : "Devoir 1" (id 10) et "Devoir 2"
+    // (id 11), tous deux obligatoires, à la place de devoir/composition.
+    const DEVOIR_1 = 10;
+    const DEVOIR_2 = 11;
+    const required = new Set([DEVOIR_1, DEVOIR_2]);
+
+    const missingOne: GradeInput = { gradeTypeId: DEVOIR_1, weight: D(2), value: D(14), maxValue: D(20) };
+    expect(subjectAverage([missingOne], required)).toBeNull();
+
+    const both: GradeInput[] = [
+      { gradeTypeId: DEVOIR_1, weight: D(2), value: D(14), maxValue: D(20) },
+      { gradeTypeId: DEVOIR_2, weight: D(2), value: D(16), maxValue: D(20) },
+    ];
+    // (2×14 + 2×16) / 4 = 15
+    expect(round(subjectAverage(both, required))).toBe(15);
+  });
+
+  it('bloque la moyenne si un type obligatoire est totalement absent des notes, même non déduit de `grades`', () => {
+    // Le gate porte sur la liste des types obligatoires de l'école, pas sur
+    // ce qui apparaît dans `grades` : composition n'apparaît nulle part ici,
+    // pas seulement "avec une valeur manquante".
+    const onlyDevoir = [grade(DEVOIR, 14)];
+    expect(subjectAverage(onlyDevoir, DEFAULT_REQUIRED)).toBeNull();
   });
 });
 
@@ -176,7 +217,7 @@ describe('précision et arrondi', () => {
   });
 
   it('conserve la valeur exacte des demi-points', () => {
-    expect(round(subjectAverage([grade(DEVOIR, 13.5), grade(COMPO, 13.5)]))).toBe(13.5);
+    expect(round(subjectAverage([grade(DEVOIR, 13.5), grade(COMPO, 13.5)], DEFAULT_REQUIRED))).toBe(13.5);
   });
 });
 
