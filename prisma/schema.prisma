@@ -24,6 +24,7 @@ enum Sex {
   @@map("sex")
 }
 
+
 // Établissements
 model School {
   id        Int       @id @default(autoincrement())
@@ -465,15 +466,26 @@ model SubjectCoefficient {
   @@map("subject_coefficients")
 }
 
-// Types de note et leur poids — configurable par école, jamais codé en dur.
-// interrogation = 1, devoir = 2, composition = 3 (seed par défaut).
+// Types de note et leur poids — configurables par l'administration de
+// l'école (voir gradeType.service.ts), plus seulement les 3 catégories
+// historiques (interrogation = 1, devoir = 2, composition = 3, toujours le
+// seed par défaut à la création d'une école).
+//
+// `code` reste un identifiant technique stable (slug dérivé du libellé à la
+// création) mais n'est plus comparé en dur nulle part : la logique métier
+// s'appuie désormais sur `required` (moyenne publiée seulement si l'élève a
+// au moins une note de chaque type obligatoire, voir grading/compute.ts). Le
+// bulletin PDF (bulletin/pdf.ts) n'a plus besoin d'un champ dédié : il
+// affiche une colonne par type actif de l'école, dans l'ordre de `position`.
 model GradeType {
-  id       Int     @id @default(autoincrement())
-  schoolId Int     @map("school_id")
-  code     String  @db.VarChar(30) // "interrogation" | "devoir" | "composition"
-  label    String  @db.VarChar(50)
-  weight   Decimal @db.Decimal(4, 2)
-  position Int     @default(0)
+  id         Int       @id @default(autoincrement())
+  schoolId   Int       @map("school_id")
+  code       String    @db.VarChar(30)
+  label      String    @db.VarChar(50)
+  weight     Decimal   @db.Decimal(4, 2)
+  position   Int       @default(0)
+  required   Boolean   @default(false)
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
   grades      Grade[]

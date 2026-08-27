@@ -20,12 +20,21 @@ export interface SubjectResult {
   /** Détail par catégorie : c'est la pièce que les parents contestent. */
   categories: {
     gradeTypeId: number;
-    /** "interrogation" | "devoir" | "composition" — fixe par école, contrairement à `label`. */
+    /** Identifiant technique stable, plus une valeur métier — voir `GradeType` dans schema.prisma. */
     code: string;
     label: string;
     weight: number;
     average: number | null;
   }[];
+}
+
+/** Types de note obligatoires de l'école : sans note d'un de ces types, la moyenne de matière n'est pas publiée (voir compute.ts::subjectAverage). */
+async function requiredGradeTypeIds(schoolId: number): Promise<Set<number>> {
+  const required = await prisma.gradeType.findMany({
+    where: { schoolId, required: true, archivedAt: null },
+    select: { id: true },
+  });
+  return new Set(required.map((g) => g.id));
 }
 
 export interface StudentResult {
@@ -135,7 +144,7 @@ export async function computeClassBulletins(
   });
   if (!term) throw notFound('Période introuvable');
 
-  const [classes, allStudents, allGrades, allCoefficients] = await Promise.all([
+  const [classes, allStudents, allGrades, allCoefficients, required] = await Promise.all([
     prisma.class.findMany({ where: { id: { in: classIds }, schoolId } }),
     prisma.student.findMany({
       where: { classId: { in: classIds }, schoolId, archivedAt: null },
@@ -162,6 +171,7 @@ export async function computeClassBulletins(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId: { in: classIds } } }),
+    requiredGradeTypeIds(schoolId),
   ]);
 
   return classes.map((klass) =>
@@ -171,6 +181,7 @@ export async function computeClassBulletins(
       allStudents.filter((s) => s.classId === klass.id),
       allGrades.filter((g) => g.evaluation.classId === klass.id),
       allCoefficients.filter((c) => c.classId === klass.id),
+      required,
     ),
   );
 }
@@ -224,6 +235,7 @@ function buildBulletin(
     subject: { id: number; name: string; coefficient: D | null };
   }[],
   coefficients: { subjectId: number; coefficient: D }[],
+  required: Set<number>,
 ) {
   const classId = klass.id;
   const termId = term.id;
@@ -274,7 +286,7 @@ function buildBulletin(
 
     for (const [subjectId, meta] of subjectMeta) {
       const subjectGrades = bySubject.get(subjectId) ?? [];
-      const average = subjectAverage(subjectGrades.map(toGradeInput));
+      const average = subjectAverage(subjectGrades.map(toGradeInput), required);
 
       if (average !== null) forGeneral.push({ average, coefficient: meta.coefficient });
 
@@ -333,7 +345,7 @@ async function studentSubjectsAndAverage(
   classId: number,
   termId: number,
 ): Promise<{ subjects: SubjectResult[]; rawAverage: D | null }> {
-  const [grades, coefficients] = await Promise.all([
+  const [grades, coefficients, required] = await Promise.all([
     prisma.grade.findMany({
       where: { schoolId, studentId, termId },
       select: {
@@ -347,6 +359,7 @@ async function studentSubjectsAndAverage(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId } }),
+    requiredGradeTypeIds(schoolId),
   ]);
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
@@ -367,7 +380,7 @@ async function studentSubjectsAndAverage(
 
     const coefficient =
       coefficientBySubject.get(subjectId) ?? first.subject.coefficient ?? new Decimal(1);
-    const average = subjectAverage(subjectGrades.map(toGradeInput));
+    const average = subjectAverage(subjectGrades.map(toGradeInput), required);
 
     if (average !== null) forGeneral.push({ average, coefficient });
 
@@ -628,11 +641,10 @@ function toGradeInput(grade: {
   gradeTypeId: number;
   value: D;
   maxValue: D;
-  gradeType: { code: string; weight: D };
+  gradeType: { weight: D };
 }): GradeInput {
   return {
     gradeTypeId: grade.gradeTypeId,
-    code: grade.gradeType.code,
     weight: grade.gradeType.weight,
     value: grade.value,
     maxValue: grade.maxValue,

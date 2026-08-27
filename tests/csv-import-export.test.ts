@@ -284,12 +284,15 @@ describe('GET /classes/:id/bulletin/csv', () => {
     });
   });
 
-  it('rend les moyennes avec la virgule décimale, colonne par matière', async () => {
+  it('rend une colonne par évaluation puis la moyenne, avec la virgule décimale', async () => {
     const res = await api(tokenAdmin).get(`/classes/${sixieme.id}/bulletin/csv?term_id=${term.id}`);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/csv/);
-    expect(res.text).toContain('Maths (coef. 4)');
+    // Une colonne par évaluation saisie (devoir et composition, chacune sa
+    // propre évaluation via `seedGrade`) avant la moyenne de la matière.
+    expect(res.text).toContain('Maths — Éval test');
+    expect(res.text).toContain('Maths — Moyenne (coef. 4)');
     // 13,50 et non 13.50 : sinon Excel FR y voit du texte, non triable.
     expect(res.text).toContain('13,50');
     expect(res.text).not.toContain('13.50');

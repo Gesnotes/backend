@@ -7,9 +7,15 @@ import type { AnnualStudentResult, StudentResult } from '../grading/grading.serv
  *
  * Le bulletin est la pièce que les parents contestent : il doit être
  * **auditable**. Chaque moyenne de matière est accompagnée du détail par
- * catégorie (interrogation / devoir / composition) et du coefficient appliqué,
- * pour qu'un parent puisse refaire le calcul à la main.
+ * catégorie de note et du coefficient appliqué, pour qu'un parent puisse
+ * refaire le calcul à la main.
  */
+
+/** Une colonne du tableau de détail — un type de note actif de l'école, dans l'ordre de sa position. */
+export interface GradeTypeColumn {
+  id: number;
+  label: string;
+}
 
 export interface BulletinContext {
   schoolName: string;
@@ -37,12 +43,6 @@ export interface BulletinStudentRow extends StudentResult {
 }
 
 const SEX_LABEL: Record<'M' | 'F', string> = { M: 'Masculin', F: 'Féminin' };
-/** "interrogation" | "devoir" | "composition" (fixe, voir `GradeType.code`) → en-tête de colonne. */
-const CATEGORY_COLUMNS: { code: string; label: string }[] = [
-  { code: 'interrogation', label: 'Interro.' },
-  { code: 'devoir', label: 'Devoir' },
-  { code: 'composition', label: 'Composition' },
-];
 
 const MARGIN = 36;
 const COLORS = {
@@ -151,10 +151,22 @@ function ordinal(position: number): string {
   return position === 1 ? '1er' : `${position}ème`;
 }
 
-/** Format « une page par élève » : le document remis à la famille. */
+/** Largeur minimale d'une colonne de catégorie : en dessous, un libellé comme « Composition » ne tient plus. */
+const MIN_CATEGORY_COL_WIDTH = 42;
+
+/**
+ * Format « une page par élève » : le document remis à la famille.
+ *
+ * `gradeTypeColumns` porte les types de note actifs de l'école, dans l'ordre
+ * de leur position — plus 3 colonnes fixes : le nombre de colonnes du
+ * tableau de détail varie donc d'une école à l'autre (et change si
+ * l'administration ajoute ou archive un type), leur largeur s'ajuste en
+ * conséquence pour toujours tenir sur la largeur de page.
+ */
 export function generateStudentBulletinPdf(
   context: BulletinContext,
   students: BulletinStudentRow[],
+  gradeTypeColumns: GradeTypeColumn[],
 ): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: MARGIN });
 
@@ -166,24 +178,26 @@ export function generateStudentBulletinPdf(
     const left = MARGIN;
     const width = doc.page.width - MARGIN * 2;
 
-    // Colonnes fixes : une par catégorie de note (interrogation / devoir /
-    // composition, voir `GradeType.code`), jamais une par évaluation — le
-    // nombre d'interrogations varie d'une matière à l'autre, le nombre de
-    // catégories non.
-    const colWidths = { subject: 128, coef: 34, category: 75, lastCategory: 85 };
+    // Une colonne par type de note actif de l'école, jamais une par
+    // évaluation — le nombre d'évaluations varie d'une matière à l'autre, le
+    // nombre de types actifs non (il ne change qu'à la configuration).
+    const fixedWidths = { subject: 128, coef: 34, average: 60 };
+    const categoryWidth = Math.max(
+      MIN_CATEGORY_COL_WIDTH,
+      Math.floor(
+        (width - fixedWidths.subject - fixedWidths.coef - fixedWidths.average) /
+          Math.max(gradeTypeColumns.length, 1),
+      ),
+    );
+    const colWidths = { ...fixedWidths, category: categoryWidth };
     const columns = {
       subject: left,
       coefficient: left + colWidths.subject,
-      categories: CATEGORY_COLUMNS.map((_, i) => {
+      categories: gradeTypeColumns.map((_, i) => {
         const before = left + colWidths.subject + colWidths.coef;
         return before + i * colWidths.category;
       }),
-      average:
-        left +
-        colWidths.subject +
-        colWidths.coef +
-        colWidths.category * (CATEGORY_COLUMNS.length - 1) +
-        colWidths.lastCategory,
+      average: left + colWidths.subject + colWidths.coef + colWidths.category * gradeTypeColumns.length,
     };
     const averageWidth = left + width - columns.average;
 
@@ -194,9 +208,8 @@ export function generateStudentBulletinPdf(
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.text);
     doc.text('Matière', columns.subject + 4, y, { width: colWidths.subject - 4 });
     doc.text('Coef.', columns.coefficient, y, { width: colWidths.coef, align: 'right' });
-    CATEGORY_COLUMNS.forEach((category, i) => {
-      const colWidth = i === CATEGORY_COLUMNS.length - 1 ? colWidths.lastCategory : colWidths.category;
-      doc.text(category.label, columns.categories[i]!, y, { width: colWidth, align: 'center' });
+    gradeTypeColumns.forEach((gradeType, i) => {
+      doc.text(gradeType.label, columns.categories[i]!, y, { width: colWidths.category, align: 'center' });
     });
     doc.text('Moyenne', columns.average, y, { width: averageWidth, align: 'right' });
     y += 20;
@@ -217,11 +230,10 @@ export function generateStudentBulletinPdf(
         align: 'right',
       });
 
-      CATEGORY_COLUMNS.forEach((category, i) => {
-        const colWidth = i === CATEGORY_COLUMNS.length - 1 ? colWidths.lastCategory : colWidths.category;
-        const found = subject.categories.find((c) => c.code === category.code);
+      gradeTypeColumns.forEach((gradeType, i) => {
+        const found = subject.categories.find((c) => c.gradeTypeId === gradeType.id);
         doc.text(format(found?.average ?? null), columns.categories[i]!, y, {
-          width: colWidth,
+          width: colWidths.category,
           align: 'center',
         });
       });
