@@ -15,9 +15,7 @@ type D = Prisma.Decimal;
 /** Une note, réduite à ce dont le calcul a besoin. */
 export interface GradeInput {
   gradeTypeId: number;
-  /** Code stable de la catégorie ("interrogation" | "devoir" | "composition"). */
-  code: string;
-  /** Poids de la catégorie : interrogation 1, devoir 2, composition 3. */
+  /** Poids de la catégorie : interrogation 1, devoir 2, composition 3 par défaut. */
   weight: D;
   value: D;
   maxValue: D;
@@ -60,17 +58,25 @@ export function averageOf(values: D[]): D | null {
  * Deux étapes : chaque catégorie donne d'abord sa moyenne interne (plusieurs
  * interrogations, plusieurs devoirs), puis les catégories sont pondérées.
  *
- * Choix délibéré de l'établissement : une moyenne n'est publiée que si
- * l'élève a au moins un devoir ET une composition sur la période. Quelques
- * interrogations seules ne suffisent pas à juger un trimestre — les afficher
- * comme moyenne donnerait un chiffre prématuré, avant même le premier vrai
- * devoir noté.
+ * Choix délibéré de l'établissement (configurable par école, voir
+ * `GradeType.required`) : une moyenne n'est publiée que si l'élève a au
+ * moins une note de chaque type de note marqué obligatoire — par défaut
+ * devoir et composition. Quelques interrogations seules ne suffisent pas à
+ * juger un trimestre — les afficher comme moyenne donnerait un chiffre
+ * prématuré, avant même le premier vrai devoir noté.
+ *
+ * `requiredGradeTypeIds` doit porter TOUS les types obligatoires configurés
+ * pour l'école, pas seulement ceux déduits de `grades` : un type obligatoire
+ * totalement absent des notes de l'élève doit bloquer la moyenne, et
+ * `grades` seul ne permet pas de le détecter.
  */
-export function subjectAverage(grades: GradeInput[]): D | null {
+export function subjectAverage(grades: GradeInput[], requiredGradeTypeIds: Set<number>): D | null {
   if (grades.length === 0) return null;
 
-  const codes = new Set(grades.map((g) => g.code));
-  if (!codes.has('devoir') || !codes.has('composition')) return null;
+  const gradeTypeIds = new Set(grades.map((g) => g.gradeTypeId));
+  for (const requiredId of requiredGradeTypeIds) {
+    if (!gradeTypeIds.has(requiredId)) return null;
+  }
 
   const byType = new Map<number, { weight: D; values: D[] }>();
 

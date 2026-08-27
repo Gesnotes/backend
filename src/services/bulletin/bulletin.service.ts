@@ -10,9 +10,11 @@ import {
   type StudentResult,
 } from '../grading/grading.service';
 import { getBulletinImage } from '../school.service';
+import { listGradeTypes } from '../gradeType.service';
 import {
   type BulletinContext,
   type BulletinStudentRow,
+  type GradeTypeColumn,
   generateAnnualClassBulletinPdf,
   generateAnnualStudentBulletinPdf,
   generateClassBulletinPdf,
@@ -31,6 +33,12 @@ async function loadBulletinImages(schoolId: number) {
     bulletinHeaderImage: headerImage?.data ?? null,
     bulletinFooterImage: footerImage?.data ?? null,
   };
+}
+
+/** Colonnes de détail du bulletin PDF : un type de note actif, dans l'ordre déjà utilisé pour la saisie. */
+async function loadGradeTypeColumns(schoolId: number): Promise<GradeTypeColumn[]> {
+  const gradeTypes = await listGradeTypes(schoolId);
+  return gradeTypes.map((gradeType) => ({ id: gradeType.id, label: gradeType.label }));
 }
 
 /**
@@ -115,10 +123,11 @@ export async function exportClassBulletin(
   // classes où il enseigne, un parent n'y accède pas du tout.
   await assertCanViewClass(auth, classId);
 
-  const [bulletin, school, images] = await Promise.all([
+  const [bulletin, school, images, gradeTypeColumns] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
     loadBulletinImages(auth.schoolId),
+    loadGradeTypeColumns(auth.schoolId),
   ]);
 
   assertBulletinReady(bulletin);
@@ -144,6 +153,7 @@ export async function exportClassBulletin(
       : await generateStudentBulletinPdf(
           context,
           await toBulletinRows(auth.schoolId, classId, bulletin.students, bulletin.students),
+          gradeTypeColumns,
         );
 
   return {
@@ -170,10 +180,11 @@ export async function exportStudentBulletin(
   // de classe (le repère qu'attend un parent, sans exposer aucun résultat
   // individuel), le libellé de la période et le nom de la classe. Le calculer
   // deux fois par deux chemins différents les exposerait à diverger.
-  const [bulletin, school, images] = await Promise.all([
+  const [bulletin, school, images, gradeTypeColumns] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
     loadBulletinImages(auth.schoolId),
+    loadGradeTypeColumns(auth.schoolId),
   ]);
 
   // Le bulletin n'est remis à une famille que lorsque toute la classe est
@@ -204,6 +215,7 @@ export async function exportStudentBulletin(
       ...images,
     },
     rows,
+    gradeTypeColumns,
   );
 
   return {
@@ -304,9 +316,14 @@ export async function exportStudentAnnualBulletin(
  * de l'inspection. C'est la demande concrète des écoles, et le PDF n'y répond
  * pas.
  *
- * Une colonne par matière notée, dans le même ordre que le tableau à l'écran,
- * puis moyenne et rang. Les élèves sont classés par moyenne décroissante, les
- * non évalués en fin — un élève sans note n'est pas dernier de la classe.
+ * Une colonne par évaluation réellement saisie sur la période, groupée par
+ * matière, puis une colonne moyenne par matière — pas seulement la moyenne :
+ * une école qui retravaille ses notes dans un tableur veut voir le détail,
+ * pas juste le résultat déjà calculé à l'écran. Coefficients au même endroit
+ * qu'avant, dans l'en-tête de la colonne moyenne. Rang et synthèse de classe
+ * inchangés en fin de tableau. Les élèves sont classés par moyenne
+ * décroissante, les non évalués en fin — un élève sans note n'est pas
+ * dernier de la classe.
  */
 export async function exportClassBulletinCsv(
   auth: AuthPayload,
@@ -323,6 +340,33 @@ export async function exportClassBulletinCsv(
   // colonnes fantômes.
   const subjects = bulletin.students[0]?.subjects ?? [];
 
+  const evaluations = await prisma.evaluation.findMany({
+    where: { classId, termId, subjectId: { in: subjects.map((s) => s.subjectId) } },
+    select: {
+      id: true,
+      subjectId: true,
+      label: true,
+      date: true,
+      gradeType: { select: { position: true } },
+    },
+    orderBy: [{ gradeType: { position: 'asc' } }, { date: 'asc' }, { id: 'asc' }],
+  });
+
+  const grades = await prisma.grade.findMany({
+    where: { evaluationId: { in: evaluations.map((e) => e.id) } },
+    select: { studentId: true, evaluationId: true, value: true },
+  });
+  const gradeByStudentAndEvaluation = new Map(
+    grades.map((g) => [`${g.studentId}:${g.evaluationId}`, g.value]),
+  );
+
+  const evaluationsBySubject = new Map<number, typeof evaluations>();
+  for (const evaluation of evaluations) {
+    const list = evaluationsBySubject.get(evaluation.subjectId) ?? [];
+    list.push(evaluation);
+    evaluationsBySubject.set(evaluation.subjectId, list);
+  }
+
   const ranked = [...bulletin.students].sort((a, b) => {
     if (a.average === null && b.average === null) {
       return a.lastName.localeCompare(b.lastName, 'fr');
@@ -335,7 +379,12 @@ export async function exportClassBulletinCsv(
   const header: CsvCell[] = [
     'Nom',
     'Prénom',
-    ...subjects.map((subject) => `${subject.subjectName} (coef. ${subject.coefficient})`),
+    ...subjects.flatMap((subject) => [
+      ...(evaluationsBySubject.get(subject.subjectId) ?? []).map(
+        (evaluation) => `${subject.subjectName} — ${evaluation.label}`,
+      ),
+      `${subject.subjectName} — Moyenne (coef. ${subject.coefficient})`,
+    ]),
     'Moyenne',
     'Rang',
   ];
@@ -346,11 +395,16 @@ export async function exportClassBulletinCsv(
     return [
       student.lastName,
       student.firstName,
-      ...subjects.map((subject) =>
-        formatAverage(
-          student.subjects.find((s) => s.subjectId === subject.subjectId)?.average,
+      ...subjects.flatMap((subject) => [
+        ...(evaluationsBySubject.get(subject.subjectId) ?? []).map((evaluation) =>
+          formatAverage(
+            gradeByStudentAndEvaluation
+              .get(`${student.studentId}:${evaluation.id}`)
+              ?.toNumber() ?? null,
+          ),
         ),
-      ),
+        formatAverage(student.subjects.find((s) => s.subjectId === subject.subjectId)?.average),
+      ]),
       formatAverage(student.average),
       // Chaîne et non nombre : le formateur de cellules met deux décimales,
       // ce qui a du sens pour une moyenne et donnerait « 1,00 » pour un rang.
@@ -362,7 +416,10 @@ export async function exportClassBulletinCsv(
   const footer: CsvCell[] = [
     'Moyenne de la classe',
     '',
-    ...subjects.map(() => ''),
+    ...subjects.flatMap((subject) => [
+      ...(evaluationsBySubject.get(subject.subjectId) ?? []).map(() => ''),
+      '',
+    ]),
     formatAverage(bulletin.classAverage),
     '',
   ];
