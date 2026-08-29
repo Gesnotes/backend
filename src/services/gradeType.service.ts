@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { assertPermanentDeleteConfirmed } from '../lib/permanentDelete';
 import { slugify } from '../lib/slug';
 
 /**
@@ -254,18 +255,18 @@ export async function deleteGradeTypePermanently(
 ): Promise<void> {
   const gradeType = await getGradeType(schoolId, id);
 
-  if (!gradeType.archivedAt) {
-    throw conflict('Archivez ce type de note avant de le supprimer définitivement.', {
-      gradeTypeId: id,
-    });
-  }
-
-  if (expectedLabel.trim().toLowerCase() !== gradeType.label.trim().toLowerCase()) {
-    throw badRequest(
-      'La confirmation ne correspond pas au libellé du type de note. Cette suppression est définitive.',
-      { attendu: gradeType.label },
-    );
-  }
+  assertPermanentDeleteConfirmed(
+    gradeType,
+    expectedLabel,
+    {
+      message: 'Archivez ce type de note avant de le supprimer définitivement.',
+      details: { gradeTypeId: id },
+    },
+    {
+      message:
+        'La confirmation ne correspond pas au libellé du type de note. Cette suppression est définitive.',
+    },
+  );
 
   if (gradeType.gradeCount > 0 || gradeType.evaluationCount > 0) {
     throw conflict(
