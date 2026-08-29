@@ -56,15 +56,20 @@ async function main() {
   });
 
   const gradeTypes = [
-    { code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
-    { code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
-    { code: 'composition', label: 'Composition', weight: 3, position: 3 },
+    { code: 'interrogation', label: 'Interrogation', weight: 1, position: 1, required: false },
+    { code: 'devoir', label: 'Devoir', weight: 2, position: 2, required: true },
+    { code: 'composition', label: 'Composition', weight: 3, position: 3, required: true },
   ];
 
   for (const gradeType of gradeTypes) {
     await prisma.gradeType.upsert({
       where: { schoolId_code: { schoolId: school.id, code: gradeType.code } },
-      update: { label: gradeType.label, weight: gradeType.weight, position: gradeType.position },
+      update: {
+        label: gradeType.label,
+        weight: gradeType.weight,
+        position: gradeType.position,
+        required: gradeType.required,
+      },
       create: { schoolId: school.id, ...gradeType },
     });
   }

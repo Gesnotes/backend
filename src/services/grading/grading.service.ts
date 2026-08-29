@@ -137,6 +137,9 @@ export async function computeClassBulletins(
   schoolId: number,
   classIds: number[],
   termId: number,
+  // Voir `studentSubjectsAndAverage` : même optimisation pour l'appelant qui
+  // boucle sur plusieurs périodes de la même école (computeAnnualClassBulletin).
+  requiredIds?: Set<number>,
 ) {
   const term = await prisma.term.findFirst({
     where: { id: termId, schoolId },
@@ -171,7 +174,7 @@ export async function computeClassBulletins(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId: { in: classIds } } }),
-    requiredGradeTypeIds(schoolId),
+    requiredIds ? Promise.resolve(requiredIds) : requiredGradeTypeIds(schoolId),
   ]);
 
   return classes.map((klass) =>
@@ -344,6 +347,11 @@ async function studentSubjectsAndAverage(
   studentId: number,
   classId: number,
   termId: number,
+  // Évite de refaire la même requête à chaque terme quand l'appelant boucle
+  // sur plusieurs périodes de la même école (computeAnnualAverage,
+  // computeTermTrend) — le résultat ne dépend que de schoolId, identique
+  // pour tous ces termes dans un même appel.
+  requiredIds?: Set<number>,
 ): Promise<{ subjects: SubjectResult[]; rawAverage: D | null }> {
   const [grades, coefficients, required] = await Promise.all([
     prisma.grade.findMany({
@@ -359,7 +367,7 @@ async function studentSubjectsAndAverage(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId } }),
-    requiredGradeTypeIds(schoolId),
+    requiredIds ? Promise.resolve(requiredIds) : requiredGradeTypeIds(schoolId),
   ]);
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
@@ -453,9 +461,10 @@ export async function computeAnnualAverage(
   });
   if (terms.length === 0) return null;
 
+  const required = await requiredGradeTypeIds(schoolId);
   const rawAverages = await Promise.all(
     terms.map((term) =>
-      studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id).then(
+      studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id, required).then(
         (r) => r.rawAverage,
       ),
     ),
@@ -488,9 +497,16 @@ export async function computeTermTrend(
     select: { id: true, label: true },
   });
 
+  const required = await requiredGradeTypeIds(schoolId);
   return Promise.all(
     terms.map(async (term) => {
-      const { rawAverage } = await studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id);
+      const { rawAverage } = await studentSubjectsAndAverage(
+        schoolId,
+        studentId,
+        student.classId,
+        term.id,
+        required,
+      );
       return { termId: term.id, termLabel: term.label, average: serializeAverage(rawAverage) };
     }),
   );
@@ -553,8 +569,13 @@ export async function computeAnnualClassBulletin(
     };
   }
 
+  const required = await requiredGradeTypeIds(schoolId);
   const [bulletinsByTerm, readinessByTerm] = await Promise.all([
-    Promise.all(terms.map((term) => computeClassBulletins(schoolId, [classId], term.id).then((r) => r[0]))),
+    Promise.all(
+      terms.map((term) =>
+        computeClassBulletins(schoolId, [classId], term.id, required).then((r) => r[0]),
+      ),
+    ),
     Promise.all(terms.map((term) => computeBulletinReadiness(schoolId, classId, term.id))),
   ]);
 

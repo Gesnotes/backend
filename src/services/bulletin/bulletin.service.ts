@@ -1,4 +1,5 @@
 import prisma from '../../lib/prisma';
+import { slugify } from '../../lib/slug';
 import type { AuthPayload } from '../../types/express';
 import { assertCanViewClass } from '../class.service';
 import { assertIsParentOf } from '../parent.service';
@@ -35,10 +36,34 @@ async function loadBulletinImages(schoolId: number) {
   };
 }
 
-/** Colonnes de détail du bulletin PDF : un type de note actif, dans l'ordre déjà utilisé pour la saisie. */
-async function loadGradeTypeColumns(schoolId: number): Promise<GradeTypeColumn[]> {
-  const gradeTypes = await listGradeTypes(schoolId);
-  return gradeTypes.map((gradeType) => ({ id: gradeType.id, label: gradeType.label }));
+/**
+ * Colonnes de détail du bulletin PDF : un type de note actif de l'école, plus
+ * tout type archivé dont une note d'un élève affiché compte encore dans sa
+ * moyenne.
+ *
+ * Se limiter aux seuls types actifs ferait disparaître la colonne d'un type
+ * archivé après coup du tableau imprimé, alors que ses notes continuent de
+ * peser dans la moyenne affichée juste à côté — un parent ne pourrait plus
+ * refaire le calcul à la main, ce que ce document promet explicitement (voir
+ * l'en-tête de `pdf.ts`).
+ */
+async function loadGradeTypeColumns(
+  schoolId: number,
+  students: StudentResult[],
+): Promise<GradeTypeColumn[]> {
+  const presentIds = new Set<number>();
+  for (const student of students) {
+    for (const subject of student.subjects) {
+      for (const category of subject.categories) {
+        presentIds.add(category.gradeTypeId);
+      }
+    }
+  }
+
+  const gradeTypes = await listGradeTypes(schoolId, true);
+  return gradeTypes
+    .filter((gradeType) => gradeType.archivedAt === null || presentIds.has(gradeType.id))
+    .map((gradeType) => ({ id: gradeType.id, label: gradeType.label }));
 }
 
 /**
@@ -123,11 +148,10 @@ export async function exportClassBulletin(
   // classes où il enseigne, un parent n'y accède pas du tout.
   await assertCanViewClass(auth, classId);
 
-  const [bulletin, school, images, gradeTypeColumns] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
     loadBulletinImages(auth.schoolId),
-    loadGradeTypeColumns(auth.schoolId),
   ]);
 
   assertBulletinReady(bulletin);
@@ -153,7 +177,7 @@ export async function exportClassBulletin(
       : await generateStudentBulletinPdf(
           context,
           await toBulletinRows(auth.schoolId, classId, bulletin.students, bulletin.students),
-          gradeTypeColumns,
+          await loadGradeTypeColumns(auth.schoolId, bulletin.students),
         );
 
   return {
@@ -180,11 +204,10 @@ export async function exportStudentBulletin(
   // de classe (le repère qu'attend un parent, sans exposer aucun résultat
   // individuel), le libellé de la période et le nom de la classe. Le calculer
   // deux fois par deux chemins différents les exposerait à diverger.
-  const [bulletin, school, images, gradeTypeColumns] = await Promise.all([
+  const [bulletin, school, images] = await Promise.all([
     computeClassBulletin(auth.schoolId, classId, termId),
     prisma.school.findUniqueOrThrow({ where: { id: auth.schoolId } }),
     loadBulletinImages(auth.schoolId),
-    loadGradeTypeColumns(auth.schoolId),
   ]);
 
   // Le bulletin n'est remis à une famille que lorsque toute la classe est
@@ -215,7 +238,7 @@ export async function exportStudentBulletin(
       ...images,
     },
     rows,
-    gradeTypeColumns,
+    await loadGradeTypeColumns(auth.schoolId, [result]),
   );
 
   return {
@@ -341,7 +364,12 @@ export async function exportClassBulletinCsv(
   const subjects = bulletin.students[0]?.subjects ?? [];
 
   const evaluations = await prisma.evaluation.findMany({
-    where: { classId, termId, subjectId: { in: subjects.map((s) => s.subjectId) } },
+    where: {
+      schoolId: auth.schoolId,
+      classId,
+      termId,
+      subjectId: { in: subjects.map((s) => s.subjectId) },
+    },
     select: {
       id: true,
       subjectId: true,
@@ -353,11 +381,15 @@ export async function exportClassBulletinCsv(
   });
 
   const grades = await prisma.grade.findMany({
-    where: { evaluationId: { in: evaluations.map((e) => e.id) } },
-    select: { studentId: true, evaluationId: true, value: true },
+    where: { schoolId: auth.schoolId, evaluationId: { in: evaluations.map((e) => e.id) } },
+    select: { studentId: true, evaluationId: true, value: true, maxValue: true },
   });
+  // Normalisée sur 20, comme la moyenne de matière juste à côté (voir
+  // `categoriesOf` dans grading.service.ts) : une évaluation notée sur un
+  // barème différent (ex. /10) afficherait sinon une valeur brute
+  // incohérente avec la moyenne qu'elle sert à calculer, sur la même ligne.
   const gradeByStudentAndEvaluation = new Map(
-    grades.map((g) => [`${g.studentId}:${g.evaluationId}`, g.value]),
+    grades.map((g) => [`${g.studentId}:${g.evaluationId}`, g.value.div(g.maxValue).mul(20)]),
   );
 
   const evaluationsBySubject = new Map<number, typeof evaluations>();
@@ -505,17 +537,4 @@ function assertAnnualBulletinReady(bulletin: {
   throw conflict(
     `Le bulletin annuel « ${bulletin.schoolYearLabel} » n'est pas encore complet : il manque des notes sur ${detail}. Il sera disponible une fois toutes les périodes complètes.`,
   );
-}
-
-/** Nom de fichier sûr : pas d'accent, pas d'espace, pas de séparateur. */
-function slugify(value: string): string {
-  return value
-    .normalize('NFD')
-    // Plage des diacritiques combinants, échappée : écrite en clair, elle
-    // serait invisible dans le source et un simple changement d'encodage la
-    // corromprait sans qu'aucun test ne le voie.
-    .replace(/[\u0300-\u036f]/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
