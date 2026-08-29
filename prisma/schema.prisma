@@ -313,6 +313,9 @@ model Term {
   schoolYear  SchoolYear?  @relation(fields: [schoolYearId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   grades      Grade[]
   evaluations Evaluation[]
+  // Photographie des types de note obligatoires au moment de la création de
+  // la période — voir `TermRequiredGradeType`.
+  requiredGradeTypes TermRequiredGradeType[]
 
   @@index([schoolId, archivedAt])
   @@index([schoolYearId])
@@ -490,9 +493,34 @@ model GradeType {
   school      School       @relation(fields: [schoolId], references: [id])
   grades      Grade[]
   evaluations Evaluation[]
+  requiredForTerms TermRequiredGradeType[]
 
   @@unique([schoolId, code])
   @@map("grade_types")
+}
+
+// Photographie de `GradeType.required` au moment où chaque période est créée
+// (term.service.ts::createTerm), pas une lecture en direct de `GradeType`.
+//
+// "Obligatoire" est configurable par l'école (voir GradeType) et peut donc
+// changer après coup. Sans cette photographie, rendre un type obligatoire —
+// ou archiver un type qui l'était — modifierait rétroactivement le caractère
+// complet d'un bulletin déjà publié pour une période passée, sans qu'aucune
+// note n'ait changé. Une fois la période créée, ce qu'elle exige reste figé ;
+// seules les périodes créées après un changement de configuration le voient.
+//
+// Cascade sur les deux relations : supprimer une période ou un type de note
+// pour de bon n'a pas de sens à conserver dans une photographie qui n'a plus
+// de référent.
+model TermRequiredGradeType {
+  termId      Int @map("term_id")
+  gradeTypeId Int @map("grade_type_id")
+
+  term      Term      @relation(fields: [termId], references: [id], onDelete: Cascade)
+  gradeType GradeType @relation(fields: [gradeTypeId], references: [id], onDelete: Cascade)
+
+  @@id([termId, gradeTypeId])
+  @@map("term_required_grade_types")
 }
 
 // Élèves
