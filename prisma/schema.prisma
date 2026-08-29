@@ -485,7 +485,7 @@ model GradeType {
   weight     Decimal   @db.Decimal(4, 2)
   position   Int       @default(0)
   required   Boolean   @default(false)
-  archivedAt DateTime? @map("archived_at") @db.Timestamptz(6)
+  archivedAt DateTime? @map("archived_at") @db.Timestamp(6)
 
   school      School       @relation(fields: [schoolId], references: [id])
   grades      Grade[]

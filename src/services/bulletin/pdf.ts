@@ -151,8 +151,6 @@ function ordinal(position: number): string {
   return position === 1 ? '1er' : `${position}ème`;
 }
 
-/** Largeur minimale d'une colonne de catégorie : en dessous, un libellé comme « Composition » ne tient plus. */
-const MIN_CATEGORY_COL_WIDTH = 42;
 
 /**
  * Format « une page par élève » : le document remis à la famille.
@@ -182,13 +180,15 @@ export function generateStudentBulletinPdf(
     // évaluation — le nombre d'évaluations varie d'une matière à l'autre, le
     // nombre de types actifs non (il ne change qu'à la configuration).
     const fixedWidths = { subject: 128, coef: 34, average: 60 };
-    const categoryWidth = Math.max(
-      MIN_CATEGORY_COL_WIDTH,
-      Math.floor(
-        (width - fixedWidths.subject - fixedWidths.coef - fixedWidths.average) /
-          Math.max(gradeTypeColumns.length, 1),
-      ),
-    );
+    const categoryBudget = width - fixedWidths.subject - fixedWidths.coef - fixedWidths.average;
+    const columnCount = Math.max(gradeTypeColumns.length, 1);
+    // Pas de largeur minimale forcée : avec peu de types actifs, le budget
+    // par colonne la dépasse déjà largement (la colonne s'étire pour occuper
+    // l'espace) ; avec beaucoup de types, la forcer dépasserait la largeur de
+    // page au lieu de simplement réduire chaque colonne — `Math.max(1, ...)`
+    // évite juste une largeur nulle ou négative si un jour il n'y a aucun
+    // type actif (page vide plutôt que plantée, cas déjà géré ailleurs).
+    const categoryWidth = Math.max(1, Math.floor(categoryBudget / columnCount));
     const colWidths = { ...fixedWidths, category: categoryWidth };
     const columns = {
       subject: left,

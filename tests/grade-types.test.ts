@@ -90,7 +90,10 @@ describe('CRUD /grade-types', () => {
   });
 
   it('interdit la création et la modification à un enseignant, mais laisse la liste', async () => {
+    const created = await createGradeType();
+
     expect((await api(teacherToken).post('/grade-types').send({ label: 'X', weight: 1, required: false })).status).toBe(403);
+    expect((await api(teacherToken).patch(`/grade-types/${created.body.id}`).send({ weight: 5 })).status).toBe(403);
     expect((await api(teacherToken).get('/grade-types')).status).toBe(200);
   });
 

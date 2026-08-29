@@ -496,6 +496,12 @@ export async function assertContext(schoolId: number, gradeTypeId: number, termI
 
   if (!gradeType) throw notFound('Type de note introuvable');
   if (!term) throw notFound('Période introuvable');
+  // Un type archivé est retiré des sélecteurs de saisie côté formulaire,
+  // mais rien n'empêchait un appel direct à l'API de continuer à noter avec
+  // — l'archivage n'a de sens que s'il est aussi garanti côté serveur.
+  if (gradeType.archivedAt) {
+    throw conflict('Ce type de note est archivé : restaurez-le avant de saisir de nouvelles notes.');
+  }
 }
 
 function assertValueInRange(value: number, maxValue: number) {
