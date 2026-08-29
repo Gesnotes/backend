@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { assertPermanentDeleteConfirmed } from '../lib/permanentDelete';
 
 /**
  * Périodes scolaires (trimestres, semestres).
@@ -230,6 +231,15 @@ export async function createTerm(schoolId: number, data: TermInput): Promise<Ter
   await assertNoOverlap(schoolId, data.startDate, data.endDate);
   if (data.schoolYearId != null) await assertSchoolYearValid(schoolId, data.schoolYearId);
 
+  // Photographie de GradeType.required au moment de la création — voir
+  // TermRequiredGradeType dans schema.prisma. Rendre un type obligatoire
+  // après coup ne doit jamais rendre incomplète, rétroactivement, une
+  // période déjà créée sans lui.
+  const requiredGradeTypes = await prisma.gradeType.findMany({
+    where: { schoolId, required: true, archivedAt: null },
+    select: { id: true },
+  });
+
   const term = await prisma.term.create({
     data: {
       schoolId,
@@ -237,6 +247,9 @@ export async function createTerm(schoolId: number, data: TermInput): Promise<Ter
       startDate: data.startDate ? new Date(data.startDate) : null,
       endDate: data.endDate ? new Date(data.endDate) : null,
       schoolYearId: data.schoolYearId ?? null,
+      requiredGradeTypes: {
+        create: requiredGradeTypes.map((gradeType) => ({ gradeTypeId: gradeType.id })),
+      },
     },
     select: termSelect,
   });
@@ -417,19 +430,15 @@ export async function deleteTermPermanently(
 ): Promise<void> {
   const term = await getTerm(schoolId, id);
 
-  if (!term.archivedAt) {
-    throw conflict(
-      'Archivez la période avant de la supprimer définitivement.',
-      { termId: id },
-    );
-  }
-
-  if (expectedLabel.trim().toLowerCase() !== term.label.trim().toLowerCase()) {
-    throw badRequest(
-      'La confirmation ne correspond pas au libellé de la période. Cette suppression est définitive.',
-      { attendu: term.label },
-    );
-  }
+  assertPermanentDeleteConfirmed(
+    term,
+    expectedLabel,
+    { message: 'Archivez la période avant de la supprimer définitivement.', details: { termId: id } },
+    {
+      message:
+        'La confirmation ne correspond pas au libellé de la période. Cette suppression est définitive.',
+    },
+  );
 
   await prisma.term.delete({ where: { id } });
 }
