@@ -1,5 +1,6 @@
 import prisma from '../lib/prisma';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { assertPermanentDeleteConfirmed } from '../lib/permanentDelete';
 
 /**
  * Années scolaires (« 2025-2026 »).
@@ -241,16 +242,15 @@ export async function deleteSchoolYearPermanently(
 ): Promise<void> {
   const year = await getSchoolYear(schoolId, id);
 
-  if (!year.archivedAt) {
-    throw conflict('Archivez l’année avant de la supprimer définitivement.', { schoolYearId: id });
-  }
-
-  if (expectedLabel.trim().toLowerCase() !== year.label.trim().toLowerCase()) {
-    throw badRequest(
-      'La confirmation ne correspond pas au libellé de l’année. Cette suppression est définitive.',
-      { attendu: year.label },
-    );
-  }
+  assertPermanentDeleteConfirmed(
+    year,
+    expectedLabel,
+    { message: 'Archivez l’année avant de la supprimer définitivement.', details: { schoolYearId: id } },
+    {
+      message:
+        'La confirmation ne correspond pas au libellé de l’année. Cette suppression est définitive.',
+    },
+  );
 
   await prisma.$transaction(async (tx) => {
     await tx.class.updateMany({
