@@ -40,9 +40,6 @@ jobs:
       - name: Génération du client Prisma
         run: npm run prisma:generate
 
-      - name: Application du schéma Prisma sur la base de test
-        run: npx prisma db push --skip-generate
-
       - name: Vérification du typage (TypeScript)
         run: npm run typecheck
 
