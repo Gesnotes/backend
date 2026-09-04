@@ -204,6 +204,18 @@ describe('GET /teachers/me/schedule — mes créneaux du jour', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe(slotX.id);
+    // « Déjà fait » n'a pas de sens sur un jour récurrent sans date précise.
+    expect(res.body[0].attendanceTakenToday).toBeUndefined();
+  });
+
+  it("attendanceTakenToday distingue un créneau déjà fait de l'accueil enseignant", async () => {
+    const before = await api(teacherXToken).get(`/teachers/me/schedule?date=${todayIso()}`);
+    expect(before.body[0].attendanceTakenToday).toBe(false);
+
+    await api(teacherXToken).put('/teachers/me/attendance').send(batch(slotX.id));
+
+    const after = await api(teacherXToken).get(`/teachers/me/schedule?date=${todayIso()}`);
+    expect(after.body[0].attendanceTakenToday).toBe(true);
   });
 });
 
