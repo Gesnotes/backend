@@ -103,6 +103,57 @@ export async function listEvaluations(
   return evaluations.map(toPublicEvaluation);
 }
 
+function toPublicUpcomingEvaluation(
+  evaluation: EvaluationRow & { class: { id: number; name: string }; subject: { id: number; name: string } },
+) {
+  return {
+    ...toPublicEvaluation(evaluation),
+    class: { id: evaluation.class.id, name: evaluation.class.name },
+    subject: { id: evaluation.subject.id, name: evaluation.subject.name },
+  };
+}
+
+/**
+ * Évaluations à venir, toute l'école pour l'admin, ses seules classes ×
+ * matières pour un enseignant — le calendrier transversal qui manque à
+ * `listEvaluations`, toujours limitée à un couple classe × matière déjà
+ * connu. Une évaluation sans date n'apparaît jamais (exclue nativement par
+ * `gte`, pas besoin de la filtrer explicitement).
+ */
+export async function listUpcomingEvaluations(auth: AuthPayload, filters: { from?: string }) {
+  const from = new Date(filters.from ?? new Date().toISOString().slice(0, 10));
+
+  let scopeWhere: Prisma.EvaluationWhereInput = {};
+  if (auth.role === 'teacher') {
+    const pairs = await prisma.teacherAssignment.findMany({
+      where: { schoolId: auth.schoolId, teacherUserId: auth.userId },
+      select: { classId: true, subjectId: true },
+    });
+    // Un enseignant sans aucune affectation reçoit une liste vide, pas une
+    // erreur — comportement déjà établi ailleurs dans ce service.
+    if (pairs.length === 0) return [];
+    scopeWhere = { OR: pairs.map((p) => ({ classId: p.classId, subjectId: p.subjectId })) };
+  }
+
+  const evaluations = await prisma.evaluation.findMany({
+    where: {
+      schoolId: auth.schoolId,
+      date: { gte: from },
+      class: { archivedAt: null },
+      ...scopeWhere,
+    },
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    include: {
+      class: { select: { id: true, name: true } },
+      subject: { select: { id: true, name: true } },
+      gradeType: gradeTypeSelect,
+      _count: { select: { grades: true } },
+    },
+  });
+
+  return evaluations.map(toPublicUpcomingEvaluation);
+}
+
 export async function createEvaluation(
   auth: AuthPayload,
   data: {

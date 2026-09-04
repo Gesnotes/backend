@@ -23,6 +23,8 @@ const listQuery = z.object({
   term_id: z.coerce.number().int().positive(),
 });
 
+const upcomingQuery = z.object({ from: z.iso.date().optional() });
+
 // La date est une date simple (jour du contrôle), pas un instant : format ISO
 // `AAAA-MM-JJ`, ou `null` pour l'effacer.
 const isoDate = z
@@ -61,6 +63,11 @@ evaluationMeRoutes.get('/evaluations', validate({ query: listQuery }), async (re
 evaluationMeRoutes.post('/evaluations', validate({ body: createBody }), async (req, res) => {
   const data = req.body as z.infer<typeof createBody>;
   res.status(201).json(await evaluationService.createEvaluation(authOf(req), data));
+});
+
+evaluationRoutes.get('/', validate({ query: upcomingQuery }), async (req, res) => {
+  const { from } = req.query as unknown as z.infer<typeof upcomingQuery>;
+  res.json(await evaluationService.listUpcomingEvaluations(authOf(req), { from }));
 });
 
 evaluationRoutes.patch(

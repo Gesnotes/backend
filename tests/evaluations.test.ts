@@ -276,3 +276,130 @@ describe('DELETE /evaluations/:id', () => {
     expect((await api(tokenProfB).delete(`/evaluations/${evaluation.id}`)).status).toBe(403);
   });
 });
+
+/**
+ * Calendrier transversal (toutes classes confondues) — par opposition à
+ * `GET /teachers/me/evaluations`, toujours limitée à une classe × matière
+ * déjà connue.
+ */
+describe('GET /evaluations — évaluations à venir', () => {
+  function daysFromNow(n: number): Date {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+
+  it("l'admin voit les évaluations futures, toutes classes confondues", async () => {
+    const classe5 = await prisma.class.create({
+      data: { schoolId: school.id, name: '5e A', level: '5e' },
+    });
+
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, label: 'Devoir maths', date: daysFromNow(5),
+    });
+    await seedEvaluation({
+      schoolId: school.id, classId: classe5.id, subjectId: francais.id,
+      gradeTypeId: devoirId, termId: term.id, label: 'Devoir français', date: daysFromNow(2),
+    });
+
+    const res = await api(tokenAdmin).get('/evaluations');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body.map((e: { label: string }) => e.label)).toEqual(
+      expect.arrayContaining(['Devoir maths', 'Devoir français']),
+    );
+    expect(res.body[0].class.name).toBeDefined();
+    expect(res.body[0].subject.name).toBeDefined();
+  });
+
+  it('exclut une évaluation datée dans le passé', async () => {
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, date: daysFromNow(-1),
+    });
+
+    const res = await api(tokenAdmin).get('/evaluations');
+
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('exclut une évaluation sans date', async () => {
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, date: null,
+    });
+
+    const res = await api(tokenAdmin).get('/evaluations');
+
+    expect(res.body).toHaveLength(0);
+  });
+
+  it("exclut une évaluation sur une classe archivée", async () => {
+    const classeArchivee = await prisma.class.create({
+      data: { schoolId: school.id, name: '4e A', level: '4e', archivedAt: new Date() },
+    });
+    await seedEvaluation({
+      schoolId: school.id, classId: classeArchivee.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, date: daysFromNow(3),
+    });
+
+    const res = await api(tokenAdmin).get('/evaluations');
+
+    expect(res.body).toHaveLength(0);
+  });
+
+  it("un enseignant ne voit que ses propres classes × matières", async () => {
+    const classe5 = await prisma.class.create({
+      data: { schoolId: school.id, name: '5e A', level: '5e' },
+    });
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, label: 'Sur ma classe', date: daysFromNow(3),
+    });
+    await seedEvaluation({
+      schoolId: school.id, classId: classe5.id, subjectId: francais.id,
+      gradeTypeId: devoirId, termId: term.id, label: "Pas ma classe", date: daysFromNow(3),
+    });
+
+    const res = await api(tokenProfA).get('/evaluations');
+
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].label).toBe('Sur ma classe');
+  });
+
+  it('un enseignant sans aucune affectation reçoit une liste vide, pas une erreur', async () => {
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, date: daysFromNow(3),
+    });
+
+    const res = await api(tokenProfB).get('/evaluations');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it('refuse un parent', async () => {
+    const res = await api(tokenParent).get('/evaluations');
+    expect(res.status).toBe(403);
+  });
+
+  it('le paramètre from exclut ce qui est avant', async () => {
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, label: 'Proche', date: daysFromNow(2),
+    });
+    await seedEvaluation({
+      schoolId: school.id, classId: classe6.id, subjectId: maths.id,
+      gradeTypeId: devoirId, termId: term.id, label: 'Lointaine', date: daysFromNow(10),
+    });
+
+    const from = daysFromNow(5).toISOString().slice(0, 10);
+    const res = await api(tokenAdmin).get(`/evaluations?from=${from}`);
+
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].label).toBe('Lointaine');
+  });
+});

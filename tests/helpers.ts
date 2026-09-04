@@ -32,6 +32,10 @@ export async function resetDatabase() {
   await prisma.passwordResetToken.deleteMany();
   await prisma.accountLink.deleteMany();
   await prisma.auditLog.deleteMany();
+  // `notifications.creator_user_id` est en RESTRICT (jamais en cascade avec
+  // l'utilisateur qui l'a créée) : doit être vidé avant `user.deleteMany()`.
+  await prisma.notificationRecipient.deleteMany();
+  await prisma.notification.deleteMany();
   await prisma.user.deleteMany();
   await prisma.school.deleteMany();
 }
