@@ -44,6 +44,12 @@ export interface SlotView {
   startTime: string;
   endTime: string;
   archivedAt: string | null;
+  /**
+   * Présence déjà enregistrée pour ce créneau à la date demandée — absent
+   * (`undefined`) quand `listMySlotsForDate` est appelé sans `date` (vue
+   * hebdomadaire), où « déjà fait » n'a pas de sens pour un jour récurrent.
+   */
+  attendanceTakenToday?: boolean;
 }
 
 /**
@@ -110,7 +116,7 @@ type SlotRow = {
   };
 };
 
-function toView(slot: SlotRow): SlotView {
+function toView(slot: SlotRow, slotIdsWithAttendance?: Set<number>): SlotView {
   return {
     id: slot.id,
     teacherAssignmentId: slot.teacherAssignmentId,
@@ -125,6 +131,7 @@ function toView(slot: SlotRow): SlotView {
     startTime: minutesToHHMM(slot.startMinute),
     endTime: minutesToHHMM(slot.endMinute),
     archivedAt: slot.archivedAt ? slot.archivedAt.toISOString() : null,
+    ...(slotIdsWithAttendance ? { attendanceTakenToday: slotIdsWithAttendance.has(slot.id) } : {}),
   };
 }
 
@@ -273,7 +280,7 @@ export async function listSlotsForClassRaw(
     select: slotSelect,
   });
 
-  return slots.map(toView);
+  return slots.map((slot) => toView(slot));
 }
 
 export async function createSlot(schoolId: number, classId: number, input: SlotInput): Promise<SlotView> {
@@ -400,7 +407,9 @@ export async function deleteSlotPermanently(
  *
  * `date` restreint à un seul jour (usage historique, appel du jour) ; omis,
  * renvoie toute la semaine récurrente — utilisé par la vue « mon emploi du
- * temps » de l'enseignant.
+ * temps » de l'enseignant. `attendanceTakenToday` n'est calculé que dans le
+ * premier cas : sur la semaine récurrente, aucune date précise n'existe pour
+ * vérifier une présence déjà enregistrée.
  */
 export async function listMySlotsForDate(auth: AuthPayload, date?: string): Promise<SlotView[]> {
   const dayOfWeek = date ? weekdayOfIsoDate(date) : undefined;
@@ -416,5 +425,20 @@ export async function listMySlotsForDate(auth: AuthPayload, date?: string): Prom
     select: slotSelect,
   });
 
-  return slots.map(toView);
+  if (!date || slots.length === 0) return slots.map((slot) => toView(slot));
+
+  const recorded = await prisma.attendance.findMany({
+    where: {
+      schoolId: auth.schoolId,
+      date: new Date(date),
+      slotId: { in: slots.map((slot) => slot.id) },
+    },
+    select: { slotId: true },
+    distinct: ['slotId'],
+  });
+  const slotIdsWithAttendance = new Set(
+    recorded.flatMap((record) => (record.slotId !== null ? [record.slotId] : [])),
+  );
+
+  return slots.map((slot) => toView(slot, slotIdsWithAttendance));
 }
