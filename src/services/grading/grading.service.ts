@@ -28,13 +28,21 @@ export interface SubjectResult {
   }[];
 }
 
-/** Types de note obligatoires de l'école : sans note d'un de ces types, la moyenne de matière n'est pas publiée (voir compute.ts::subjectAverage). */
-async function requiredGradeTypeIds(schoolId: number): Promise<Set<number>> {
-  const required = await prisma.gradeType.findMany({
-    where: { schoolId, required: true, archivedAt: null },
-    select: { id: true },
+/**
+ * Types de note obligatoires d'une période précise : sans note d'un de ces
+ * types, la moyenne de matière n'est pas publiée (voir compute.ts::subjectAverage).
+ *
+ * Lit la photographie prise à la création de la période (`TermRequiredGradeType`,
+ * voir schema.prisma) — jamais l'état actuel de `GradeType.required` — pour
+ * qu'un changement de configuration ne modifie jamais rétroactivement le
+ * caractère complet d'un bulletin déjà publié pour une période passée.
+ */
+async function requiredGradeTypeIds(schoolId: number, termId: number): Promise<Set<number>> {
+  const required = await prisma.termRequiredGradeType.findMany({
+    where: { termId, gradeType: { schoolId } },
+    select: { gradeTypeId: true },
   });
-  return new Set(required.map((g) => g.id));
+  return new Set(required.map((r) => r.gradeTypeId));
 }
 
 export interface StudentResult {
@@ -133,11 +141,7 @@ export async function computeBulletinReadiness(
  * tableau de bord de l'administration qui les paierait, à chaque chargement de
  * sa page d'accueil.
  */
-export async function computeClassBulletins(
-  schoolId: number,
-  classIds: number[],
-  termId: number,
-) {
+export async function computeClassBulletins(schoolId: number, classIds: number[], termId: number) {
   const term = await prisma.term.findFirst({
     where: { id: termId, schoolId },
     include: { schoolYear: { select: { label: true } } },
@@ -171,7 +175,7 @@ export async function computeClassBulletins(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId: { in: classIds } } }),
-    requiredGradeTypeIds(schoolId),
+    requiredGradeTypeIds(schoolId, termId),
   ]);
 
   return classes.map((klass) =>
@@ -359,7 +363,7 @@ async function studentSubjectsAndAverage(
       },
     }),
     prisma.subjectCoefficient.findMany({ where: { classId } }),
-    requiredGradeTypeIds(schoolId),
+    requiredGradeTypeIds(schoolId, termId),
   ]);
 
   const coefficientBySubject = new Map(coefficients.map((c) => [c.subjectId, c.coefficient]));
@@ -453,6 +457,9 @@ export async function computeAnnualAverage(
   });
   if (terms.length === 0) return null;
 
+  // Chaque période garde son propre nécessaire obligatoire, figé à sa
+  // création (voir `requiredGradeTypeIds`) : pas de valeur unique à
+  // pré-calculer et partager entre les termes de cette boucle.
   const rawAverages = await Promise.all(
     terms.map((term) =>
       studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id).then(
@@ -490,7 +497,12 @@ export async function computeTermTrend(
 
   return Promise.all(
     terms.map(async (term) => {
-      const { rawAverage } = await studentSubjectsAndAverage(schoolId, studentId, student.classId, term.id);
+      const { rawAverage } = await studentSubjectsAndAverage(
+        schoolId,
+        studentId,
+        student.classId,
+        term.id,
+      );
       return { termId: term.id, termLabel: term.label, average: serializeAverage(rawAverage) };
     }),
   );
@@ -553,8 +565,13 @@ export async function computeAnnualClassBulletin(
     };
   }
 
+  // Chaque période garde son propre nécessaire obligatoire, figé à sa
+  // création (voir `requiredGradeTypeIds`) : pas de valeur unique à
+  // pré-calculer et partager entre les termes de cette boucle.
   const [bulletinsByTerm, readinessByTerm] = await Promise.all([
-    Promise.all(terms.map((term) => computeClassBulletins(schoolId, [classId], term.id).then((r) => r[0]))),
+    Promise.all(
+      terms.map((term) => computeClassBulletins(schoolId, [classId], term.id).then((r) => r[0])),
+    ),
     Promise.all(terms.map((term) => computeBulletinReadiness(schoolId, classId, term.id))),
   ]);
 
