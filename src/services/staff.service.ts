@@ -50,14 +50,18 @@ export async function acceptSignupRequest(id: number, input: AcceptSignupRequest
     const school = await tx.school.create({ data: { name, city } });
 
     // Sans ces catégories, aucune évaluation n'est saisissable : `POST
-    // /evaluations` exige un `gradeTypeId` existant pour l'école, et rien ne
-    // permet d'en créer par l'API (référentiel volontairement fermé). Mêmes
-    // valeurs par défaut que le seed de démonstration (prisma/seed.ts).
+    // /evaluations` exige un `gradeTypeId` existant pour l'école. L'école
+    // peut ensuite les reconfigurer librement (gradeType.service.ts) ; ces
+    // trois-là restent le point de départ par défaut, mêmes valeurs que le
+    // seed de démonstration (prisma/seed.ts). `required` sur devoir/
+    // composition reproduit la règle historique (moyenne publiée seulement
+    // si l'élève a ces deux notes) — sans lui, `required` vaut `false` par
+    // défaut et cette règle ne s'applique plus du tout pour l'école.
     await tx.gradeType.createMany({
       data: [
         { schoolId: school.id, code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
-        { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
-        { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3, position: 3 },
+        { schoolId: school.id, code: 'devoir', label: 'Devoir', weight: 2, position: 2, required: true },
+        { schoolId: school.id, code: 'composition', label: 'Composition', weight: 3, position: 3, required: true },
       ],
     });
 

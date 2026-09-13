@@ -103,16 +103,16 @@ async function main() {
 
   // ------------------------------------------------------- Types de note
   const gradeTypeSpecs = [
-    { code: 'interrogation', label: 'Interrogation', weight: 1, position: 1 },
-    { code: 'devoir', label: 'Devoir', weight: 2, position: 2 },
-    { code: 'composition', label: 'Composition', weight: 3, position: 3 },
+    { code: 'interrogation', label: 'Interrogation', weight: 1, position: 1, required: false },
+    { code: 'devoir', label: 'Devoir', weight: 2, position: 2, required: true },
+    { code: 'composition', label: 'Composition', weight: 3, position: 3, required: true },
   ];
   const gradeTypes = [];
   for (const spec of gradeTypeSpecs) {
     gradeTypes.push(
       await prisma.gradeType.upsert({
         where: { schoolId_code: { schoolId: school.id, code: spec.code } },
-        update: { label: spec.label, weight: spec.weight, position: spec.position },
+        update: { label: spec.label, weight: spec.weight, position: spec.position, required: spec.required },
         create: { schoolId: school.id, ...spec },
       }),
     );

@@ -1,5 +1,7 @@
 import prisma from '../lib/prisma';
 import { badRequest, conflict, notFound } from '../errors/AppError';
+import { assertPermanentDeleteConfirmed } from '../lib/permanentDelete';
+import { slugify } from '../lib/slug';
 
 /**
  * Catégories de notes (interrogation, devoir, composition — et toute
@@ -71,27 +73,19 @@ function toView(gradeType: GradeTypeRow): GradeTypeView {
   };
 }
 
-/** Même technique que `bulletin.service.ts::slugify`, pour un identifiant stable dérivé du libellé. */
-function slugify(value: string): string {
-  return value
-    .normalize('NFD')
-    // Plage des diacritiques combinants, échappée : écrite en clair, elle
-    // serait invisible dans le source et un simple changement d'encodage la
-    // corromprait sans qu'aucun test ne le voie.
-    .replace(/[\u0300-\u036f]/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
+/** `grade_types.code @db.VarChar(30)` dans le schéma — le slug doit tenir dedans, suffixe compris. */
+const MAX_CODE_LENGTH = 30;
 
 /**
  * Dérive un `code` unique dans l'école à partir du libellé — un identifiant
  * technique stable, plus jamais comparé en dur par la logique métier (voir
  * l'en-tête du fichier), mais qui doit rester unique pour la contrainte
- * `@@unique([schoolId, code])`.
+ * `@@unique([schoolId, code])`. `label` autorise jusqu'à 50 caractères, bien
+ * plus que la colonne `code` : tronquer est nécessaire, pas seulement une
+ * précaution, sans quoi un libellé un peu long fait planter l'insertion.
  */
 async function uniqueCode(schoolId: number, label: string, excludeId?: number): Promise<string> {
-  const base = slugify(label) || 'type';
+  const base = (slugify(label) || 'type').slice(0, MAX_CODE_LENGTH);
   let candidate = base;
   let suffix = 2;
 
@@ -101,9 +95,15 @@ async function uniqueCode(schoolId: number, label: string, excludeId?: number): 
       select: { id: true },
     });
     if (!existing) return candidate;
-    candidate = `${base}-${suffix}`;
+    const suffixText = `-${suffix}`;
+    candidate = `${base.slice(0, MAX_CODE_LENGTH - suffixText.length)}${suffixText}`;
     suffix += 1;
   }
+}
+
+/** Même détection que `errorHandler.ts` pour la violation `@@unique`. */
+function isUniqueCodeConflict(cause: unknown): boolean {
+  return (cause as { code?: unknown } | null)?.code === 'P2002';
 }
 
 export async function listGradeTypes(
@@ -129,6 +129,17 @@ export async function getGradeType(schoolId: number, id: number): Promise<GradeT
   return toView(gradeType);
 }
 
+/**
+ * Vérifie juste l'existence et le rattachement à l'école, sans les deux
+ * agrégats `_count` de `getGradeType` — inutiles pour modifier/archiver/
+ * restaurer, coûteux sur des tables `grades`/`evaluations` qui grossissent
+ * avec l'usage réel de l'école.
+ */
+async function assertGradeTypeExists(schoolId: number, id: number): Promise<void> {
+  const gradeType = await prisma.gradeType.findFirst({ where: { id, schoolId }, select: { id: true } });
+  if (!gradeType) throw notFound('Type de note introuvable');
+}
+
 export interface GradeTypeInput {
   label: string;
   weight: number;
@@ -144,26 +155,37 @@ function assertWeight(weight: number) {
 export async function createGradeType(schoolId: number, data: GradeTypeInput): Promise<GradeTypeView> {
   assertWeight(data.weight);
 
-  const code = await uniqueCode(schoolId, data.label);
   const last = await prisma.gradeType.findFirst({
     where: { schoolId },
     orderBy: { position: 'desc' },
     select: { position: true },
   });
 
-  const gradeType = await prisma.gradeType.create({
-    data: {
-      schoolId,
-      code,
-      label: data.label,
-      weight: data.weight,
-      required: data.required,
-      position: (last?.position ?? 0) + 1,
-    },
-    select: gradeTypeSelect,
-  });
-
-  return toView(gradeType);
+  // `uniqueCode` vérifie l'absence du code avant d'insérer : une optimisation
+  // pour le cas courant, pas une garantie — deux créations concurrentes du
+  // même libellé peuvent toutes deux passer ce contrôle avant qu'aucune
+  // n'ait inséré. Le vrai garde-fou est la contrainte `@@unique` en base : si
+  // l'insertion la viole malgré tout, on relit un nouveau candidat (qui verra
+  // cette fois la ligne concurrente déjà commitée) et on retente.
+  for (let attempt = 1; ; attempt += 1) {
+    const code = await uniqueCode(schoolId, data.label);
+    try {
+      const gradeType = await prisma.gradeType.create({
+        data: {
+          schoolId,
+          code,
+          label: data.label,
+          weight: data.weight,
+          required: data.required,
+          position: (last?.position ?? 0) + 1,
+        },
+        select: gradeTypeSelect,
+      });
+      return toView(gradeType);
+    } catch (cause) {
+      if (!isUniqueCodeConflict(cause) || attempt >= 5) throw cause;
+    }
+  }
 }
 
 export async function updateGradeType(
@@ -171,7 +193,7 @@ export async function updateGradeType(
   id: number,
   data: Partial<GradeTypeInput> & { position?: number },
 ): Promise<GradeTypeView> {
-  await getGradeType(schoolId, id);
+  await assertGradeTypeExists(schoolId, id);
   if (data.weight !== undefined) assertWeight(data.weight);
 
   const gradeType = await prisma.gradeType.update({
@@ -194,7 +216,7 @@ export async function updateGradeType(
  * de saisie sans rien perdre de l'historique déjà noté avec.
  */
 export async function archiveGradeType(schoolId: number, id: number): Promise<GradeTypeView> {
-  await getGradeType(schoolId, id);
+  await assertGradeTypeExists(schoolId, id);
 
   const gradeType = await prisma.gradeType.update({
     where: { id },
@@ -206,7 +228,7 @@ export async function archiveGradeType(schoolId: number, id: number): Promise<Gr
 }
 
 export async function restoreGradeType(schoolId: number, id: number): Promise<GradeTypeView> {
-  await getGradeType(schoolId, id);
+  await assertGradeTypeExists(schoolId, id);
 
   const gradeType = await prisma.gradeType.update({
     where: { id },
@@ -233,18 +255,18 @@ export async function deleteGradeTypePermanently(
 ): Promise<void> {
   const gradeType = await getGradeType(schoolId, id);
 
-  if (!gradeType.archivedAt) {
-    throw conflict('Archivez ce type de note avant de le supprimer définitivement.', {
-      gradeTypeId: id,
-    });
-  }
-
-  if (expectedLabel.trim().toLowerCase() !== gradeType.label.trim().toLowerCase()) {
-    throw badRequest(
-      'La confirmation ne correspond pas au libellé du type de note. Cette suppression est définitive.',
-      { attendu: gradeType.label },
-    );
-  }
+  assertPermanentDeleteConfirmed(
+    gradeType,
+    expectedLabel,
+    {
+      message: 'Archivez ce type de note avant de le supprimer définitivement.',
+      details: { gradeTypeId: id },
+    },
+    {
+      message:
+        'La confirmation ne correspond pas au libellé du type de note. Cette suppression est définitive.',
+    },
+  );
 
   if (gradeType.gradeCount > 0 || gradeType.evaluationCount > 0) {
     throw conflict(
