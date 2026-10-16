@@ -9,7 +9,7 @@ env:
   REGISTRY: gesnotesacr.azurecr.io
   IMAGE_NAME: gesnotes-api
   RESOURCE_GROUP: DefaultResourceGroup-PAR
-  CONTAINER_APP: gesnotes-api
+  CONTAINER_APP: gesnotes-api-std
   TARGET_PORT: 4000
 
 jobs:
@@ -48,11 +48,7 @@ jobs:
         run: |
           APP="${{ env.CONTAINER_APP }}"
           RG="${{ env.RESOURCE_GROUP }}"
-          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          # Reset a possibly failed revision to a public image first
-          az containerapp update -n "$APP" -g "$RG" --image mcr.microsoft.com/k8se/quickstart:latest
-          # Managed identity pulls from ACR (needs AcrPull on the registry)
-          az containerapp identity assign -n "$APP" -g "$RG" --system-assigned
+          az extension add --name containerapp --upgrade -y
           az containerapp registry set -n "$APP" -g "$RG" --server "${{ env.REGISTRY }}" --identity system
-          az containerapp update -n "$APP" -g "$RG" --image "$IMG"
+          az containerapp update -n "$APP" -g "$RG" --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           az containerapp ingress update -n "$APP" -g "$RG" --target-port ${{ env.TARGET_PORT }}
