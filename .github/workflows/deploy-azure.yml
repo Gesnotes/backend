@@ -9,7 +9,7 @@ env:
   REGISTRY: gesnotesacr.azurecr.io
   IMAGE_NAME: gesnotes-api
   RESOURCE_GROUP: DefaultResourceGroup-PAR
-  CONTAINER_APP: gesnotes-api-std
+  CONTAINER_APP: gesnotes-api-wp
   TARGET_PORT: 4000
 
 jobs:
