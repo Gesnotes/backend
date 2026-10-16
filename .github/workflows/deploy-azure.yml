@@ -46,17 +46,13 @@ jobs:
 
       - name: Deploy to Container App
         run: |
-          az containerapp registry set \
-            --name "${{ env.CONTAINER_APP }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --server "${{ env.REGISTRY }}" \
-            --username "${{ secrets.ACR_USERNAME }}" \
-            --password "${{ secrets.ACR_PASSWORD }}"
-          az containerapp update \
-            --name "${{ env.CONTAINER_APP }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          az containerapp ingress update \
-            --name "${{ env.CONTAINER_APP }}" \
-            --resource-group "${{ env.RESOURCE_GROUP }}" \
-            --target-port "${{ env.TARGET_PORT }}"
+          APP="${{ env.CONTAINER_APP }}"
+          RG="${{ env.RESOURCE_GROUP }}"
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          # Reset a possibly failed revision to a public image first
+          az containerapp update -n "$APP" -g "$RG" --image mcr.microsoft.com/k8se/quickstart:latest
+          # Managed identity pulls from ACR (needs AcrPull on the registry)
+          az containerapp identity assign -n "$APP" -g "$RG" --system-assigned
+          az containerapp registry set -n "$APP" -g "$RG" --server "${{ env.REGISTRY }}" --identity system
+          az containerapp update -n "$APP" -g "$RG" --image "$IMG"
+          az containerapp ingress update -n "$APP" -g "$RG" --target-port ${{ env.TARGET_PORT }}
