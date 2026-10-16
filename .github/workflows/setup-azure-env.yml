@@ -7,8 +7,8 @@ env:
   REGISTRY: gesnotesacr.azurecr.io
   RESOURCE_GROUP: DefaultResourceGroup-PAR
   LOCATION: germanywestcentral
-  NEW_ENV: gesnotes-env-wp
-  CONTAINER_APP: gesnotes-api-wp
+  NEW_ENV: gesnotes-env-b
+  CONTAINER_APP: gesnotes-api-b
 
 jobs:
   setup:
@@ -24,7 +24,7 @@ jobs:
           set -e
           az extension add --name containerapp --upgrade -y
           az containerapp env create --help | grep -i -B1 -A3 -E "environment-mode|workload-profiles" || true
-          az containerapp env create -n "$NEW_ENV" -g "$RESOURCE_GROUP" -l "$LOCATION" --enable-workload-profiles true
+          az containerapp env create -n "$NEW_ENV" -g "$RESOURCE_GROUP" -l "$LOCATION" --environment-mode WorkloadProfiles
           az containerapp env show -n "$NEW_ENV" -g "$RESOURCE_GROUP" --query "{mode:properties.environmentMode, profiles:properties.workloadProfiles}" -o json
           az containerapp create -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" \
             --environment "$NEW_ENV" \
