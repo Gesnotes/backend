@@ -5,11 +5,10 @@ on:
 
 env:
   REGISTRY: gesnotesacr.azurecr.io
-  ACR_NAME: gesnotesacr
   RESOURCE_GROUP: DefaultResourceGroup-PAR
   LOCATION: germanywestcentral
-  NEW_ENV: gesnotes-env-std
-  CONTAINER_APP: gesnotes-api-std
+  NEW_ENV: gesnotes-env-wp
+  CONTAINER_APP: gesnotes-api-wp
 
 jobs:
   setup:
@@ -20,22 +19,18 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Create standard environment, app and AcrPull role
+      - name: Create workload-profiles environment and app
         run: |
           set -e
           az extension add --name containerapp --upgrade -y
-          az provider register --namespace Microsoft.App --wait || true
-          az containerapp env create -n "$NEW_ENV" -g "$RESOURCE_GROUP" -l "$LOCATION"
+          az containerapp env create --help | grep -i -B1 -A3 -E "environment-mode|workload-profiles" || true
+          az containerapp env create -n "$NEW_ENV" -g "$RESOURCE_GROUP" -l "$LOCATION" --enable-workload-profiles true
+          az containerapp env show -n "$NEW_ENV" -g "$RESOURCE_GROUP" --query "{mode:properties.environmentMode, profiles:properties.workloadProfiles}" -o json
           az containerapp create -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" \
             --environment "$NEW_ENV" \
             --image mcr.microsoft.com/k8se/quickstart:latest \
             --ingress external --target-port 4000 \
+            --workload-profile-name Consumption \
             --cpu 0.25 --memory 0.5Gi --min-replicas 1 --max-replicas 2 \
             --system-assigned
-          PRINCIPAL=$(az containerapp show -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" --query identity.principalId -o tsv)
-          ACR_ID=$(az acr show -n "$ACR_NAME" --query id -o tsv)
-          az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR_ID"
-          sleep 60
-          az containerapp registry set -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" --server "$REGISTRY" --identity system
-          az containerapp update -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" --image "$REGISTRY/gesnotes-api:latest"
-          az containerapp show -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv
+          az containerapp show -n "$CONTAINER_APP" -g "$RESOURCE_GROUP" --query "{fqdn:properties.configuration.ingress.fqdn, principal:identity.principalId}" -o json
