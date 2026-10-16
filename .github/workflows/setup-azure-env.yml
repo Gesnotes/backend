@@ -6,9 +6,9 @@ on:
 env:
   REGISTRY: gesnotesacr.azurecr.io
   RESOURCE_GROUP: DefaultResourceGroup-PAR
-  LOCATION: germanywestcentral
-  NEW_ENV: gesnotes-env-b
-  CONTAINER_APP: gesnotes-api-b
+  LOCATION: spaincentral
+  NEW_ENV: gesnotes-env-es
+  CONTAINER_APP: gesnotes-api-es
 
 jobs:
   setup:
